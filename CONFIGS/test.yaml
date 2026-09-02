@@ -1,0 +1,15 @@
+app: pretrain_v
+folder: /home/data/sdc/FAVOR/OUTPUT/test
+meta:
+  dtype: bfloat16
+  eval_freq: 1
+  load_checkpoint: true
+  read_checkpoint: /home/data/sdc/FAVOR/CKPT/vjepa2/vitl.pt
+  reset_epoch: true
+  save_every_freq: 5
+  seed: 239
+yamls:
+  data: /home/data/sdc/FAVOR/CONFIGS/datas/vpretrain-data.yaml
+  opt: /home/data/sdc/FAVOR/CONFIGS/opt/vpretrain-opt-s5000-150-40.yaml
+  model: /home/data/sdc/FAVOR/CONFIGS/models/vpretrain-vit-l.yaml
+  mask: /home/data/sdc/FAVOR/CONFIGS/mask_loss/vjepa-pretrain.yaml

@@ -1,0 +1,95 @@
+app: pretrain_v
+nodes: 1
+tasks_per_node: 2
+cpus_per_task: 16
+mem_per_gpu: 90G
+folder: /home/data/sdc/FAVOR/OUTPUT/pretrain_v/vitl16/FaVoR-112px-48f
+data:
+  dataset_type: VideoDataset
+  datasets:
+  - /home/data/sdc/FAVOR/DATASET/merged/pretrain_facevideos_0831.csv
+  datasets_weights:
+  - 1
+  # Per-rank smoke-test batch.  Keep this small while both GPUs are shared;
+  # restore the production batch size after the 1,000-step DDP validation.
+  batch_size: 64
+  crop_size: 112
+  patch_size: 16
+  dataset_fpcs:
+  - 48
+  tubelet_size: 2
+  fps: 4
+  num_workers: 8
+  persistent_workers: true
+  pin_mem: true
+data_aug:
+  auto_augment: false
+  motion_shift: false
+  random_resize_aspect_ratio:
+  - 0.75
+  - 1.35
+  random_resize_scale:
+  - 0.3
+  - 1.0
+  reprob: 0.0
+loss:
+  loss_exp: 1.0
+mask:
+- aspect_ratio:
+  - 0.75
+  - 1.5
+  full_complement: false
+  max_keep: null
+  max_temporal_keep: 1.0
+  num_blocks: 8
+  spatial_scale:
+  - 0.15
+  - 0.15
+  temporal_scale:
+  - 1.0
+  - 1.0
+- aspect_ratio:
+  - 0.75
+  - 1.5
+  full_complement: false
+  max_keep: null
+  max_temporal_keep: 1.0
+  num_blocks: 2
+  spatial_scale:
+  - 0.7
+  - 0.7
+  temporal_scale:
+  - 1.0
+  - 1.0
+meta:
+  dtype: bfloat16
+  eval_freq: 1
+  load_checkpoint: true
+  read_checkpoint: /home/data/sdc/FAVOR/CKPT/vjepa2/vitl.pt
+  reset_epoch: true
+  save_every_freq: 5
+  seed: 239
+  use_sdpa: true
+model:
+  model_name: vit_large
+  pred_depth: 12
+  pred_embed_dim: 384
+  pred_num_heads: 12
+  uniform_power: true
+  use_activation_checkpointing: true
+  use_mask_tokens: true
+  use_rope: true
+  zero_init_mask_tokens: true
+optimization:
+  ema:
+  - 0.99925
+  - 0.99925
+  epochs: 150
+  final_lr: 0.000525
+  final_weight_decay: 0.04
+  ipe: 5000
+  ipe_scale: 1.25
+  lr: 0.000525
+  start_lr: 0.0001
+  warmup: 40
+  weight_decay: 0.04

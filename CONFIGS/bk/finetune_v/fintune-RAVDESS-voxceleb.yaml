@@ -1,0 +1,24 @@
+app: finetune_v
+folder: /OUTPUT/finetune_v/vitl16/FaVoR-112px-48f-latest/
+
+pretrained_ckpt: /home/data/sdc/FAVOR/OUTPUT/pretrain_v/vitl16/FaVoR-112px-48f/latest.pt
+
+
+csv_path: /path/to/RAVDESS/face_videos/split.csv
+
+train_split: 0
+val_split: 1
+num_classes: 8
+frames_per_clip: 48
+frame_step: 4
+crop_size: 112
+num_clips: 1
+
+batch_size: 64
+epochs: 250
+lr: 0.000525
+weight_decay: 0.04
+num_workers: 8
+freeze_backbone: false
+seed: 239
+amp_dtype: bfloat16

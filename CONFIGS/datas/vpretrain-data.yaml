@@ -1,0 +1,26 @@
+data:
+  dataset_type: VideoDataset
+  datasets:
+  - /home/data/sdc/FAVOR/DATASET/merged/pretrain_videos_0901.csv
+  datasets_weights:
+  - 1
+  batch_size: 64
+  crop_size: 112
+  patch_size: 16
+  dataset_fpcs:
+  - 48
+  tubelet_size: 2
+  fps: 4
+  num_workers: 8
+  persistent_workers: true
+  pin_mem: true
+data_aug:
+  auto_augment: false
+  motion_shift: false
+  random_resize_aspect_ratio:
+  - 0.75
+  - 1.35
+  random_resize_scale:
+  - 0.3
+  - 1.0
+  reprob: 0.0

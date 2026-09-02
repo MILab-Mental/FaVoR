@@ -1,0 +1,17 @@
+# cooldown (anneal) — 从主训练 ckpt 继续，LR 线性退火到 ~0，无 warmup
+optimization:
+  anneal_ckpt: /home/data/sdc/FAVOR/OUTPUT/pretrain_v/vitl16/FaVoR-112px-48f/latest.pt
+  ema:
+  - 0.99925
+  - 0.99925
+  epochs: 40
+  final_lr: 1.0e-06
+  final_weight_decay: 0.04
+  ipe: 5000
+  ipe_scale: 1.25
+  is_anneal: true
+  lr: 0.000525
+  resume_anneal: true
+  start_lr: 0.0001
+  warmup: 0
+  weight_decay: 0.04
