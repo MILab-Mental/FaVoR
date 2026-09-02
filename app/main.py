@@ -7,10 +7,18 @@ import argparse
 import importlib
 import logging
 import multiprocessing as mp
+import os
 import pprint
 import socket
 import sys
+import warnings
 from pathlib import Path
+
+# 过滤所有 warning：Python warnings + PyTorch C++ 日志（如 NCCL destroy_process_group）。
+# C++ 日志级别必须在导入 torch 之前设置（utils.distributed 会导入 torch）才生效。
+warnings.filterwarnings("ignore")
+os.environ.setdefault("TORCH_CPP_LOG_LEVEL", "ERROR")
+os.environ.setdefault("C10_LOG_LEVEL", "ERROR")
 
 import yaml
 
@@ -134,7 +142,14 @@ def process_main(rank, fname, world_size, devices):
     logger.info(f"Running... (rank: {rank}/{world_size})")
 
     # Launch the app with loaded config
-    app_main(params["app"], args=params)
+    try:
+        app_main(params["app"], args=params)
+    finally:
+        # 干净退出分布式进程组，消除 NCCL 的 destroy_process_group 警告。
+        import torch.distributed as dist
+
+        if dist.is_available() and dist.is_initialized():
+            dist.destroy_process_group()
 
 
 if __name__ == "__main__":

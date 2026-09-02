@@ -54,14 +54,20 @@ class VideoCSVDataset(VideoDataset):
                     f"Expected CSV columns {sorted(required)}; got {reader.fieldnames} in {csv_path}"
                 )
             for line_no, row in enumerate(reader, start=2):
+                # 先按 split 过滤：split 为空或 -1 表示该样本未分配到此任务的标签，跳过。
+                split_raw = str(row.get(self.split_column, "") or "").strip()
+                if split_raw in ("", "-1"):
+                    continue
+                try:
+                    row_split = int(split_raw)
+                except (TypeError, ValueError) as error:
+                    raise ValueError(f"{self.split_column!r} must be an integer at {csv_path}:{line_no}") from error
+                if row_split != self.split:
+                    continue
                 if not str(row.get("video_path", "")).strip():
                     raise ValueError(f"Empty video_path at {csv_path}:{line_no}")
                 if not str(row.get(self.label_column, "")).strip():
                     raise ValueError(f"Empty label in {self.label_column!r} at {csv_path}:{line_no}")
-                try:
-                    row_split = int(str(row[self.split_column]).strip())
-                except (TypeError, ValueError) as error:
-                    raise ValueError(f"{self.split_column!r} must be an integer at {csv_path}:{line_no}") from error
                 try:
                     if self.task == "classification":
                         label = int(str(row[self.label_column]).strip()) - 1
@@ -72,8 +78,6 @@ class VideoCSVDataset(VideoDataset):
                     raise ValueError(
                         f"{self.label_column!r} must be {kind} at {csv_path}:{line_no}"
                     ) from error
-                if row_split != self.split:
-                    continue
                 video_path = Path(row["video_path"].strip()).expanduser()
                 if not video_path.is_absolute():
                     video_path = self._root_by_csv[csv_path] / video_path

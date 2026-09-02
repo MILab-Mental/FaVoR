@@ -1,5 +1,5 @@
 app: finetune_v
-folder: OUTPUT/test_finetune_v_RAVDESS
+folder: OUTPUT/test_finetune
 meta:
   dtype: bfloat16
   eval_freq: 1

@@ -1,5 +1,5 @@
 app: pretrain_v
-folder: /home/data/sdc/FAVOR/OUTPUT/pretrain_v-vitl16-FaVoR-112px-48f
+folder: /home/data/sdc/FAVOR/OUTPUT/pretrain_v/vitl16/FaVoR-112px-48f
 meta:
   dtype: bfloat16
   eval_freq: 1

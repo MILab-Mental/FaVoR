@@ -8,7 +8,7 @@ meta:
   reset_epoch: true
   save_every_freq: 10
   seed: 239
-  frozen_encoder: true
+  # frozen_encoder: true
 yamls:
   data: /home/data/sdc/FAVOR/CONFIGS/datas/vfinetune-IEMOCAP-valence-reg.yaml
   opt: /home/data/sdc/FAVOR/CONFIGS/opt/vfinetune-opt-250-40.yaml
