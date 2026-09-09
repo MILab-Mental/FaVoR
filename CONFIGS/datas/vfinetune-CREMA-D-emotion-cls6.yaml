@@ -1,6 +1,5 @@
 # 2_CREMA-D_SV.csv :: emotion :: classification (6 classes)
 data:
-  dataset_type: VideoCSVDataset
   datasets:
   - /home/data/sdc/FAVOR/DATASET/splits-0901/2_CREMA-D_SV.csv
   datasets_weights:

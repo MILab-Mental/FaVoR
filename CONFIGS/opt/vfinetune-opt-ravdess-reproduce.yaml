@@ -1,0 +1,12 @@
+optimization:
+  # Historical optimizer used a constant 5.25e-4 AdamW learning rate.
+  epochs: 250
+  start_lr: 0.000525
+  lr: 0.000525
+  final_lr: 0.000525
+  warmup: 0
+  weight_decay: 0.04
+  final_weight_decay: 0.04
+  betas: [0.9, 0.999]
+  eps: 1.0e-8
+  ema: [0.99925, 0.99925]

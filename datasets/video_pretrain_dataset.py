@@ -318,7 +318,8 @@ class VideoDataset(torch.utils.data.Dataset):
                 fstp = int(self.duration * video_fps / fpc)
             else:
                 assert self.duration is None
-                fstp = video_fps // self.fps
+                # fstp = video_fps // self.fps
+                fstp = max(1, video_fps // self.fps)
 
         assert fstp is not None and fstp > 0
         clip_len = int(fpc * fstp)

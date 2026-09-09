@@ -1,6 +1,5 @@
 # 2_IEMOCAP_SV.csv :: activation :: regression (range 1.0~5.0)
 data:
-  dataset_type: VideoCSVDataset
   datasets:
   - /home/data/sdc/FAVOR/DATASET/splits-0901/2_IEMOCAP_SV.csv
   datasets_weights:

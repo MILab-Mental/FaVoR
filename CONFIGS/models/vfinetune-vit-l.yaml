@@ -6,7 +6,7 @@ model:
   use_sdpa: true
   use_silu: false
   wide_silu: true
-  out_layers: [17, 19, 21, 23]
-  
+  out_layers: [23]
+  # out_layers: [17, 19, 21, 23]
   classifier_depth: 1
   classifier_num_heads: 16

@@ -39,16 +39,22 @@ FAVOR/
 python -m app.main --fname CONFIGS/test.yaml          --devices cuda:0 --debugmode True
 python -m app.main --fname CONFIGS/test-finetune.yaml --devices cuda:0 --debugmode True
 
+# 多卡训练统一用 torchrun 启动。`app/main.py` 检测到 torchrun 注入的 RANK/WORLD_SIZE
+# 后以单进程身份直接运行（不再自行 fork）。等价写法二选一：
+#   torchrun --nproc_per_node=2 -m app.main --fname <CONFIG.yaml>            # 用可见 GPU 前 N 张
+#   torchrun --nproc_per_node=2 -m app.main --fname <CONFIG.yaml> --devices cuda:0 cuda:1  # 显式挑卡
+# 旧的 `python -m app.main ... --devices` 多卡写法仍兼容，但新任务请用 torchrun。
+
 # 预训练（48 帧 / 112px，vit_large）
-python -m app.main --fname CONFIGS/tasks/pretrain_v_FaVoR-112px-48f.yaml --devices cuda:0 cuda:1
+torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/pretrain_v_FaVoR-112px-48f.yaml --devices cuda:0 cuda:1
 
 # 退火 / cooldown（长片段 64f，LR 退到 ~0）
-python -m app.main --fname CONFIGS/tasks/pretrain_v_FaVoR-cooldown.yaml --devices cuda:0 cuda:1
+torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/pretrain_v_FaVoR-cooldown.yaml --devices cuda:0 cuda:1
 
 # 微调（例：RAVDESS emotion 8 类）
-python -m app.main --fname CONFIGS/tasks/finetune_v_RAVDESS-emotion.yaml --devices cuda:0 cuda:1
+torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/RAVDESS-emotion/finetune_v.yaml --devices cuda:0 cuda:1
 
-# 一次性跑完 15 个微调任务
+# 一次性跑完 15 个微调任务（run.sh 内部已改为 torchrun）
 bash run.sh
 
 # 画 loss 曲线
@@ -155,8 +161,10 @@ backbone 权重，任务头永远随机初始化。因此换预训练 checkpoint
 
 ### 5. 分布式为先，单进程可调试
 
-训练默认 DDP（`mp.spawn` 每 GPU 一进程，SLURM 与本地两套 rendezvous 都兼容，端口自动
-选空避免并发冲突）；同时 `--debugmode True` 一键切到单进程，让调试体验与生产一致。
+多卡训练默认 DDP，启动方式统一为 `torchrun --nproc_per_node`（每 rank 一进程、独占一张
+GPU；rank 崩溃会立即报错并终止整组，不用再干等 NCCL 默认 600s 超时）。`app/main.py` 同时
+保留手写 `mp.Process` 本地启动与 `--debugmode True` 单进程调试两条路径；SLURM 与非 SLURM
+的 rendezvous 均兼容、端口自动选空避免并发冲突。
 微调评测在多卡下按样本分区、`all_gather` 汇总，保证指标在任意卡数下一致。
 
 ### 6. 保留上游血统，渐进式改造
@@ -178,8 +186,6 @@ backbone 权重，任务头永远随机初始化。因此换预训练 checkpoint
 
 - 音频预训练与微调（`finetune_a`）、音视频联合（VA）训练。
 - `multi_label_classification` 任务类型（`MER242526-26openset` 目前为占位，不可运行）。
-- RAVDESS `intensity` 为 0-based 标签，与当前分类标签的 1-based 约定不符，需先做
-  label 重编码或加 offset（详见 `CONFIGS/README.md` §12）。
 
 ## 许可
 

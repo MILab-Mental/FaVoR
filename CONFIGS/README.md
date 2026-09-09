@@ -80,10 +80,58 @@ yamls:
 | `read_checkpoint` | `null` | ✓ | ✓ | 加载的 checkpoint 路径（预训练用 `CKPT/vjepa2/*.pt`，微调用预训练产物） |
 | `reset_epoch` | `false` | ✓ | ✓ | 只加载权重、丢弃优化器状态并从头开始 epoch |
 | `save_every_freq` | `-1` | ✓ | ✓ | 每 N 个 epoch 额外存一份 `e{epoch}.pt` |
-| `eval_freq` | `1` | ✓ | ✓ | 每 N 个 epoch 评测一次（微调）；预训练中为占位 |
+| `eval_freq` | `1` | ✓ | ✓ | 微调：每 N 个 epoch 评测一次；预训练：每 N 个 epoch 触发一次「表征质量 event」（见下方 rankme / hessian_trace） |
+| `rankme` | — | ✓ | — | 预训练：RankMe（encoder 特征有效秩）评测块，见下 |
+| `hessian_trace` | — | ✓ | — | 预训练：损失 Hessian 迹（Hutchinson）评测块，见下 |
 | `frozen_encoder` | `false` | — | ✓ | 是否冻结 encoder 只训 task head（当前已注释，见第 8 节） |
 | `skip_batches` | `-1` | ✓ | — | 预训练：跳过前 N 个 batch |
 | `sync_gc` | `false` | ✓ | — | 预训练：周期性手动 GC |
+
+### 3.2 预训练表征质量指标（`eval_freq` / `rankme` / `hessian_trace`）
+
+预训练的 `meta` 下可选择性开启两个 **checkpoint 表征质量**指标。二者都基于**固定的
+数据子集 / 固定缓存 batch** 计算，因此不同 checkpoint（甚至不同进程重启）间可比。
+实现见 `utils/eval_metrics.py`，接入见 `app/pretrain_v/train.py`。
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `eval_freq` | `-1` | 每 N 个 epoch 构成一次 evaluation event（`-1` = 全关）。只有 `>0` 时指标才可能运行 |
+| `rankme.enabled` | `false` | 是否计算 RankMe（在线 encoder 的全局池化特征做列去均值 SVD 后的有效秩 `exp(-Σ p log p)`） |
+| `rankme.every_events` | `1` | 每隔几个 event 算一次 RankMe（event 计数自训练开始递增，最后一次 epoch 必算） |
+| `rankme.subset_frac` | `0.01` | 固定 eval 子集占全量比例（种子抽样，跨 checkpoint 同一批视频） |
+| `rankme.max_samples` | `4096` | 子集样本数上限（越小越省） |
+| `rankme.feature` | `global` | 特征源：`global` 全局池化 / `tokens` 逐 clip 的 token 矩阵 / `both` |
+| `rankme.seed` | `meta.seed` | 子集抽样种子 |
+| `hessian_trace.enabled` | `false` | 是否计算训练损失 Hessian 的迹（Hutchinson 估计，无显式 Hessian） |
+| `hessian_trace.every_events` | `1` | 每隔几个 event 算一次（Hessian 双反向很贵，建议调大） |
+| `hessian_trace.n_hutchinson` | `5` | Hutchinson Rademacher 向量数 |
+| `hessian_trace.n_clips` | `1` | 固定 batch 的 clip 数（迹与 batch 线性，固定以保证可比） |
+| `hessian_trace.seed` | `meta.seed` | Hutchinson 随机向量种子（固定 -> 可比） |
+
+**checkpoint 保存语义**（`app/pretrain_v/train.py`）：
+
+- 指标全关（默认）：每个 epoch 按**最小平均 loss** 保存 `best_loss.pt`（原有行为不变）。
+- 开了任一指标：除 `best_loss.pt` 照常保存外，另在 `{folder}/log_eval.csv` 逐 event 记录
+  `epoch, train_loss, rankme_global, var_global, top_sv_energy, rankme_tokens, hessian_trace, hessian_std`，
+  并按 **RankMe 最大** 保存 `best_rankme.pt`、按 **Hessian 迹最小** 保存 `best_trace.pt`。
+
+**RankMe**：特征取在线 encoder 无 mask 输出的 token，做时间+空间全局池化得 `Z∈[N,D]`
+（`feature: tokens` 时另对每个 clip 的 token 矩阵算逐 clip RankMe 后取均值）。列去均值后
+在 fp64 CPU 上做 SVD：`p_i = σ_i²/Σσ²`，`RankMe = exp(−Σ p log p)`。辅助量 `var_global`
+（每维方差均值）与 `top_sv_energy`（最大奇异值能量占比，接近 1 表示表征坍塌）。
+RankMe 由所有 rank 各算自己的固定切片后 `all_gather`，SVD 仅在聚合后的完整矩阵上做一次。
+
+**Hessian 迹**：只在 rank 0 做（其余 rank 以 barrier 同步）。取固定小 batch（clips +
+masks 首次生成后缓存），`_pretrain_loss_on_sample` 忠实复刻 train.py 的
+`forward_context / forward_target / loss_fn`，再
+`g=∇_θ L (create_graph=True)`、对 Rademacher `v` 计算 `Hv=∇_θ(gᵀv)`、
+`Tr(H)≈mean_v(vᵀHv)`，返回均值与标准差。Hutchinson 通过
+flash / memory-efficient attention **没有二阶导**，故该 pass 会临时强制 SDPA 走 math 后端
+（`utils/eval_metrics.py::_force_math_sdpa`）；同样会临时关闭 activation checkpointing
+并切到 eval 模式。二阶 pass 本身在 fp32（bf16/fp16 autocast 下也只用 fp32 前向）。
+
+> 实现规模注意：Hessian 双反向内存随模型参数增长，建议用 `n_clips=1`、低 `every_events`
+> 观察显存；RankMe 成本主要在视频解码（`subset_frac`/`max_samples` 可调）。
 
 ## 4. 数据配置片段（datas/）
 
@@ -91,7 +139,6 @@ yamls:
 
 | 字段 | 说明 |
 |---|---|
-| `dataset_type` | `VideoDataset` |
 | `datasets` | manifest 列表，空格分隔的 `视频路径 标签` 文本文件 |
 | `datasets_weights` | 每个数据集的采样权重（长度需与 `datasets` 一致） |
 | `batch_size` / `num_workers` / `pin_mem` / `persistent_workers` | dataloader 参数 |
@@ -114,7 +161,6 @@ yamls:
 
 | 字段 | 说明 |
 |---|---|
-| `dataset_type` | `VideoCSVDataset` |
 | `datasets` | split CSV 列表（带表头，含 `video_path` + 标签列 + `{label}_split` 列） |
 | `rootpaths` | 每个 CSV 对应的视频根目录（列表，与 `datasets` 一一对应） |
 | `num_clips` | 每个样本采样的 clip 数 |
@@ -220,19 +266,30 @@ yamls:
 | 12 | `finetune_v_MER242526-emotion` | `2_MER242526_SV.csv` | classification | 6 类 | `emotion` | |
 | 13 | `finetune_v_MER242526-pos_intensity` | `2_MER242526_SV.csv` | regression | 标量 | `pos_intensity` | 0~37 |
 | 14 | `finetune_v_RAVDESS-emotion` | `2_RAVDESS_SV.csv` | classification | 8 类 | `emotion` | |
-| 15 | `finetune_v_RAVDESS-intensity` | `2_RAVDESS_SV.csv` | classification | 2 类 | `intensity` | 0-based 标签有坑，见第 10 节 |
+| 15 | `finetune_v_RAVDESS-intensity` | `2_RAVDESS_SV.csv` | classification | 2 类 | `intensity` | 标签已重编码为 {1,2}（1=normal / 2=strong） |
 
 ## 9. 预训练任务（tasks/）
 
 | 任务入口 | 数据 | 帧数 | 说明 |
 |---|---|---|---|
 | `pretrain_v_FaVoR-112px-48f.yaml` | `pretrain_videos_0901.csv` | 48f | 主训练，`batch_size 64`，`epochs 150` |
+| `pretrain_v_FaVoR-112px-48f-rep.yaml` | `pretrain_videos_0901.csv` | 48f | 主训练 + 表征质量监控（RankMe 每 2 event、Hessian 每 10 event），输出到 `.../FaVoR-112px-48f-rep`，存 `best_rankme.pt` / `best_trace.pt` |
 | `pretrain_v_FaVoR-cooldown.yaml` | `pretrain_videos_0901.csv`（64f） | 64f | 退火：从主训练 `latest.pt` 继续，LR 退到 ~0，`epochs 40`，无 warmup |
 
 退火通过 `opt/vpretrain-opt-cooldown.yaml` 的 `is_anneal: true` + `anneal_ckpt` + `resume_anneal: true`
 与 `datas/vpretrain-data-cooldown.yaml`（`dataset_fpcs: [64]`、`batch_size 32`）实现。
 
 ## 10. 调试入口
+
+多卡训练统一用 torchrun 启动：`app/main.py` 检测到 torchrun 注入的 `RANK/WORLD_SIZE` 后
+以单进程身份直接运行（不再自行 fork）。等价写法二选一：
+
+```bash
+torchrun --nproc_per_node=2 -m app.main --fname <CONFIG.yaml>            # 用当前可见 GPU 前 2 张
+torchrun --nproc_per_node=2 -m app.main --fname <CONFIG.yaml> --devices cuda:0 cuda:1  # 显式挑卡
+```
+
+单进程调试（`--debugmode True`，便于打断点，与生产同一套入口）：
 
 ```bash
 python -m app.main --fname CONFIGS/test.yaml          --devices cuda:0 --debugmode True
@@ -244,8 +301,8 @@ python -m app.main --fname CONFIGS/test-finetune.yaml --devices cuda:0 --debugmo
 
 ## 11. 其他文件
 
-- **`root.txt`** — 数据集清单 TSV：`split_csv, root_path, original_csv_path, v_pretrain, a_pretrain, va_pretrain`。
-  记录每个数据集 CSV 对应的根目录及在预训练中的用途（视频 / 音频 / 音视频），供数据管道与 `merge_csv.py` 参考。
+- **`split_root_paths.csv`** — 数据集清单 TSV：`split_csv, root_path, original_csv_path, duration_mean, duration_median, duration_std, duration_var, duration_min, duration_max, sampled_mean_fps`。
+  记录每个数据集 CSV 对应的媒体根目录（供 `merge_csv.py` 解析相对路径）及各时长统计列。
 - **`bk/`** — 历史备份：
   - `bk/pretrain_v/vit{g,h,l}16/*.yaml`：早期 V-JEPA 标准分辨率（256px/384px）与 FaVoR 112px 的预训练/退火配置。
   - `bk/finetune_v/fintune-RAVDESS-*.yaml`：早期 RAVDESS 微调配置（旧字段名，如 `csv_path`/`freeze_backbone`，已废弃）。
@@ -256,15 +313,11 @@ python -m app.main --fname CONFIGS/test-finetune.yaml --devices cuda:0 --debugmo
    `app/finetune_v/train.py` 目前只支持 `classification` / `regression`。
    `finetune_v_MER242526-26openset` 及其 data 片段均为占位，不能直接运行。
 
-2. **RAVDESS `intensity` 是 0-based 标签** —— 其余分类任务均为 1-based（代码 `int(label)-1`），
-   而 RAVDESS `intensity` 的 `0=normal / 1=strong`，直接运行会在 label 校验处报错。
-   需给数据集加 label offset/base，或把 CSV 标签重编码为 `{1,2}`。
-
-3. **`frozen_encoder` 已统一注释** —— 15 个微调任务入口中的 `frozen_encoder: true` 现已
+2. **`frozen_encoder` 已统一注释** —— 15 个微调任务入口中的 `frozen_encoder: true` 现已
    注释掉，实际走默认值 `false`（解冻 encoder、端到端训练）。
 
-4. **`use_sdpa` 位置** —— 必须写在 `model` 片段下（`app/pretrain_v/train.py` 从
+3. **`use_sdpa` 位置** —— 必须写在 `model` 片段下（`app/pretrain_v/train.py` 从
    `cfgs_model` 读取）；早期 `bk/` 配置曾误写到 `meta` 下，会被忽略并回退到默认 `false`。
 
-5. **`yamls` 路径** —— 片段路径可用绝对路径，也可用相对入口文件的相对路径（`load_config`
+4. **`yamls` 路径** —— 片段路径可用绝对路径，也可用相对入口文件的相对路径（`load_config`
    会自动相对入口目录解析）。

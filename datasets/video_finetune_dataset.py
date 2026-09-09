@@ -111,6 +111,7 @@ def make_videodataset_finetune_v(
     root_paths=None,
     frames_per_clip,
     fps=None,
+    frame_step=None,
     train_transform=None,
     val_transform=None,
     num_clips=1,
@@ -122,7 +123,10 @@ def make_videodataset_finetune_v(
         root_paths=root_paths,
         frames_per_clip=frames_per_clip,
         fps=fps,
-        frame_step=None if fps is not None else 4,
+        # Preserve the historical fine-tuning sampler when requested.  If an
+        # explicit fps is supplied it remains authoritative; otherwise use
+        # the caller-provided frame_step (falling back to the old default 4).
+        frame_step=None if fps is not None else (4 if frame_step is None else frame_step),
         num_clips=num_clips,
     )
     train_dataset = VideoCSVDataset(

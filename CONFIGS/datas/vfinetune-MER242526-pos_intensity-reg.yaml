@@ -1,6 +1,5 @@
 # 2_MER242526_SV.csv :: pos_intensity :: regression (range 0~37)
 data:
-  dataset_type: VideoCSVDataset
   datasets:
   - /home/data/sdc/FAVOR/DATASET/splits-0901/2_MER242526_SV.csv
   datasets_weights:

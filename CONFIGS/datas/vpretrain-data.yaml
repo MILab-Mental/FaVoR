@@ -1,5 +1,4 @@
 data:
-  dataset_type: VideoDataset
   datasets:
   - /home/data/sdc/FAVOR/DATASET/merged/pretrain_videos_0901.csv
   datasets_weights:

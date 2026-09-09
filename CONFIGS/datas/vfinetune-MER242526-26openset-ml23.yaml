@@ -4,7 +4,6 @@
 # 2_MER242526_SV.csv :: 26openset :: multi_label_classification (23 classes)
 # PLACEHOLDER
 data:
-  dataset_type: VideoCSVDataset
   datasets:
   - /home/data/sdc/FAVOR/DATASET/splits-0901/2_MER242526_SV.csv
   datasets_weights:

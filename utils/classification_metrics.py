@@ -263,7 +263,17 @@ def write_history_csv(history, output):
         return
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
-    fieldnames = list(history[0])
+    # history 行可能跨越不同 schema 版本：旧版把混淆矩阵存成单个 `matrix`
+    # 列，当前代码则拆成每格一列的 cm_{r}_{c}。若以 history[0] 的键为
+    # fieldnames，新追加的含 cm_* 的行会让 DictWriter 抛
+    # "dict contains fields not in fieldnames"。改为取全行键的并集（先见序），
+    # 纯新目录（各行键一致）下结果与原来完全相同。
+    fieldnames, seen = [], set()
+    for row in history:
+        for key in row:
+            if key not in seen:
+                seen.add(key)
+                fieldnames.append(key)
     with output.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()

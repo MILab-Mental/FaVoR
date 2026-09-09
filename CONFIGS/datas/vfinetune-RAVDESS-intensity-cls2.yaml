@@ -1,10 +1,8 @@
 # 2_RAVDESS_SV.csv :: intensity :: classification (2 classes)
-# NOTE: RAVDESS `intensity` 为 0-based 标签 (0=normal, 1=strong)，而
-#   VideoCSVDataset 目前按 `int(label)-1` 的 1-based 约定处理分类标签，
-#   直接运行会在 label 校验处报错。需给数据集加 label offset/base，或
-#   把 CSV 标签重编码为 {1,2} 后再跑。其余分类任务均为 1-based，不受影响。
+# `intensity` 已重编码为 1-based 标签 {1,2}（1=normal, 2=strong），与
+#   VideoCSVDataset 的 `int(label)-1` 约定一致，可直接运行。数值即 RAVDESS
+#   文件名原始编码（01=normal / 02=strong）。
 data:
-  dataset_type: VideoCSVDataset
   datasets:
   - /home/data/sdc/FAVOR/DATASET/splits-0901/2_RAVDESS_SV.csv
   datasets_weights:

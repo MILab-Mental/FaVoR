@@ -202,6 +202,7 @@ def main(args):
     dataset_paths = cfgs_data["datasets"]
     root_paths = cfgs_data["rootpaths"]
     fps = cfgs_data.get("fps")
+    frame_step = cfgs_data.get("frame_step")
     num_clips = cfgs_data.get("num_clips", 1)
     batch_size = cfgs_data["batch_size"]
     num_workers = cfgs_data.get("num_workers", 0)
@@ -225,10 +226,21 @@ def main(args):
         root_paths=root_paths,
         frames_per_clip=max_num_frames,
         fps=fps,
+        frame_step=frame_step,
         train_transform=train_transform,
         val_transform=make_finetune_transforms(False, crop_size),
         num_clips=num_clips,
     )
+    if is_main:
+        LOGGER.info(
+            "Loaded dataset: train=%d val=%d (task=%s, label_column=%s, num_class=%s)",
+            len(train_dataset), len(val_dataset), task, label_column, num_class,
+        )
+        LOGGER.info(
+            "Train class counts=%s | val class counts=%s",
+            dict(sorted(Counter(train_dataset.labels).items())),
+            dict(sorted(Counter(val_dataset.labels).items())),
+        )
     train_sampler = DistributedSampler(train_dataset, num_replicas=world_size, rank=rank, shuffle=True) if distributed else None
     val_sampler = DistributedEvaluationSampler(val_dataset, rank, world_size) if distributed else None
     loader_kwargs = dict(
@@ -285,6 +297,17 @@ def main(args):
         eps=eps,
         frozen_encoder=frozen_encoder,
     )
+    if is_main:
+        backbone_total = sum(p.numel() for p in encoder.parameters())
+        backbone_trainable = sum(p.numel() for p in encoder.parameters() if p.requires_grad)
+        head_total = sum(p.numel() for p in task_head.parameters())
+        head_trainable = sum(p.numel() for p in task_head.parameters() if p.requires_grad)
+        LOGGER.info(
+            "Model params: Total=%.4fM/%.4fM Backbone=%.4fM/%.4fM Head=%.4fM/%.4fM",
+            (backbone_total + head_total) / 1e6, (backbone_trainable + head_trainable) / 1e6,
+            backbone_total / 1e6, backbone_trainable / 1e6,
+            head_total / 1e6, head_trainable / 1e6,
+        )
 
     latest_path = folder / "latest.pt"
     start_epoch, best_score, history = 0, float("-inf") if task == "classification" else float("inf"), []
@@ -319,6 +342,14 @@ def main(args):
         counts = Counter(train_dataset.labels)
         weights = torch.tensor([1.0 / max(1, counts[index]) for index in range(num_class)], device=device)
         criterion = nn.CrossEntropyLoss(weight=weights / weights.sum() * num_class)
+        # import math
+        # counts = Counter(train_dataset.labels)
+        # weights = torch.tensor(
+        #     [ 1.0 / math.sqrt(max(1, counts[i]))   for i in range(num_class)     ],      device=device,
+        # )
+        # weights = weights / weights.sum() * num_class
+        # criterion = nn.CrossEntropyLoss(weight=weights)
+        
     elif task == "regression":
         criterion = nn.MSELoss()
     else:
@@ -441,8 +472,24 @@ def main(args):
                     best_score = score
                     _save_checkpoint(folder / "best.pt", epoch + 1, encoder, task_head, optimizer, scaler,
                                      scheduler, wd_scheduler, best_score, history, args)
-                LOGGER.info("epoch=%d train_loss=%.5f val_loss=%.5f best=%s", epoch + 1,
-                            epoch_metrics["train_loss"], epoch_metrics["val_loss"], best_score)
+                if task == "classification":
+                    LOGGER.info(
+                        "epoch=%d train_loss=%.4f val_loss=%.4f train_acc=%.4f val_acc=%.4f train_f1=%.4f val_f1=%.4f best=%.4f",
+                        epoch + 1,
+                        epoch_metrics["train_loss"], epoch_metrics["val_loss"],
+                        epoch_metrics["train_accuracy"], epoch_metrics["val_accuracy"],
+                        epoch_metrics["train_f1_macro"], epoch_metrics["val_f1_macro"],
+                        best_score,
+                    )
+                else:
+                    LOGGER.info(
+                        "epoch=%d train_loss=%.4f val_loss=%.4f train_mae=%.4f val_mae=%.4f train_rmse=%.4f val_rmse=%.4f best=%.4f",
+                        epoch + 1,
+                        epoch_metrics["train_loss"], epoch_metrics["val_loss"],
+                        epoch_metrics["train_mae"], epoch_metrics["val_mae"],
+                        epoch_metrics["train_rmse"], epoch_metrics["val_rmse"],
+                        best_score,
+                    )
 
         if is_main:
             _save_checkpoint(latest_path, epoch + 1, encoder, task_head, optimizer, scaler, scheduler,

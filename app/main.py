@@ -106,10 +106,23 @@ def load_config(fname):
     return _merge_config(params, config)
 
 
-def process_main(rank, fname, world_size, devices):
+def process_main(rank, fname, world_size, devices, local_rank=None):
     import os
 
-    os.environ["CUDA_VISIBLE_DEVICES"] = str(devices[rank].split(":")[-1])
+    # Each rank must see exactly ONE GPU, because the trainers hard-code
+    # cuda:0 / device_ids=[0] and rely on CUDA_VISIBLE_DEVICES remapping.
+    # local_rank comes from torchrun (LOCAL_RANK env); under the mp.Process
+    # launcher it defaults to the spawn rank.
+    if local_rank is None:
+        local_rank = int(os.environ.get("LOCAL_RANK", rank))
+    if devices and len(devices) == world_size:
+        physical = str(devices[local_rank]).split(":")[-1]
+    elif os.environ.get("CUDA_VISIBLE_DEVICES"):
+        visible = [v for v in os.environ["CUDA_VISIBLE_DEVICES"].split(",") if v.strip()]
+        physical = visible[local_rank] if local_rank < len(visible) else str(local_rank)
+    else:
+        physical = str(local_rank)
+    os.environ["CUDA_VISIBLE_DEVICES"] = physical
 
     import logging
 
@@ -154,17 +167,36 @@ def process_main(rank, fname, world_size, devices):
 
 if __name__ == "__main__":
     args = parser.parse_args()
-    # Select once in the parent so every spawned rank joins the same process
-    # group.  Do not use a fixed default: multiple local jobs may coexist.
     import os
 
-    master_port = os.environ.get("MASTER_PORT") or str(choose_free_port())
-    os.environ["MASTER_PORT"] = master_port
-    logger.info("Using local distributed rendezvous port %s", master_port)
-    if args.debugmode:
-        process_main(rank=0, fname=args.fname, world_size=1, devices=["cuda:0"])
+    # torchrun mode: torchrun has already spawned one process per rank and set
+    # RANK/WORLD_SIZE/LOCAL_RANK/MASTER_ADDR/MASTER_PORT, so run inline instead
+    # of forking our own child processes.
+    if "RANK" in os.environ and "WORLD_SIZE" in os.environ:
+        logger.info(
+            "torchrun mode (rank=%s world=%s local=%s)",
+            os.environ["RANK"],
+            os.environ["WORLD_SIZE"],
+            os.environ.get("LOCAL_RANK", "0"),
+        )
+        process_main(
+            rank=int(os.environ["RANK"]),
+            fname=args.fname,
+            world_size=int(os.environ["WORLD_SIZE"]),
+            devices=args.devices,
+            local_rank=int(os.environ.get("LOCAL_RANK", "0")),
+        )
     else:
-        num_gpus = len(args.devices)
-        mp.set_start_method("spawn")
-        for rank in range(num_gpus):
-            mp.Process(target=process_main, args=(rank, args.fname, num_gpus, args.devices)).start()
+        # Manual mp.Process launcher: pick a master port once in the parent so
+        # every spawned rank joins the same process group.  Do not use a fixed
+        # default: multiple local jobs may coexist.
+        master_port = os.environ.get("MASTER_PORT") or str(choose_free_port())
+        os.environ["MASTER_PORT"] = master_port
+        logger.info("Using local distributed rendezvous port %s", master_port)
+        if args.debugmode:
+            process_main(rank=0, fname=args.fname, world_size=1, devices=["cuda:0"])
+        else:
+            num_gpus = len(args.devices)
+            mp.set_start_method("spawn")
+            for rank in range(num_gpus):
+                mp.Process(target=process_main, args=(rank, args.fname, num_gpus, args.devices)).start()

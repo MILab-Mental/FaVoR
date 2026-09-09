@@ -6,7 +6,8 @@ model:
   use_sdpa: true
   use_silu: false
   wide_silu: true
-  out_layers: [31, 33, 35, 39]
+  out_layers: [39]
+  # out_layers: [31, 33, 35, 39]
   
   classifier_depth: 1
   classifier_num_heads: 16

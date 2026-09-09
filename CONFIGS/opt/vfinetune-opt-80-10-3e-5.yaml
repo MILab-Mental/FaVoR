@@ -1,0 +1,15 @@
+optimization:
+  ema:
+  - 0.99925
+  - 0.99925
+  epochs: 80
+  start_lr: 0.00005
+  lr: 0.0004
+  final_lr: 0.00003
+  final_weight_decay: 0.04
+  warmup: 10
+  weight_decay: 0.02
+  betas:
+  - 0.9
+  - 0.999
+  eps: 1.0e-8

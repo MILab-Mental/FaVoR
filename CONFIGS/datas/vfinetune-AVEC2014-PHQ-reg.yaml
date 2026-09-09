@@ -1,6 +1,5 @@
 # 3_AVEC2014_LV.csv :: PHQ :: regression (range 0~45)
 data:
-  dataset_type: VideoCSVDataset
   datasets:
   - /home/data/sdc/FAVOR/DATASET/splits-0901/3_AVEC2014_LV.csv
   datasets_weights:

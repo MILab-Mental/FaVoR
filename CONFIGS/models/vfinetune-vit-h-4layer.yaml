@@ -1,0 +1,12 @@
+model:
+  model_name: vit_huge
+  uniform_power: true
+  use_activation_checkpointing: true
+  use_rope: true
+  use_sdpa: true
+  use_silu: false
+  wide_silu: true
+  out_layers: [23, 25, 27, 31]
+  
+  classifier_depth: 1
+  classifier_num_heads: 16

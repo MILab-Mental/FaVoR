@@ -1,6 +1,5 @@
 # 2_IEMOCAP_SV.csv :: valence :: regression (range 1.0~5.5)
 data:
-  dataset_type: VideoCSVDataset
   datasets:
   - /home/data/sdc/FAVOR/DATASET/splits-0901/2_IEMOCAP_SV.csv
   datasets_weights:

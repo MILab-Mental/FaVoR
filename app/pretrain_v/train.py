@@ -16,6 +16,7 @@ except Exception:
     pass
 
 import copy
+import csv
 import gc
 import random
 import time
@@ -31,12 +32,13 @@ from models.pretrain_v_model import init_video_model, load_checkpoint
 from optimization.optimizer import init_opt
 
 from datasets.video_transforms import make_pretrain_transforms
-from datasets.data_manager import init_data
+from datasets.video_pretrain_dataset import make_videodataset
 from datasets.masks.multiseq_multiblock3d import MaskCollator
 from datasets.masks.utils import apply_masks
 
 from utils.distributed import init_distributed
 from utils.logging import AverageMeter, CSVLogger, get_logger, gpu_timer
+from utils.eval_metrics import PretrainEvalMetrics
 
 # --
 log_timings = True
@@ -55,6 +57,29 @@ torch.backends.cudnn.benchmark = True
 logger = get_logger(__name__, force=True)
 
 
+# Epoch-level evaluation log columns (static across runs, `nan` where a metric
+# is not computed so that downstream plotting keeps a uniform header).
+EVAL_COLUMNS = [
+    "epoch",
+    "train_loss",
+    "rankme_global",
+    "var_global",
+    "top_sv_energy",
+    "rankme_tokens",
+    "hessian_trace",
+    "hessian_std",
+]
+
+
+def _append_eval_csv(path, row):
+    """Append one epoch-level metrics row, writing the header only on creation."""
+    with open(path, "a", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=EVAL_COLUMNS, extrasaction="ignore")
+        if f.tell() == 0:
+            writer.writeheader()
+        writer.writerow(row)
+
+
 def main(args):
     # ----------------------------------------------------------------------- #
     #  PASSED IN PARAMS FROM CONFIG FILE
@@ -71,6 +96,10 @@ def main(args):
     skip_batches = cfgs_meta.get("skip_batches", -1)
     sync_gc = cfgs_meta.get("sync_gc", False)
     which_dtype = cfgs_meta.get("dtype")
+    # -- representation-quality metrics (RankMe / Hessian trace)
+    eval_freq = int(cfgs_meta.get("eval_freq", -1))
+    rankme_cfg = cfgs_meta.get("rankme", None) or {}
+    hessian_cfg = cfgs_meta.get("hessian_trace", None) or {}
     logger.info(f"{which_dtype=}")
     if which_dtype.lower() == "bfloat16":
         dtype = torch.bfloat16
@@ -104,7 +133,6 @@ def main(args):
     
     # -- DATA
     cfgs_data = args.get("data")
-    dataset_type = cfgs_data.get("dataset_type", "videodataset")
     dataset_paths = cfgs_data.get("datasets", [])
     datasets_weights = cfgs_data.get("datasets_weights")
     dataset_fpcs = cfgs_data.get("dataset_fpcs")
@@ -251,13 +279,16 @@ def main(args):
     )
 
     # -- init data-loaders/samplers
-    (unsupervised_loader, unsupervised_sampler) = init_data(
-        data=dataset_type,
-        root_path=dataset_paths,
+    # make_videodataset 返回 (dataset, data_loader, dist_sampler)。dataset 保留给
+    # RankMe / Hessian 的固定 evaluation 子集使用。
+    # fps / duration / frame_step 三选一：fps 已指定，frame_step 必须为 None（否则会报
+    # "Must specify exactly one of either fps/duration/frame_step"）。
+    unsupervised_dataset, unsupervised_loader, unsupervised_sampler = make_videodataset(
+        data_paths=dataset_paths,
         batch_size=batch_size,
-        training=True,
         dataset_fpcs=dataset_fpcs,
         fps=fps,
+        frame_step=None,
         transform=transform,
         rank=rank,
         world_size=world_size,
@@ -305,6 +336,44 @@ def main(args):
         ema[0] + i * (ema[1] - ema[0]) / (ipe * num_epochs * ipe_scale)
         for i in range(int(ipe * num_epochs * ipe_scale) + 1)
     )
+
+    # -- representation-quality evaluation (RankMe / Hessian trace) setup.
+    rankme_on = eval_freq > 0 and bool(rankme_cfg.get("enabled", False))
+    hessian_on = eval_freq > 0 and bool(hessian_cfg.get("enabled", False))
+    evaluator = None
+    if rankme_on or hessian_on:
+        evaluator = PretrainEvalMetrics(
+            rank=rank,
+            world_size=world_size,
+            device=device,
+            train_dataset=unsupervised_dataset,
+            cfgs_mask=cfgs_mask,
+            dataset_fpcs=dataset_fpcs,
+            crop_size=crop_size,
+            patch_size=patch_size,
+            tubelet_size=tubelet_size,
+            encoder=encoder,
+            predictor=predictor,
+            target_encoder=target_encoder,
+            eval_freq=eval_freq,
+            rankme_cfg=rankme_cfg,
+            hessian_cfg=hessian_cfg,
+            seed=seed,
+            loss_exp=float(cfgs_loss.get("loss_exp", 1.0)),
+        )
+        logger.info(
+            f"Representation metrics enabled: eval_freq={eval_freq} "
+            f"rankme={rankme_on} hessian_trace={hessian_on}"
+        )
+
+    # -- best-checkpoint trackers (best_loss.pt always; best_rankme/best_trace.pt
+    #    only when the corresponding metric is computed).
+    best_loss_val = float("inf")
+    best_loss_epoch = None
+    best_rankme_val = float("-inf")
+    best_trace_val = float("inf")
+    event_count = 0
+    eval_log_path = os.path.join(folder, "log_eval.csv")
 
     start_epoch = 0
     # -- load training checkpoint
@@ -545,3 +614,56 @@ def main(args):
                 save_every_file = f"e{epoch}.pt"
                 save_every_path = os.path.join(folder, save_every_file)
                 save_checkpoint(epoch + 1, save_every_path)
+
+            # -- best checkpoint by epoch-average loss (kept in every run)
+            loss_avg = loss_meter.avg
+            if rank == 0 and loss_avg < best_loss_val:
+                best_loss_val = loss_avg
+                best_loss_epoch = epoch + 1
+                save_checkpoint(epoch + 1, os.path.join(folder, "best_loss.pt"))
+
+            # -- representation-quality metrics (RankMe / Hessian trace)
+            if evaluator is not None and evaluator.any_enabled:
+                is_event = ((epoch + 1) % eval_freq == 0) or (epoch + 1 == num_epochs)
+                if is_event:
+                    event_count += 1
+                    do_rankme = evaluator.rankme_enabled and ((event_count - 1) % evaluator.rankme_every == 0)
+                    do_hessian = evaluator.hessian_enabled and ((event_count - 1) % evaluator.hessian_every == 0)
+                    # These two calls run collectives -> must be invoked on all ranks.
+                    rank_metrics = (
+                        evaluator.run_rankme(autocast_dtype=dtype if mixed_precision else None)
+                        if do_rankme
+                        else {}
+                    )
+                    hess_metrics = evaluator.run_hessian() if do_hessian else {}
+                    if rank == 0:
+                        row = {
+                            "epoch": epoch + 1,
+                            "train_loss": loss_avg,
+                            "rankme_global": rank_metrics.get("rankme_global", float("nan")),
+                            "var_global": rank_metrics.get("var_global", float("nan")),
+                            "top_sv_energy": rank_metrics.get("top_sv_energy", float("nan")),
+                            "rankme_tokens": rank_metrics.get("rankme_tokens", float("nan")),
+                            "hessian_trace": hess_metrics.get("hessian_trace", float("nan")),
+                            "hessian_std": hess_metrics.get("hessian_std", float("nan")),
+                        }
+                        _append_eval_csv(eval_log_path, row)
+                        rk = rank_metrics.get("rankme_global")
+                        tr = hess_metrics.get("hessian_trace")
+                        logger.info(
+                            "[eval ep %d] loss=%.4f rankme=%.4f var=%.4g collapse=%.4f trace=%.4g(std %.4g)",
+                            epoch + 1,
+                            loss_avg,
+                            float("nan") if rk is None else rk,
+                            row["var_global"],
+                            row["top_sv_energy"],
+                            float("nan") if tr is None else tr,
+                            hess_metrics.get("hessian_std", float("nan")),
+                        )
+                        # best representation: higher RankMe / lower Hessian trace
+                        if do_rankme and rk is not None and rk == rk and rk > best_rankme_val:
+                            best_rankme_val = rk
+                            save_checkpoint(epoch + 1, os.path.join(folder, "best_rankme.pt"))
+                        if do_hessian and tr is not None and tr == tr and tr < best_trace_val:
+                            best_trace_val = tr
+                            save_checkpoint(epoch + 1, os.path.join(folder, "best_trace.pt"))

@@ -1,0 +1,15 @@
+app: finetune_v
+folder: /home/data/sdc/FAVOR/OUTPUT/vitl16-MER242526-emotion-vjepa-e40-23outlayer/
+meta:
+  dtype: bfloat16
+  eval_freq: 1
+  load_checkpoint: true
+  read_checkpoint: /home/data/sdc/FAVOR/OUTPUT/pretrain_v/vitl16/videos_all/e40.pt
+  # read_checkpoint: /home/data/sdc/FAVOR/OUTPUT/pretrain_v/vitl16/FaVoR-112px-48f/latest.pt
+  reset_epoch: true
+  save_every_freq: 10
+  seed: 239
+yamls:
+  data: /home/data/sdc/FAVOR/CONFIGS/datas/vfinetune-MER242526-emotion-cls6.yaml
+  opt: /home/data/sdc/FAVOR/CONFIGS/opt/vfinetune-opt-250-40.yaml
+  model: /home/data/sdc/FAVOR/CONFIGS/models/vfinetune-vit-l.yaml

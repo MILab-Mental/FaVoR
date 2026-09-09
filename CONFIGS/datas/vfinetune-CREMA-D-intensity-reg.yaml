@@ -1,7 +1,6 @@
 # 2_CREMA-D_SV.csv :: intensity :: regression (range 0~2)
 # ordinal 0=low/1=medium/2=high
 data:
-  dataset_type: VideoCSVDataset
   datasets:
   - /home/data/sdc/FAVOR/DATASET/splits-0901/2_CREMA-D_SV.csv
   datasets_weights:
