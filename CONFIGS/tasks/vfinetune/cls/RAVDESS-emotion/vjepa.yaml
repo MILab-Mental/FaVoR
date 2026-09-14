@@ -1,0 +1,16 @@
+app: finetune_v
+folder: /home/data/sdc/FAVOR/OUTPUT/finetune_v/vitl16/RAVDESS-emotion/FaVoR-112px-48f-8fps-vjepaori/
+meta:
+  dtype: bfloat16
+  eval_freq: 1
+  load_checkpoint: true
+  read_checkpoint: /home/data/sdc/FAVOR/CKPT/vjepa2/vitl.pt
+  reset_epoch: true
+  save_every_freq: 10
+  seed: 239
+  # frozen_encoder: true
+yamls:
+  data: /home/data/sdc/FAVOR/CONFIGS/datas/vfinetune/cls/RAVDESS-emotion-cls8.yaml
+  sampling: /home/data/sdc/FAVOR/CONFIGS/datas/vfinetune/48-8.yaml
+  opt: /home/data/sdc/FAVOR/CONFIGS/opt/vfinetune-opt-80-5-5e-5.yaml
+  model: /home/data/sdc/FAVOR/CONFIGS/models/vfinetune-vit-l-4layer.yaml

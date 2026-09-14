@@ -1,0 +1,31 @@
+# 2_ASVP-ESD_SA.csv :: emotion :: classification (12 classes)
+# 分类，12 类，取值 1~12
+data:
+  datasets:
+  - /home/data/sdc/FAVOR/DATASET/splits-0901/2_ASVP-ESD_SA.csv
+  datasets_weights:
+  - 1
+  rootpaths:
+  - /home/data/sdb/基座模型数据集/2情绪数据集/ASVP-ESD/
+  batch_size: 64
+  crop_size: 112
+  patch_size: 16
+  dataset_fpcs:
+  - 48
+  tubelet_size: 2
+  fps: 4
+  num_workers: 8
+  persistent_workers: true
+  pin_mem: true
+  num_clips: 1
+
+  task: classification
+  num_class: 12
+  # Column containing integer class labels or floating-point regression targets.
+  label_column: emotion
+
+data_aug:
+  random_resize_aspect_ratio: [0.85, 1.15]
+  random_resize_scale: [0.6, 1.0]
+  random_horizontal_flip: 0.5
+  reprob: 0.0

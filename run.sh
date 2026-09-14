@@ -1,23 +1,27 @@
 #!/usr/bin/env bash
-torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/AVEC2014-PHQ/finetune_v.yaml --devices cuda:0 cuda:1
-torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/CREMA-D-emotion/finetune_v.yaml --devices cuda:0 cuda:1
-torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/CREMA-D-intensity/finetune_v.yaml --devices cuda:0 cuda:1
-torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/EmotionTalk-emotion/finetune_v.yaml --devices cuda:0 cuda:1
-torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/IEMOCAP-activation/finetune_v.yaml --devices cuda:0 cuda:1
-torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/IEMOCAP-dominance/finetune_v.yaml --devices cuda:0 cuda:1
-torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/IEMOCAP-emotion/finetune_v.yaml --devices cuda:0 cuda:1
-torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/IEMOCAP-valence/finetune_v.yaml --devices cuda:0 cuda:1
-torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/MER2023-emotion/finetune_v.yaml --devices cuda:0 cuda:1
-torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/MER2023-pos_intensity/finetune_v.yaml --devices cuda:0 cuda:1
+# 分类
+torchrun --master_port 12345 --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/cls/CREMA-D-emotion.yaml --devices cuda:0 cuda:1
+torchrun --master_port 12347 --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/cls/EmotionTalk-emotion.yaml --devices cuda:0 cuda:1
+torchrun --master_port 12350 --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/cls/IEMOCAP-emotion.yaml --devices cuda:0 cuda:1
+torchrun --master_port 12352 --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/cls/MER2023-emotion.yaml --devices cuda:0 cuda:1
+torchrun --master_port 12355 --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/cls/MER242526-emotion.yaml --devices cuda:0 cuda:1
+torchrun --master_port 12357 --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/cls/RAVDESS-emotion.yaml --devices cuda:0 cuda:1
+torchrun --master_port 12358 --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/cls/RAVDESS-intensity.yaml --devices cuda:0 cuda:1
 
-#多标签
-torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/MER242526-26openset/finetune_v.yaml --devices cuda:0 cuda:1
-###############
-torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/MER242526-emotion/finetune_v-favor-e11.yaml --devices cuda:0 cuda:1
-###############
-torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/MER242526-pos_intensity/finetune_v.yaml --devices cuda:0 cuda:1
-torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/RAVDESS-emotion/finetune_v.yaml --devices cuda:0 cuda:1
-torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/RAVDESS-intensity/finetune_v.yaml --devices cuda:0 cuda:1
+# 回归
+torchrun --master_port 12344 --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/reg/AVEC2014-PHQ.yaml --devices cuda:0 cuda:1
+torchrun --master_port 12346 --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/reg/CREMA-D-intensity.yaml --devices cuda:0 cuda:1
+torchrun --master_port 12348 --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/reg/IEMOCAP-activation.yaml --devices cuda:0 cuda:1
+torchrun --master_port 12349 --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/reg/IEMOCAP-dominance.yaml --devices cuda:0 cuda:1
+torchrun --master_port 12351 --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/reg/IEMOCAP-valence.yaml --devices cuda:0 cuda:1
+torchrun --master_port 12353 --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/reg/MER2023-pos_intensity.yaml --devices cuda:0 cuda:1
+torchrun --master_port 12356 --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/reg/MER242526-pos_intensity.yaml --devices cuda:0 cuda:1
+
+#多标签分类
+torchrun --master_port 12354 --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/mlcls/MER242526-26openset.yaml --devices cuda:0 cuda:1
+
+python pca.py --ckpt OUTPUT/pretrain_v/vitl16/FaVoR-112px-64f16-rankme/best_rankme.pt
+
 
 favor-e11-4layer
   opt: 原始

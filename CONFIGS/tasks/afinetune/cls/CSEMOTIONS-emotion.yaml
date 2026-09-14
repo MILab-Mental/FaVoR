@@ -1,0 +1,17 @@
+# PLACEHOLDER — 纯音频数据集（CSV 的 video_path 整列为空），
+#   视频流水线 app/finetune_v 不可运行；需先实现音频侧 app/finetune_a。
+app: finetune_a
+folder: /home/data/sdc/FAVOR/OUTPUT/finetune_a/vitl16/CSEMOTIONS-emotion/FaVoR-112px-48f-8fps-e5/
+meta:
+  dtype: bfloat16
+  eval_freq: 1
+  load_checkpoint: true
+  read_checkpoint: /home/data/sdc/FAVOR/OUTPUT/pretrain_v/vitl16/FaVoR-112px-48f/e5.pt
+  reset_epoch: true
+  save_every_freq: 10
+  seed: 239
+  # frozen_encoder: true
+yamls:
+  data: /home/data/sdc/FAVOR/CONFIGS/datas/afinetune/cls/CSEMOTIONS-emotion-cls7.yaml
+  opt: /home/data/sdc/FAVOR/CONFIGS/opt/vfinetune-opt-80-5-5e-5.yaml
+  model: /home/data/sdc/FAVOR/CONFIGS/models/vfinetune-vit-l-4layer.yaml

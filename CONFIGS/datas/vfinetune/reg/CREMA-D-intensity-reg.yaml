@@ -1,0 +1,12 @@
+# 2_CREMA-D_SV.csv :: intensity :: regression (range 0~2)
+# ordinal 0=low/1=medium/2=high
+data:
+  datasets:
+  - /home/data/sdc/FAVOR/DATASET/splits-0901/2_CREMA-D_SV.csv
+  datasets_weights:
+  - 1
+  rootpaths:
+  - /home/data/sdb/基座模型数据集/2情绪数据集/CREMA-D/
+  task: regression
+  # Column containing integer class labels or floating-point regression targets.
+  label_column: intensity

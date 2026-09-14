@@ -112,6 +112,17 @@ def _save_checkpoint(path, epoch, encoder, task_head, optimizer, scaler, schedul
     torch.save(state, path)
 
 
+def _regression_extra_metrics(predictions, targets):
+    """计算 MSE、R² 与调整后 R²（单输出回归，p=1）。"""
+    n = len(targets)
+    mse = float(np.square(predictions - targets).mean())
+    ss_res = float(np.square(targets - predictions).sum())
+    ss_tot = float(np.square(targets - targets.mean()).sum())
+    r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan")
+    adjusted_r2 = 1.0 - (1.0 - r2) * (n - 1) / (n - 2) if n > 2 else float("nan")
+    return mse, r2, adjusted_r2
+
+
 def _write_regression_best_logs(logs_dir, epoch, train_paths, train_truth, train_predictions,
                                 eval_paths, eval_truth, eval_predictions, metrics):
     def write_predictions(path, paths, truth, predictions):
@@ -453,18 +464,29 @@ def main(args):
                     val_predictions = val_array.squeeze(-1)
                     train_targets = np.asarray(train_truth, dtype=np.float64)
                     val_targets = np.asarray(val_truth, dtype=np.float64)
+                    train_mse, train_r2, train_adjusted_r2 = _regression_extra_metrics(train_predictions, train_targets)
+                    val_mse, val_r2, val_adjusted_r2 = _regression_extra_metrics(val_predictions, val_targets)
                     epoch_metrics.update({
                         "train_mae": float(np.abs(train_predictions - train_targets).mean()),
                         "train_rmse": float(np.sqrt(np.square(train_predictions - train_targets).mean())),
+                        "train_mse": train_mse,
+                        "train_r2": train_r2,
+                        "train_adjusted_r2": train_adjusted_r2,
                         "val_mae": float(np.abs(val_predictions - val_targets).mean()),
                         "val_rmse": float(np.sqrt(np.square(val_predictions - val_targets).mean())),
+                        "val_mse": val_mse,
+                        "val_r2": val_r2,
+                        "val_adjusted_r2": val_adjusted_r2,
                     })
-                    score = epoch_metrics["val_loss"]
+                    # 回归任务以 val_rmse 选 best（越低越好）
+                    score = epoch_metrics["val_rmse"]
                     improved = score < best_score
                     if improved:
                         _write_regression_best_logs(logs_dir, epoch + 1, train_paths, train_truth, train_predictions,
                                                      val_paths, val_truth, val_predictions,
-                                                     {"val_loss": epoch_metrics["val_loss"], "val_mae": epoch_metrics["val_mae"], "val_rmse": epoch_metrics["val_rmse"]})
+                                                     {"val_loss": epoch_metrics["val_loss"], "val_mse": val_mse,
+                                                      "val_mae": epoch_metrics["val_mae"], "val_rmse": epoch_metrics["val_rmse"],
+                                                      "val_r2": val_r2, "val_adjusted_r2": val_adjusted_r2})
                 history.append(epoch_metrics)
                 write_history_csv(history, logs_dir / "history.csv")
                 save_metric_curves(history, logs_dir / "metrics_curves.png")

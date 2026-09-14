@@ -1,0 +1,12 @@
+# 2_MER2023_SV.csv :: emotion :: classification (6 classes)
+data:
+  datasets:
+  - /home/data/sdc/FAVOR/DATASET/splits-0901/2_MER2023_SV.csv
+  datasets_weights:
+  - 1
+  rootpaths:
+  - /home/data/sdc/MER/MER2023/
+  task: classification
+  num_class: 6
+  # Column containing integer class labels or floating-point regression targets.
+  label_column: emotion

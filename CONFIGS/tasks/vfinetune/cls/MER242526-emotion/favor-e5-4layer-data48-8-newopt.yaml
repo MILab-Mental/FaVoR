@@ -1,0 +1,17 @@
+app: finetune_v
+folder: /home/data/sdc/FAVOR/OUTPUT/finetune_v/vitl16/MER242526-emotion/favor-e5-4layer-data48-8-newopt
+meta:
+  dtype: bfloat16
+  eval_freq: 1
+  load_checkpoint: true
+  # read_checkpoint: /home/data/sdc/vjepa2/outputs/videos_all/e35.pt
+  read_checkpoint: /home/data/sdc/FAVOR/OUTPUT/pretrain_v/vitl16/FaVoR-112px-48f/e5.pt
+  reset_epoch: true
+  save_every_freq: 10
+  seed: 239
+yamls:
+  # data: /home/data/sdc/FAVOR/CONFIGS/datas/vfinetune-MER242526-emotion-cls6.yaml
+  data: /home/data/sdc/FAVOR/CONFIGS/datas/vfinetune/cls/MER242526-emotion-cls6.yaml
+  sampling: /home/data/sdc/FAVOR/CONFIGS/datas/vfinetune/48-8.yaml
+  opt: /home/data/sdc/FAVOR/CONFIGS/opt/vfinetune-opt-80-10-3e-5.yaml
+  model: /home/data/sdc/FAVOR/CONFIGS/models/vfinetune-vit-l-4layer.yaml

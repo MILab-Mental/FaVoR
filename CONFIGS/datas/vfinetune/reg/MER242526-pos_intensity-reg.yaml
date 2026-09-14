@@ -1,0 +1,11 @@
+# 2_MER242526_SV.csv :: pos_intensity :: regression (range 0~37)
+data:
+  datasets:
+  - /home/data/sdc/FAVOR/DATASET/splits-0901/2_MER242526_SV.csv
+  datasets_weights:
+  - 1
+  rootpaths:
+  - /home/data/sdc/MER/
+  task: regression
+  # Column containing integer class labels or floating-point regression targets.
+  label_column: pos_intensity

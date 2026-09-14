@@ -8,8 +8,23 @@
 
 ```
 CONFIGS/
-├── tasks/        # 任务入口（每个可运行任务一个文件，app/main.py --fname 指向这里）
-├── datas/        # 数据配置片段（预训练 / 微调）
+├── tasks/
+│   ├── vfinetune/{cls,reg,mlcls}/<任务名>.yaml            # 视频微调入口（app: finetune_v）
+│   │   └── <任务名>/*.yaml                     # 只有多入口任务才保留目录（当前 2 个）
+│   ├── afinetune/{cls,reg,mlcls}/<任务名>.yaml            # 音频微调入口（app: finetune_a，模块未实现）
+│   └── vpretrain/pretrain_v_*.yaml                        # 预训练入口
+├── datas/
+│   ├── vfinetune/
+│   │   ├── cls/       # 数据集定义片段（只含 datasets/rootpaths/task/num_class/label_column）
+│   │   ├── reg/
+│   │   ├── mlcls/     # multi_label_classification（未实现，见第 12 节）
+│   │   ├── 48-4.yaml  # ┐
+│   │   ├── 48-8.yaml  # │ 采样预设片段：只有 data.{采样/dataloader 键} + data_aug，
+│   │   ├── 64-16.yaml # │ 由入口的 sampling: 键引用，与上面的数据集片段叠加
+│   │   └── 128-step2-RAVDESS-reproduce.yaml  # ┘（含 frame_step: 2，无 fps）
+│   ├── afinetune/{cls,reg,mlcls}/   # 音频数据片段（命名同视频侧）
+│   │                  # 注意：音频片段尚未做「数据集 / 采样」剥离，仍自带采样键
+│   └── vpretrain/     # 预训练数据片段
 ├── opt/          # 优化器与调度器片段
 ├── models/       # 模型配置片段（预训练 / 微调）
 ├── mask_loss/    # 掩码 + 损失配置（仅预训练）
@@ -19,6 +34,33 @@ CONFIGS/
 └── bk/           # 历史 / 参考配置备份（不再使用）
 ```
 
+**视频 / 音频两套微调的命名对应**（刻意保持一一平行）：
+
+| | 视频 | 音频 |
+|---|---|---|
+| 任务入口 | `tasks/vfinetune/{cls,reg,mlcls}/<任务名>.yaml` | `tasks/afinetune/{cls,reg,mlcls}/<任务名>.yaml` |
+| 多入口任务 | 保留 `tasks/vfinetune/<分组>/<任务名>/` 目录 | —（目前无） |
+| 入口 `app:` | `finetune_v` | `finetune_a` |
+| 数据片段 | `datas/vfinetune/<类型>/<任务>.yaml` | `datas/afinetune/<类型>/<任务>.yaml` |
+| 采样片段 | `datas/vfinetune/{48-4,48-8,64-16,...}.yaml`（由入口 `sampling:` 引用） | 暂无（待音频侧落地） |
+| 输出目录 | `OUTPUT/finetune_v/` | `OUTPUT/finetune_a/` |
+| 代码模块 | `app/finetune_v/` ✅ 已实现 | `app/finetune_a/` ❌ **尚未实现** |
+
+> 视频与音频侧任务目录的分组**完全一致**：`cls/` = `classification`、`reg/` = `regression`、
+> `mlcls/` = `multi_label_classification`，与 `datas/` 下的同名分组一一对应。
+
+> **职责划分**：`cls/`、`reg/`、`mlcls/` 下的片段**只描述数据集是谁**（`datasets` / `datasets_weights` /
+> `rootpaths` / `task` / `num_class` / `label_column`），**不含任何采样或 dataloader 参数**；
+> `batch_size` / `crop_size` / `patch_size` / `dataset_fpcs` / `tubelet_size` / `fps` / `num_workers` /
+> `persistent_workers` / `pin_mem` / `num_clips` 与 `data_aug` 全部来自顶层**采样预设片段**，
+> 由入口的 `sampling:` 键指定。
+>
+> 因此采样预设**不能单独使用**（缺 `datasets` / `rootpaths` / `label_column` 会在
+> `app/finetune_v/train.py:208-214` 处 KeyError），必须与一个数据集片段叠加。
+>
+> 这一划分对**所有**视频微调入口生效，不区分常规任务与消融/复现变体：消融实验的采样差异
+> 同样通过「换一个 `sampling:` 预设」表达（详见第 8.4 节）。
+
 ## 2. 配置加载与合并机制
 
 入口在 `app/main.py::load_config`：
@@ -26,6 +68,20 @@ CONFIGS/
 1. 读入口 YAML，取出 `yamls` 字段（可为 dict / list / 单路径）。
 2. 按 `yamls` 的出现顺序依次加载片段文件，**后加载的片段覆盖先加载的**。
 3. 最后把入口文件自身的键（除 `yamls` 外）叠加到合并结果上，**入口配置优先级最高**。
+
+微调入口的 `yamls` 采用固定的四键布局，把「数据集是谁」与「怎么采样」拆成两个片段：
+
+```yaml
+yamls:
+  data:     /home/data/sdc/FAVOR/CONFIGS/datas/vfinetune/cls/CREMA-D-emotion-cls6.yaml
+  sampling: /home/data/sdc/FAVOR/CONFIGS/datas/vfinetune/48-8.yaml
+  opt:      /home/data/sdc/FAVOR/CONFIGS/opt/vfinetune-opt-80-5-5e-5.yaml
+  model:    /home/data/sdc/FAVOR/CONFIGS/models/vfinetune-vit-l-4layer.yaml
+```
+
+`data` 与 `sampling` 都指向 `datas/` 片段、都写进合并结果的同一个 `data` 顶层键，但两者的键集
+**互不重叠**（数据集标识 vs 采样参数），因此谁先谁后都不影响结果。`sampling` 是可换的旋钮：
+改一行就能把一个任务从 48 帧/8fps 换成 64 帧/16fps，不必碰数据集定义。
 
 每个片段文件内部只有一个顶层键（`data:` / `optimization:` / `model:` / `loss:` + `mask:`），
 因此片段间不会互相覆盖；`yamls` 里的 dict key（`data` / `opt` / `model` / `mask`）只是
@@ -38,8 +94,8 @@ CONFIGS/
 | `app` | 入口 | 分发目标模块：`pretrain_v` / `finetune_v` |
 | `folder` | 入口 | 输出目录（日志、checkpoint、参数快照） |
 | `meta` | 入口 | 运行级参数（精度、seed、ckpt 路径等） |
-| `data` | datas/ 片段 | 数据集与 dataloader |
-| `data_aug` | datas/ 片段 | 数据增强 |
+| `data` | `datas/` 片段 | 数据集与 dataloader |
+| `data_aug` | `datas/` 片段 | 数据增强 |
 | `optimization` | opt/ 片段 | 优化器 / 调度器 |
 | `model` | models/ 片段 | 模型结构 |
 | `loss` + `mask` | mask_loss/ 片段 | 预训练损失与掩码（仅预训练） |
@@ -65,7 +121,8 @@ meta:
   seed: 239
   frozen_encoder: true          # 现已统一注释掉，见第 8 节
 yamls:
-  data: /home/data/sdc/FAVOR/CONFIGS/datas/vfinetune-RAVDESS-emotion-cls8.yaml
+  data: /home/data/sdc/FAVOR/CONFIGS/datas/vfinetune/cls/RAVDESS-emotion-cls8.yaml
+  sampling: /home/data/sdc/FAVOR/CONFIGS/datas/vfinetune/48-8.yaml
   opt: /home/data/sdc/FAVOR/CONFIGS/opt/vfinetune-opt-250-40.yaml
   model: /home/data/sdc/FAVOR/CONFIGS/models/vfinetune-vit-l.yaml
 ```
@@ -135,7 +192,7 @@ flash / memory-efficient attention **没有二阶导**，故该 pass 会临时�
 
 ## 4. 数据配置片段（datas/）
 
-### 4.1 预训练 data（`vpretrain-data*.yaml`）
+### 4.1 预训练 data（`datas/vpretrain/vpretrain-data*.yaml`）
 
 | 字段 | 说明 |
 |---|---|
@@ -155,7 +212,7 @@ flash / memory-efficient attention **没有二阶导**，故该 pass 会临时�
 | `random_resize_scale` | 随机缩放比例范围 |
 | `motion_shift` / `auto_augment` / `reprob` | 运动偏移 / 自动增强 / 随机 erase 概率 |
 
-### 4.2 微调 data（`vfinetune-*.yaml`）
+### 4.2 微调 data（`datas/vfinetune/{cls,reg,mlcls}/vfinetune-*.yaml`）
 
 在预训练字段基础上新增：
 
@@ -171,6 +228,11 @@ flash / memory-efficient attention **没有二阶导**，故该 pass 会临时�
 > **split 约定**：`VideoCSVDataset` 读取 `{label_column}_split` 列，`split=0` 为训练集、
 > `split=1` 为验证集。**分类标签是 1-based**（代码内部 `int(label) - 1` 转 0-based），
 > 回归标签为浮点值。详见 `datasets/video_finetune_dataset.py`。
+
+> **`video_path` 不能为空**：`VideoCSVDataset` 逐行构造样本时要求 `video_path` 非空
+> （`_load_data_path` 会抛 `ValueError: Empty video_path`）——**空值不是「跳过」，是报错**。
+> 音频数据集的 CSV（`2_*_SA`、`3_*_LA` 等）整列 `video_path` 为空，因此无法用于本流水线，
+> 见 8.2 与 12.2。
 
 微调 `data_aug`：
 
@@ -248,27 +310,138 @@ flash / memory-efficient attention **没有二阶导**，故该 pass 会临时�
 
 ## 8. 微调任务总览（tasks/）
 
-共 15 个微调入口，对应 7 个视频数据集：
+`DATASET/splits-0901/tasks.json` 定义了 **33 条**下游任务，覆盖 **20 个**数据集。本节为全部
+33 条都建立了入口，但其中**只有 14 条当前可运行**——其余 16 条的数据集是**纯音频**，另 3 条
+是尚未实现的 `multi_label_classification`。
 
-| # | 任务入口 | 数据集 CSV | task | 输出 | label_column | 备注 |
+- **视频（15 条）** → `tasks/vfinetune/{cls,reg,mlcls}/<任务名>.yaml`（`app: finetune_v`，已实现）
+- **音频（18 条）** → `tasks/afinetune/{cls,reg,mlcls}/<任务名>.yaml`（`app: finetune_a`，**模块未实现**）
+
+> **为什么 tasks.json 有 33 条而这里只有 14 条能跑**：`tasks.json` 是**数据集级任务注册表**，
+> 同时登记音频与视频数据集；而 `app/finetune_v/` 是**纯视频流水线**（`VideoCSVDataset` +
+> decord 解码 CSV 的 `video_path` 列）。8.2 那 16 条所属数据集的 `video_path` 在
+> `splits-0901` 中**整列为空**（0 / 165,702 行有值），磁盘上也没有视频文件，因此进不了这条
+> 流水线；音频侧目前**连模块都还没有**（无 `app/finetune_a/`、无 audio dataset、无 audio
+> encoder，`requirements.txt` 只有 `decord`）。详见第 12 节。
+
+数据片段按任务类型分目录：`cls/` = `classification`、`reg/` = `regression`、
+`mlcls/` = `multi_label_classification`。消融 / 复现实验**不单独建目录**，它们的差异
+全部落在入口引用的采样预设上（见 8.4）。
+
+### 8.1 可运行（14 条，视频数据集）
+
+入口均为 `tasks/vfinetune/<分组>/<下表中的名字>.yaml`。分组目录取该行 `task` 列的
+对应项：`classification` → `cls/`、`regression` → `reg/`、`multi_label_classification` → `mlcls/`。
+本节 14 条按此规则分布为 **`cls/` 7 条、`reg/` 7 条**；`mlcls/` 下另有 1 条不可运行的任务，
+见 8.3。
+
+| # | 任务入口 | 数据集 CSV | task | 输出 | `label_column` | 备注 |
 |---|---|---|---|---|---|---|
-| 1 | `finetune_v_AVEC2014-PHQ` | `3_AVEC2014_LV.csv` | regression | 标量 | `PHQ` | 抑郁评分 0~45 |
-| 2 | `finetune_v_CREMA-D-emotion` | `2_CREMA-D_SV.csv` | classification | 6 类 | `emotion` | |
-| 3 | `finetune_v_CREMA-D-intensity` | `2_CREMA-D_SV.csv` | regression | 标量 | `intensity` | 序数 0/1/2 |
-| 4 | `finetune_v_EmotionTalk-emotion` | `2_EmotionTalk_SV.csv` | classification | 7 类 | `emotion` | |
-| 5 | `finetune_v_IEMOCAP-activation` | `2_IEMOCAP_SV.csv` | regression | 标量 | `activation` | 1.0~5.0 |
-| 6 | `finetune_v_IEMOCAP-dominance` | `2_IEMOCAP_SV.csv` | regression | 标量 | `dominance` | 0.5~5.0 |
-| 7 | `finetune_v_IEMOCAP-emotion` | `2_IEMOCAP_SV.csv` | classification | 9 类 | `emotion` | |
-| 8 | `finetune_v_IEMOCAP-valence` | `2_IEMOCAP_SV.csv` | regression | 标量 | `valence` | 1.0~5.5 |
-| 9 | `finetune_v_MER2023-emotion` | `2_MER2023_SV.csv` | classification | 6 类 | `emotion` | |
-| 10 | `finetune_v_MER2023-pos_intensity` | `2_MER2023_SV.csv` | regression | 标量 | `pos_intensity` | 0.0~9.25 |
-| 11 | `finetune_v_MER242526-26openset` | `2_MER242526_SV.csv` | multi_label_classification | 23 类 | `26openset` | **占位，未实现** |
-| 12 | `finetune_v_MER242526-emotion` | `2_MER242526_SV.csv` | classification | 6 类 | `emotion` | |
-| 13 | `finetune_v_MER242526-pos_intensity` | `2_MER242526_SV.csv` | regression | 标量 | `pos_intensity` | 0~37 |
-| 14 | `finetune_v_RAVDESS-emotion` | `2_RAVDESS_SV.csv` | classification | 8 类 | `emotion` | |
-| 15 | `finetune_v_RAVDESS-intensity` | `2_RAVDESS_SV.csv` | classification | 2 类 | `intensity` | 标签已重编码为 {1,2}（1=normal / 2=strong） |
+| 1 | `CREMA-D-emotion` | `2_CREMA-D_SV.csv` | classification | 6 类 | `emotion` | |
+| 2 | `CREMA-D-intensity` | `2_CREMA-D_SV.csv` | regression | 标量 | `intensity` | 有序 0/1/2 |
+| 3 | `EmotionTalk-emotion` | `2_EmotionTalk_SV.csv` | classification | 7 类 | `emotion` | |
+| 4 | `IEMOCAP-emotion` | `2_IEMOCAP_SV.csv` | classification | 9 类 | `emotion` | |
+| 5 | `IEMOCAP-valence` | `2_IEMOCAP_SV.csv` | regression | 标量 | `valence` | 1.0~5.5 |
+| 6 | `IEMOCAP-activation` | `2_IEMOCAP_SV.csv` | regression | 标量 | `activation` | 1.0~5.0 |
+| 7 | `IEMOCAP-dominance` | `2_IEMOCAP_SV.csv` | regression | 标量 | `dominance` | 0.5~5.0 |
+| 8 | `MER2023-emotion` | `2_MER2023_SV.csv` | classification | 6 类 | `emotion` | |
+| 9 | `MER2023-pos_intensity` | `2_MER2023_SV.csv` | regression | 标量 | `pos_intensity` | 0.0~9.25 |
+| 10 | `MER242526-emotion` | `2_MER242526_SV.csv` | classification | 6 类 | `emotion` | 另有 18 个变体目录，见下注 |
+| 11 | `MER242526-pos_intensity` | `2_MER242526_SV.csv` | regression | 标量 | `pos_intensity` | 0~37 |
+| 12 | `RAVDESS-emotion` | `2_RAVDESS_SV.csv` | classification | 8 类 | `emotion` | 另有 3 个变体目录，见下注 |
+| 13 | `RAVDESS-intensity` | `2_RAVDESS_SV.csv` | classification | 2 类 | `intensity` | 标签已重编码为 {1,2}（1=normal / 2=strong） |
+| 14 | `AVEC2014-PHQ` | `3_AVEC2014_LV.csv` | regression | 标量 | `PHQ` | 抑郁评分 0~45 |
 
-## 9. 预训练任务（tasks/）
+> **上表 14 条已全部扁平化为 `<任务名>.yaml`**（如 `cls/CREMA-D-emotion.yaml`）。其中两个任务
+> 另带实验变体，因此**入口文件与同名变体目录并存**：
+>
+> - `cls/MER242526-emotion.yaml`（默认入口）+ `cls/MER242526-emotion/`（18 个
+>   `favor-*.yaml` 变体）。默认入口是 `favor-e5-4layer-data48-8-newnewopt` 的
+>   **逐字节副本**——它是这批实验里 acc/F1 双料第一（`0.5692` / `0.4907` @ epoch 10）。
+>   注意它沿用该变体自己的 `folder:`，所以默认入口与原变体**输出到同一个目录**。
+> - `cls/RAVDESS-emotion.yaml`（默认入口，由原 `finetune_v.yaml` 剪切而来）+
+>   `cls/RAVDESS-emotion/`（3 个变体：`-vjepa` / `_reproduce` / `_reproduce_e5`）。
+>
+> 这 18 + 3 个变体入口的采样同样由 `sampling:` 预设给出（13 个历史 MER242526 变体用
+> `48-4`，`-data48-8` / `-data64-16` 命名的用 `48-8` / `64-16`，两个 RAVDESS reproduce
+> 用 `128-step2-RAVDESS-reproduce`），见 8.4。
+
+### 8.2 纯音频数据集，当前不可运行（16 条）
+
+入口为 `tasks/afinetune/{cls,reg}/<下表中的名字>.yaml`（`app: finetune_a`）。
+这些入口与数据片段都已建好、字段与视频任务完全同构，**但有两道坎**：
+
+1. `data.video_path` 为空 —— CSV 该列整列为空，`VideoCSVDataset` 建数据集时直接抛
+   `ValueError: Empty video_path`。
+2. `app/finetune_a` **模块不存在** —— `app.main` 走 `importlib.import_module(f"app.{app}.train")`，
+   `app: finetune_a` 会先抛 `ModuleNotFoundError`。要跑通需先实现音频侧的 dataset 类、
+   encoder 与 `app/finetune_a/train.py`。
+
+| # | 任务入口 | 数据集 CSV | task | 输出 | `label_column` | 备注 |
+|---|---|---|---|---|---|---|
+| 1 | `ASVP-ESD-emotion` | `2_ASVP-ESD_SA.csv` | classification | 12 类 | `emotion` | 13,964 行 |
+| 2 | `ASVP-ESD-intensity` | `2_ASVP-ESD_SA.csv` | classification | 2 类 | `intensity` | 1=normal / 2=high |
+| 3 | `CASIA-emotion` | `2_CASIA_SA.csv` | classification | 6 类 | `emotion` | 1,200 行 |
+| 4 | `CSEMOTIONS-emotion` | `2_CSEMOTIONS_SA.csv` | classification | 7 类 | `emotion` | 4,160 行 |
+| 5 | `EMNS-emotion` | `2_EMNS_SA.csv` | classification | 8 类 | `emotion` | 1,205 行 |
+| 6 | `EMNS-intensity` | `2_EMNS_SA.csv` | regression | 标量 | `intensity` | 0~10 |
+| 7 | `ESD-Chinese-emotion` | `2_ESD-Chinese_SA.csv` | classification | 5 类 | `emotion` | 35,000 行 |
+| 8 | `Androids-Corpus-label` | `3_Androids-Corpus_LA.csv` | classification | 2 类 | `label` | 1=HC / 2=PT |
+| 9 | `CMDC-label` | `3_CMDC_LA.csv` | classification | 2 类 | `label` | 1=HC / 2=MDD |
+| 10 | `CMDC-PHQ` | `3_CMDC_LA.csv` | regression | 标量 | `PHQ` | 0~25 |
+| 11 | `CMDC-HAMD` | `3_CMDC_LA.csv` | regression | 标量 | `HAMD` | 9~24 |
+| 12 | `MODMA-label` | `3_MODMA_SA.csv` | classification | 2 类 | `label` | 1=HC / 2=MDD |
+| 13 | `CNSCED-intensity` | `2_CNSCED_SA.csv` | regression | 标量 | `intensity` | 0~3，多标签强度的逐行平均 |
+| 14 | `EMOVIE-pos_intensity` | `2_EMOVIE_SA.csv` | regression | 标量 | `pos_intensity` | 0~4 |
+| 15 | `EATD-Corpus-SDS` | `3_EATD-Corpus_SA.csv` | regression | 标量 | `SDS` | 20~66 |
+| 16 | `PDCH-HAMD` | `3_PDCH_LA.csv` | regression | 标量 | `HAMD` | 1~35 |
+
+> `Androids-Corpus/` 与 `CMDC/` 下有名为 `face_videos/` 的目录，但里面只有 `.wav`，**没有视频**。
+
+### 8.3 `multi_label_classification` 未实现（3 条）
+
+| # | 任务入口 | 所在目录 | 数据集 CSV | 输出 | `label_column` | 备注 |
+|---|---|---|---|---|---|---|
+| 1 | `MER242526-26openset` | `tasks/vfinetune/mlcls/MER242526-26openset.yaml` | `2_MER242526_SV.csv` | 23 类，`\|` 分隔 | `26openset` | 视频数据集，仅**任务类型**缺实现 |
+| 2 | `CNSCED-emotion` | `tasks/afinetune/mlcls/CNSCED-emotion.yaml` | `2_CNSCED_SA.csv` | 7 类，`\|` 分隔 | `emotion` | 同时是纯音频 |
+| 3 | `M3ED-emotion` | `tasks/afinetune/mlcls/M3ED-emotion.yaml` | `2_M3ED_SA.csv` | 7 类，`\|` 分隔 | `emotion` | 同时是纯音频 |
+
+标签列的写法如 `5|7`，`VideoCSVDataset` 的 `int(label) - 1` 会直接解析失败，故这三个入口文件
+与对应的数据片段头部都标了 `PLACEHOLDER`，不能直接运行。
+
+### 8.4 采样预设
+
+采样参数集中在 `datas/vfinetune/` 顶层的 4 个预设片段，由入口的 `sampling:` 键引用（见第 2 节）。
+这 4 个片段是**唯一**的采样来源——`cls/`、`reg/`、`mlcls/` 下的数据集片段只描述「数据集是谁」，
+不含任何采样键（见第 1 节的职责划分）。
+
+| 预设 | `dataset_fpcs` | `fps` | `frame_step` | 引用它的入口 |
+|---|---|---|---|---|
+| `48-8.yaml` | `[48]` | 8 | — | **19 个**：8.1 的 15 个任务入口 + `RAVDESS-emotion/vjepa.yaml` + 3 个 `...-data48-8-...` 变体 |
+| `48-4.yaml` | `[48]` | 4 | — | **14 个**：`MER242526-emotion` 的 13 个历史变体 + `CONFIGS/test-finetune.yaml` |
+| `64-16.yaml` | `[64]` | 16 | — | **2 个**：`...-data64-16-new{new,}opt.yaml` 变体 |
+| `128-step2-RAVDESS-reproduce.yaml` | `[128]` | 无（`fps` 未设 → 源视频原帧率） | 2 | **2 个**：`RAVDESS-emotion/reproduce{,_e5}.yaml` |
+
+消融 / 复现实验**不再有专属数据片段**：`dataset_fpcs` / `fps` / `frame_step` 的差异就是消融的
+自变量本身，现在一律用「入口换一个 `sampling:` 预设」表达（例：MER242526 的 64 帧消融 =
+同一份 `cls/MER242526-emotion-cls6.yaml` + `64-16.yaml`）。新增一档采样 = 加一个预设片段，
+数据集片段与任务入口都不必动。
+
+> **为什么 `MER242526-emotion` 的 13 个历史变体是 `48-4` 而不是 `48-8`**：这些入口历史上一直
+> 吃数据片段里的 `fps: 4`（该 `fps` 键对 8.1 的任务入口是死键，因为那些入口一律覆盖成 8）。
+> 改成 `48-8` 会把帧率翻倍，`run.sh:25-113` 记录的那些指标（如 `favor-e11-23out` 的
+> `best acc 0.5219 @ epoch 15`）就不再可比。想统一到 8fps 的话，把这 13 个入口的 `sampling:`
+> 改成 `48-8.yaml` 即可。
+
+> **命名顺序的坑**：这批历史变体的**文件名是 `帧数-帧率`**（`data48-8` = 48 帧 / 8fps），
+> 而**采样预设的文件名是 `帧率-帧数`**（`48-8.yaml` = 8fps / 48 帧）。两者恰好都能读成
+> 「48-8」，含义却相反，对照文件名与 `sampling:` 时注意区分。
+
+> **`pin_mem` 已统一为 `false`**：4 个预设全部显式写 `data.pin_mem: false`，因此 36 个入口
+> 合并后的 `pin_mem` 都是 `false`。该键只影响 dataloader 的锁页内存，不影响任何指标；
+> 历史上片段写的是 `true`，改动后仅可能影响吞吐。
+
+## 9. 预训练任务（tasks/vpretrain/）
 
 | 任务入口 | 数据 | 帧数 | 说明 |
 |---|---|---|---|
@@ -277,7 +450,7 @@ flash / memory-efficient attention **没有二阶导**，故该 pass 会临时�
 | `pretrain_v_FaVoR-cooldown.yaml` | `pretrain_videos_0901.csv`（64f） | 64f | 退火：从主训练 `latest.pt` 继续，LR 退到 ~0，`epochs 40`，无 warmup |
 
 退火通过 `opt/vpretrain-opt-cooldown.yaml` 的 `is_anneal: true` + `anneal_ckpt` + `resume_anneal: true`
-与 `datas/vpretrain-data-cooldown.yaml`（`dataset_fpcs: [64]`、`batch_size 32`）实现。
+与 `datas/vpretrain/vpretrain-data-cooldown.yaml`（`dataset_fpcs: [64]`、`batch_size 32`）实现。
 
 ## 10. 调试入口
 
@@ -311,13 +484,24 @@ python -m app.main --fname CONFIGS/test-finetune.yaml --devices cuda:0 --debugmo
 
 1. **`multi_label_classification` 未实现** —— `datasets/video_finetune_dataset.py` 与
    `app/finetune_v/train.py` 目前只支持 `classification` / `regression`。
-   `finetune_v_MER242526-26openset` 及其 data 片段均为占位，不能直接运行。
+   `MER242526-26openset`、`CNSCED-emotion`、`M3ED-emotion` 三个入口及其 data 片段均为占位
+   （见 8.3），不能直接运行。
 
-2. **`frozen_encoder` 已统一注释** —— 15 个微调任务入口中的 `frozen_encoder: true` 现已
+2. **18 个音频任务的 `app: finetune_a` 模块不存在** —— 见 8.2 / 8.3。`tasks.json` 里的 33 条
+   任务同时含音频与视频数据集，但 `app/finetune_v/` 只吃 `video_path`。这 18 条已按音频侧
+   的组织方式放好（`tasks/afinetune/`、`datas/afinetune/`、`app: finetune_a`），**属于配置
+   先行、代码未实现**：`app.main` 的 `importlib.import_module(f"app.{app}.train")` 会抛
+   `ModuleNotFoundError: No module named 'app.finetune_a'`。要跑通需补齐音频侧的 dataset 类、
+   encoder / transforms 与 `app/finetune_a/train.py`（仓库当前无任何音频代码，
+   `requirements.txt` 无 `torchaudio`）。
+
+3. **`frozen_encoder` 已统一注释** —— 33 个微调任务入口中的 `frozen_encoder: true` 现已
    注释掉，实际走默认值 `false`（解冻 encoder、端到端训练）。
 
-3. **`use_sdpa` 位置** —— 必须写在 `model` 片段下（`app/pretrain_v/train.py` 从
+4. **`use_sdpa` 位置** —— 必须写在 `model` 片段下（`app/pretrain_v/train.py` 从
    `cfgs_model` 读取）；早期 `bk/` 配置曾误写到 `meta` 下，会被忽略并回退到默认 `false`。
 
-4. **`yamls` 路径** —— 片段路径可用绝对路径，也可用相对入口文件的相对路径（`load_config`
-   会自动相对入口目录解析）。
+5. **`yamls` 路径** —— 片段路径可用绝对路径，也可用相对入口文件的相对路径（`load_config`
+   会自动相对入口目录解析）。**移动 / 重构 `datas/` 或 `tasks/` 下的文件后，记得同步更新
+   引用方**：`CONFIGS/tasks/**` 各入口的 `yamls`、`CONFIGS/test*.yaml`、以及 `run.sh` 的
+   `--fname`。仓库没有覆盖这些引用的校验，路径写错只会在启动时以 `FileNotFoundError` 暴露。

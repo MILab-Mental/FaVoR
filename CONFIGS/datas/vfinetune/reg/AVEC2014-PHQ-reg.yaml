@@ -1,0 +1,11 @@
+# 3_AVEC2014_LV.csv :: PHQ :: regression (range 0~45)
+data:
+  datasets:
+  - /home/data/sdc/FAVOR/DATASET/splits-0901/3_AVEC2014_LV.csv
+  datasets_weights:
+  - 1
+  rootpaths:
+  - /home/data/sdb/基座模型数据集/3心理数据集/AVEC2014/
+  task: regression
+  # Column containing integer class labels or floating-point regression targets.
+  label_column: PHQ

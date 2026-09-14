@@ -1,0 +1,20 @@
+# Reproduction of /home/data/sdc/finetune RAVDESS fine-tuning.
+# The numeric split manifest is the schema consumed by the current loader.
+data:
+  batch_size: 64
+  crop_size: 112
+  patch_size: 16
+  dataset_fpcs:
+  - 128
+  tubelet_size: 2
+  frame_step: 2
+  num_workers: 8
+  persistent_workers: true
+  pin_mem: false
+  num_clips: 1
+
+data_aug:
+  random_resize_aspect_ratio: [0.85, 1.15]
+  random_resize_scale: [0.6, 1.0]
+  random_horizontal_flip: 0.5
+  reprob: 0.0

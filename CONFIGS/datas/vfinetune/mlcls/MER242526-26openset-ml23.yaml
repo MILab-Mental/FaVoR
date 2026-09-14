@@ -1,0 +1,16 @@
+# PLACEHOLDER — multi_label_classification 尚未实现：
+#   datasets/video_finetune_dataset.py 与 app/finetune_v/train.py 目前只接受
+#   'classification' / 'regression'。本文件仅作任务规格占位，不能直接运行。
+# 2_MER242526_SV.csv :: 26openset :: multi_label_classification (23 classes)
+# PLACEHOLDER
+data:
+  datasets:
+  - /home/data/sdc/FAVOR/DATASET/splits-0901/2_MER242526_SV.csv
+  datasets_weights:
+  - 1
+  rootpaths:
+  - /home/data/sdc/MER/
+  task: multi_label_classification
+  num_class: 23
+  # Column containing integer class labels or floating-point regression targets.
+  label_column: 26openset

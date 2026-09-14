@@ -1,0 +1,45 @@
+# 预训练 + 表征质量监控 —— 快速调试入口（每 epoch 只有几步，快速触发 eval event）
+#
+# 与 pretrain_v_FaVoR-112px-64f16-rankme.yaml 同源（112px / 64f / vit-l），
+# 差异仅在：
+#   optimization.ipe = 3      每 epoch 仅 3 个 step（原 5000）
+#   optimization.epochs = 2   总共 2 个 epoch
+#   optimization.warmup = 1
+#   rankme.max_samples = 64   固定 eval 子集很小，解码快
+#   hessian_trace.n_hutchinson = 2 / every_events = 1（尽快覆盖 Hessian 路径）
+#
+# 用途：验证「best_loss.pt / best_rankme.pt / best_trace.pt + log_eval.csv」的
+#       完整落盘与 RankMe / Hessian 计算在真实 vit-l + DDP 下无崩溃。
+#       正式训练请用 pretrain_v_FaVoR-112px-64f16-rankme.yaml。
+app: pretrain_v
+folder: /home/data/sdc/FAVOR/OUTPUT/pretrain_v/vitl16/FaVoR-112px-64f16-rankme-debug
+meta:
+  dtype: bfloat16
+  eval_freq: 1
+  load_checkpoint: true
+  read_checkpoint: /home/data/sdc/FAVOR/CKPT/vjepa2/vitl.pt
+  reset_epoch: true
+  save_every_freq: 5
+  seed: 239
+  rankme:
+    enabled: true
+    every_events: 1
+    subset_frac: 0.0001
+    max_samples: 64
+    feature: global
+    seed: 2024
+  hessian_trace:
+    enabled: true
+    every_events: 1
+    n_hutchinson: 2
+    n_clips: 1
+    seed: 2024
+optimization:
+  ipe: 3
+  epochs: 2
+  warmup: 1
+yamls:
+  data: /home/data/sdc/FAVOR/CONFIGS/datas/vpretrain/vpretrain-data-64-16.yaml
+  opt: /home/data/sdc/FAVOR/CONFIGS/opt/vpretrain-opt-s5000-150-40.yaml
+  model: /home/data/sdc/FAVOR/CONFIGS/models/vpretrain-vit-l.yaml
+  mask: /home/data/sdc/FAVOR/CONFIGS/mask_loss/vjepa-pretrain.yaml

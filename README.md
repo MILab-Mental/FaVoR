@@ -46,15 +46,17 @@ python -m app.main --fname CONFIGS/test-finetune.yaml --devices cuda:0 --debugmo
 # 旧的 `python -m app.main ... --devices` 多卡写法仍兼容，但新任务请用 torchrun。
 
 # 预训练（48 帧 / 112px，vit_large）
-torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/pretrain_v_FaVoR-112px-48f.yaml --devices cuda:0 cuda:1
+torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vpretrain/pretrain_v_FaVoR-112px-48f.yaml --devices cuda:0 cuda:1
 
 # 退火 / cooldown（长片段 64f，LR 退到 ~0）
-torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/pretrain_v_FaVoR-cooldown.yaml --devices cuda:0 cuda:1
+torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vpretrain/pretrain_v_FaVoR-cooldown.yaml --devices cuda:0 cuda:1
 
 # 微调（例：RAVDESS emotion 8 类）
-torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/RAVDESS-emotion/finetune_v.yaml --devices cuda:0 cuda:1
+torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/cls/RAVDESS-emotion.yaml --devices cuda:0 cuda:1
 
-# 一次性跑完 15 个微调任务（run.sh 内部已改为 torchrun）
+# 一次性跑完 run.sh 里列的 15 个视频微调任务（内部已改为 torchrun）
+# 注意：tasks.json 共 33 条任务，其中 16 条是纯音频、3 条是多标签，当前不可运行，
+# 故没有列进 run.sh；33 条任务的完整清单与原因见 CONFIGS/README.md 第 8 节。
 bash run.sh
 
 # 画 loss 曲线
@@ -185,7 +187,11 @@ GPU；rank 崩溃会立即报错并终止整组，不用再干等 NCCL 默认 60
 ## 规划中 / 未实现
 
 - 音频预训练与微调（`finetune_a`）、音视频联合（VA）训练。
-- `multi_label_classification` 任务类型（`MER242526-26openset` 目前为占位，不可运行）。
+  音频侧**配置已就位、代码未实现**：18 条音频任务的入口放在 `CONFIGS/tasks/afinetune/{cls,reg,mlcls}/<任务名>.yaml`
+  （`app: finetune_a`），数据片段在 `CONFIGS/datas/afinetune/`，与视频侧一一平行。
+  跑通还需补 `app/finetune_a/train.py` 与音频 dataset / encoder（见 CONFIGS/README.md 第 8、12 节）。
+- `multi_label_classification` 任务类型（`MER242526-26openset`、`CNSCED-emotion`、`M3ED-emotion`
+  目前均为占位，不可运行）。
 
 ## 许可
 

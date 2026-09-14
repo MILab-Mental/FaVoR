@@ -1,0 +1,34 @@
+# PLACEHOLDER — multi_label_classification 尚未实现：
+#   datasets/video_finetune_dataset.py 与 app/finetune_v/train.py 目前只接受
+#   'classification' / 'regression'。本文件仅作任务规格占位，不能直接运行。
+# 2_CNSCED_SA.csv :: emotion :: multi_label_classification (7 classes)
+# PLACEHOLDER
+data:
+  datasets:
+  - /home/data/sdc/FAVOR/DATASET/splits-0901/2_CNSCED_SA.csv
+  datasets_weights:
+  - 1
+  rootpaths:
+  - /home/data/sdb/基座模型数据集/2情绪数据集/CNSCED/
+  batch_size: 64
+  crop_size: 112
+  patch_size: 16
+  dataset_fpcs:
+  - 48
+  tubelet_size: 2
+  fps: 4
+  num_workers: 8
+  persistent_workers: true
+  pin_mem: true
+  num_clips: 1
+
+  task: multi_label_classification
+  num_class: 7
+  # Column containing integer class labels or floating-point regression targets.
+  label_column: emotion
+
+data_aug:
+  random_resize_aspect_ratio: [0.85, 1.15]
+  random_resize_scale: [0.6, 1.0]
+  random_horizontal_flip: 0.5
+  reprob: 0.0
