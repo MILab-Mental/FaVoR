@@ -44,6 +44,20 @@ parser.add_argument(
     "The main code runs the main process, which makes it easier to \
     debug with checkpointing.",
 )
+parser.add_argument(
+    "--set",
+    dest="overrides",
+    nargs="+",
+    default=[],
+    metavar="KEY=VALUE",
+    help="Override merged config values, e.g. \
+    --set folder=/path/to/out meta.read_checkpoint=/path/to/ckpt.pt . \
+    Dotted keys index nested mappings; values are parsed as YAML scalars \
+    (int/float/bool/list/dict) and fall back to strings. Overrides are applied \
+    after the YAML merge, so they beat every fragment and the entry config. \
+    Only keys already present in the merged config are guaranteed to take \
+    effect (see CONFIGS/README.md 10.2). Best passed last, for readability.",
+)
 
 
 def app_main(app, args):
@@ -106,7 +120,46 @@ def load_config(fname):
     return _merge_config(params, config)
 
 
-def process_main(rank, fname, world_size, devices, local_rank=None):
+def _coerce_override_value(raw):
+    """Parse a --set value as a YAML scalar/container, keeping plain strings as-is."""
+    try:
+        parsed = yaml.safe_load(raw)
+    except yaml.YAMLError:
+        return raw
+    if isinstance(parsed, (bool, int, float, list, dict)):
+        return parsed
+    return raw
+
+
+def apply_overrides(params, overrides):
+    """Apply ``KEY=VALUE`` pairs to a merged config; dotted keys index nested mappings.
+
+    Runs after ``load_config`` so command-line values win over every YAML file.
+    ``params`` is mutated in place, which keeps the ``params-{app}.yaml`` snapshot
+    written by ``process_main`` faithful to what actually ran.
+    """
+    for item in overrides:
+        key, separator, raw = item.partition("=")
+        if not separator:
+            raise ValueError(f"--set expects KEY=VALUE, but got {item!r}")
+        parts = [part for part in key.strip().split(".") if part]
+        if not parts:
+            raise ValueError(f"--set expects a non-empty key, but got {item!r}")
+        node = params
+        walked = []
+        for part in parts[:-1]:
+            walked.append(part)
+            child = node.get(part)
+            if not isinstance(child, dict):
+                raise KeyError(
+                    f"--set {key.strip()}: {'.'.join(walked)} is not a config mapping"
+                )
+            node = child
+        node[parts[-1]] = _coerce_override_value(raw)
+    return params
+
+
+def process_main(rank, fname, world_size, devices, local_rank=None, overrides=None):
     import os
 
     # Each rank must see exactly ONE GPU, because the trainers hard-code
@@ -138,6 +191,9 @@ def process_main(rank, fname, world_size, devices, local_rank=None):
 
     # Load config
     params = load_config(fname)
+    if overrides:
+        apply_overrides(params, overrides)
+        logger.info("applied --set overrides: %s", " ".join(overrides))
     logger.info("loaded params...")
 
     # Log config
@@ -185,6 +241,7 @@ if __name__ == "__main__":
             world_size=int(os.environ["WORLD_SIZE"]),
             devices=args.devices,
             local_rank=int(os.environ.get("LOCAL_RANK", "0")),
+            overrides=args.overrides,
         )
     else:
         # Manual mp.Process launcher: pick a master port once in the parent so
@@ -194,9 +251,11 @@ if __name__ == "__main__":
         os.environ["MASTER_PORT"] = master_port
         logger.info("Using local distributed rendezvous port %s", master_port)
         if args.debugmode:
-            process_main(rank=0, fname=args.fname, world_size=1, devices=["cuda:0"])
+            process_main(rank=0, fname=args.fname, world_size=1, devices=["cuda:0"],
+                         overrides=args.overrides)
         else:
             num_gpus = len(args.devices)
             mp.set_start_method("spawn")
             for rank in range(num_gpus):
-                mp.Process(target=process_main, args=(rank, args.fname, num_gpus, args.devices)).start()
+                mp.Process(target=process_main,
+                           args=(rank, args.fname, num_gpus, args.devices, None, args.overrides)).start()

@@ -1,8 +1,5 @@
-# PLACEHOLDER — multi_label_classification 尚未实现：
-#   datasets/video_finetune_dataset.py 与 app/finetune_v/train.py 目前只接受
-#   'classification' / 'regression'。本文件仅作任务规格占位，不能直接运行。
 # 2_MER242526_SV.csv :: 26openset :: multi_label_classification (23 classes)
-# PLACEHOLDER
+# 标签列为竖线分隔的 1-based 类别索引（如 `2|11|20`），解析为 0-based 23 维 multi-hot。
 data:
   datasets:
   - /home/data/sdc/FAVOR/DATASET/splits-0901/2_MER242526_SV.csv

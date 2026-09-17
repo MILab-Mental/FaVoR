@@ -2,14 +2,14 @@
 """Aggregate fine-tuning results and create paired statistical reports.
 
 Example:
-    python ana.py --tasks finetune_v/vitl16/MER242526-emotion \
+    python PLOT/ana.py --tasks finetune_v/vitl16/MER242526-emotion \
         finetune_v/vitl16/RAVDESS-emotion \
         --main_result vitl16-favor-e5-4layer-data48-8-newnewopt \
         FaVoR-112px-48f-8fps-e5
 
 Each task is resolved below ``OUTPUT`` unless an absolute path is supplied.
 The analysis never changes the original experiment directories; its files are
-written below ``OUTPUT/ana/<task-name>/``.
+written below ``PLOT/output/ana/<task-name>/``.
 """
 
 from __future__ import annotations
@@ -297,7 +297,7 @@ def _task_output_name(task: Path) -> str:
     return "-".join(task.parts[-3:]) if len(task.parts) >= 3 else task.name
 
 
-def analyse_task(task_dir: Path, main_name: str, root: Path, n_bootstrap: int):
+def analyse_task(task_dir: Path, main_name: str, output_root: Path, n_bootstrap: int):
     result_dirs = sorted(path.parent.parent for path in task_dir.glob("*/logs/best.csv"))
     results, skipped = [], []
     for directory in result_dirs:
@@ -307,7 +307,7 @@ def analyse_task(task_dir: Path, main_name: str, root: Path, n_bootstrap: int):
             skipped.append(f"{directory.name}: {error}")
     if not results:
         raise RuntimeError(f"no readable best.csv beneath {task_dir}")
-    output = root / "OUTPUT" / "ana" / _task_output_name(task_dir)
+    output = output_root / _task_output_name(task_dir)
     output.mkdir(parents=True, exist_ok=True)
     by_name = {item["name"]: item for item in results}
     ordered_overall = _ordered([item["name"] for item in results], main_name)
@@ -388,16 +388,18 @@ def main():
         parser.error("--n-bootstrap must be at least 20")
     if len(args.main_result) not in (1, len(args.tasks)):
         parser.error("--main_result needs one name or exactly one name per task")
-    root = Path(__file__).resolve().parent
+    plot_root = Path(__file__).resolve().parent
+    project_root = plot_root.parent
+    output_root = plot_root / "output" / "ana"
     main_names = args.main_result if len(args.main_result) > 1 else args.main_result * len(args.tasks)
     for task_text, main_name in zip(args.tasks, main_names):
         task = Path(task_text)
-        task_dir = task if task.is_absolute() else root / "OUTPUT" / task
+        task_dir = task if task.is_absolute() else project_root / "OUTPUT" / task
         # Older command notes abbreviated the ViT-L directory as ``vit16``;
         # experiment folders in this repository use the explicit ``vitl16``.
         if not task_dir.is_dir() and not task.is_absolute() and "vit16" in task.parts:
-            task_dir = root / "OUTPUT" / Path(*["vitl16" if part == "vit16" else part for part in task.parts])
-        output, count, skipped = analyse_task(task_dir, main_name, root, args.n_bootstrap)
+            task_dir = project_root / "OUTPUT" / Path(*["vitl16" if part == "vit16" else part for part in task.parts])
+        output, count, skipped = analyse_task(task_dir, main_name, output_root, args.n_bootstrap)
         print(f"{task_dir}: {count} configurations -> {output}" + (f" ({len(skipped)} skipped)" if skipped else ""))
 
 

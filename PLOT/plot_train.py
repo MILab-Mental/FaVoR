@@ -9,12 +9,12 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-# When this file is executed as ``python utils/plot_train.py``, Python puts
-# ``utils/`` ahead of the standard library on sys.path. Remove that entry so
-# utils/logging.py cannot shadow the standard-library logging module imported
-# by matplotlib (and, transitively, PyTorch).
+# Keep the script directory out of import resolution so a future local module
+# cannot shadow a standard-library dependency imported by matplotlib.
 _SCRIPT_DIR = str(Path(__file__).resolve().parent)
 sys.path[:] = [path for path in sys.path if Path(path or ".").resolve() != Path(_SCRIPT_DIR)]
+PLOT_ROOT = Path(__file__).resolve().parent
+DEFAULT_OUTPUT_ROOT = PLOT_ROOT / "output" / "train"
 
 
 def read_losses(logdir: Path) -> dict[tuple[int, int], list[float]]:
@@ -69,6 +69,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--logdir", type=Path, required=True)
     parser.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="output PNG path (default: PLOT/output/train/<logdir>/train_loss.png)",
+    )
+    parser.add_argument(
         "--window",
         type=int,
         default=20,
@@ -100,7 +106,8 @@ def main() -> None:
     x_values = list(range(len(points)))
     smoothed = moving_average(y_values, args.window)
 
-    output = args.logdir / "train_loss.png"
+    output = args.out or DEFAULT_OUTPUT_ROOT / args.logdir.resolve().name / "train_loss.png"
+    output.parent.mkdir(parents=True, exist_ok=True)
 
     figure, axis = plt.subplots(figsize=(11, 6), dpi=150)
     axis.plot(x_values, y_values, color="#9aa5b1", linewidth=0.8, alpha=0.45, label="loss")

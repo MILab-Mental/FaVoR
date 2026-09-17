@@ -2,6 +2,7 @@
 DATASET/
 CKPT/
 OUTPUT/
+PLOT/output/
 
 # ---- Python 缓存 ----
 __pycache__/

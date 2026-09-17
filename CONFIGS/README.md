@@ -17,7 +17,7 @@ CONFIGS/
 │   ├── vfinetune/
 │   │   ├── cls/       # 数据集定义片段（只含 datasets/rootpaths/task/num_class/label_column）
 │   │   ├── reg/
-│   │   ├── mlcls/     # multi_label_classification（未实现，见第 12 节）
+│   │   ├── mlcls/     # multi_label_classification（视频侧已实现，见第 8.3 节）
 │   │   ├── 48-4.yaml  # ┐
 │   │   ├── 48-8.yaml  # │ 采样预设片段：只有 data.{采样/dataloader 键} + data_aug，
 │   │   ├── 64-16.yaml # │ 由入口的 sampling: 键引用，与上面的数据集片段叠加
@@ -68,6 +68,7 @@ CONFIGS/
 1. 读入口 YAML，取出 `yamls` 字段（可为 dict / list / 单路径）。
 2. 按 `yamls` 的出现顺序依次加载片段文件，**后加载的片段覆盖先加载的**。
 3. 最后把入口文件自身的键（除 `yamls` 外）叠加到合并结果上，**入口配置优先级最高**。
+4. 合并完成后再应用命令行的 `--set 键=值` 覆盖，**优先级比入口文件还高**（见 10.1）。
 
 微调入口的 `yamls` 采用固定的四键布局，把「数据集是谁」与「怎么采样」拆成两个片段：
 
@@ -221,13 +222,14 @@ flash / memory-efficient attention **没有二阶导**，故该 pass 会临时�
 | `datasets` | split CSV 列表（带表头，含 `video_path` + 标签列 + `{label}_split` 列） |
 | `rootpaths` | 每个 CSV 对应的视频根目录（列表，与 `datasets` 一一对应） |
 | `num_clips` | 每个样本采样的 clip 数 |
-| `task` | `classification` / `regression`（`multi_label_classification` 未实现） |
-| `num_class` | 分类类别数 |
+| `task` | `classification` / `regression` / `multi_label_classification` |
+| `num_class` | 分类类别数（`multi_label_classification` 必填且须 ≥2） |
 | `label_column` | CSV 中作为标签的列名 |
 
 > **split 约定**：`VideoCSVDataset` 读取 `{label_column}_split` 列，`split=0` 为训练集、
 > `split=1` 为验证集。**分类标签是 1-based**（代码内部 `int(label) - 1` 转 0-based），
-> 回归标签为浮点值。详见 `datasets/video_finetune_dataset.py`。
+> 回归标签为浮点值，**多标签是竖线分隔的 1-based 索引**（如 `2|11|20`，解析为 0-based
+> multi-hot 向量）。详见 `datasets/video_finetune_dataset.py`。
 
 > **`video_path` 不能为空**：`VideoCSVDataset` 逐行构造样本时要求 `video_path` 非空
 > （`_load_data_path` 会抛 `ValueError: Empty video_path`）——**空值不是「跳过」，是报错**。
@@ -311,8 +313,8 @@ flash / memory-efficient attention **没有二阶导**，故该 pass 会临时�
 ## 8. 微调任务总览（tasks/）
 
 `DATASET/splits-0901/tasks.json` 定义了 **33 条**下游任务，覆盖 **20 个**数据集。本节为全部
-33 条都建立了入口，但其中**只有 14 条当前可运行**——其余 16 条的数据集是**纯音频**，另 3 条
-是尚未实现的 `multi_label_classification`。
+33 条都建立了入口，但其中**只有 15 条当前可运行**——其余 18 条的数据集都是**纯音频**
+（16 条 `classification` / `regression` + 2 条 `multi_label_classification`）。
 
 - **视频（15 条）** → `tasks/vfinetune/{cls,reg,mlcls}/<任务名>.yaml`（`app: finetune_v`，已实现）
 - **音频（18 条）** → `tasks/afinetune/{cls,reg,mlcls}/<任务名>.yaml`（`app: finetune_a`，**模块未实现**）
@@ -332,7 +334,7 @@ flash / memory-efficient attention **没有二阶导**，故该 pass 会临时�
 
 入口均为 `tasks/vfinetune/<分组>/<下表中的名字>.yaml`。分组目录取该行 `task` 列的
 对应项：`classification` → `cls/`、`regression` → `reg/`、`multi_label_classification` → `mlcls/`。
-本节 14 条按此规则分布为 **`cls/` 7 条、`reg/` 7 条**；`mlcls/` 下另有 1 条不可运行的任务，
+本节 14 条按此规则分布为 **`cls/` 7 条、`reg/` 7 条**；第 15 条可运行任务在 `mlcls/` 下，
 见 8.3。
 
 | # | 任务入口 | 数据集 CSV | task | 输出 | `label_column` | 备注 |
@@ -398,16 +400,19 @@ flash / memory-efficient attention **没有二阶导**，故该 pass 会临时�
 
 > `Androids-Corpus/` 与 `CMDC/` 下有名为 `face_videos/` 的目录，但里面只有 `.wav`，**没有视频**。
 
-### 8.3 `multi_label_classification` 未实现（3 条）
+### 8.3 `multi_label_classification`（3 条：视频侧 1 条已实现，音频侧 2 条占位）
 
-| # | 任务入口 | 所在目录 | 数据集 CSV | 输出 | `label_column` | 备注 |
+| # | 任务入口 | 所在目录 | 数据集 CSV | 输出 | `label_column` | 状态 |
 |---|---|---|---|---|---|---|
-| 1 | `MER242526-26openset` | `tasks/vfinetune/mlcls/MER242526-26openset.yaml` | `2_MER242526_SV.csv` | 23 类，`\|` 分隔 | `26openset` | 视频数据集，仅**任务类型**缺实现 |
-| 2 | `CNSCED-emotion` | `tasks/afinetune/mlcls/CNSCED-emotion.yaml` | `2_CNSCED_SA.csv` | 7 类，`\|` 分隔 | `emotion` | 同时是纯音频 |
-| 3 | `M3ED-emotion` | `tasks/afinetune/mlcls/M3ED-emotion.yaml` | `2_M3ED_SA.csv` | 7 类，`\|` 分隔 | `emotion` | 同时是纯音频 |
+| 1 | `MER242526-26openset` | `tasks/vfinetune/mlcls/MER242526-26openset.yaml` | `2_MER242526_SV.csv` | 23 类，`\|` 分隔 | `26openset` | **可运行** |
+| 2 | `CNSCED-emotion` | `tasks/afinetune/mlcls/CNSCED-emotion.yaml` | `2_CNSCED_SA.csv` | 7 类，`\|` 分隔 | `emotion` | 占位（同时是纯音频） |
+| 3 | `M3ED-emotion` | `tasks/afinetune/mlcls/M3ED-emotion.yaml` | `2_M3ED_SA.csv` | 7 类，`\|` 分隔 | `emotion` | 占位（同时是纯音频） |
 
-标签列的写法如 `5|7`，`VideoCSVDataset` 的 `int(label) - 1` 会直接解析失败，故这三个入口文件
-与对应的数据片段头部都标了 `PLACEHOLDER`，不能直接运行。
+标签列写法如 `5|7`，是**竖线分隔的 1-based 类别索引**，由 `VideoCSVDataset` 解析为 0-based
+multi-hot 向量（维度 = `data.num_class`，该键对多标签**必填且须 ≥2**，否则加载即报错）。
+训练用逐类 `pos_weight = 负样本数 / 正样本数` 加权的 `BCEWithLogitsLoss`，sigmoid 后以
+阈值 `0.5` 出预测，best 按 `val_f1_macro` 最大选取（与单标签一致）。第 1 条已端到端可跑；
+第 2、3 条的 data 片段仍标 `PLACEHOLDER`，且依赖尚未实现的 `app/finetune_a`，不能运行。
 
 ### 8.4 采样预设
 
@@ -472,6 +477,97 @@ python -m app.main --fname CONFIGS/test-finetune.yaml --devices cuda:0 --debugmo
 - `test.yaml` → 预训练调试（读 `CKPT/vjepa2/vitl.pt`，输出到 `OUTPUT/test`）。
 - `test-finetune.yaml` → 微调调试（读预训练 `latest.pt`，跑 RAVDESS emotion，输出到 `OUTPUT/test_finetune`）。
 
+### 10.1 用 `--set` 覆盖配置（无需改 YAML）
+
+只改一两个键时（最典型的是 `folder` 与 `meta.read_checkpoint`），不必新建 YAML 变体：
+`app/main.py` 的 `--set` 在 **YAML 合并之后**对合并结果做覆盖，因此优先级高于所有片段
+**和**入口文件本身。
+
+```bash
+# 同一个入口跑两组对比：只换输出目录与预训练 ckpt
+torchrun --nproc_per_node=2 -m app.main \
+  --fname CONFIGS/tasks/vfinetune/cls/RAVDESS-emotion.yaml --devices cuda:0 cuda:1 \
+  --set folder=/home/data/sdc/FAVOR/OUTPUT/finetune_v/vitl16/RAVDESS-emotion/e5 \
+        meta.read_checkpoint=/home/data/sdc/FAVOR/OUTPUT/pretrain_v/vitl16/FaVoR-112px-48f/e5.pt
+
+torchrun --nproc_per_node=2 -m app.main \
+  --fname CONFIGS/tasks/vfinetune/cls/RAVDESS-emotion.yaml --devices cuda:0 cuda:1 \
+  --set folder=/home/data/sdc/FAVOR/OUTPUT/finetune_v/vitl16/RAVDESS-emotion/e11 \
+        meta.read_checkpoint=/home/data/sdc/FAVOR/OUTPUT/pretrain_v/vitl16/FaVoR-112px-48f/e11.pt
+```
+
+规则：
+
+| 项 | 行为 |
+|---|---|
+| 键写法 | 点号索引嵌套映射：`meta.read_checkpoint`、`optimization.epochs`、`data.batch_size` |
+| 值解析 | 先按 YAML 标量解析，`false` → bool、`12` → int、`0.5` → float、`[a, b]` → list；解析结果不是标量/容器的（如路径）保留为字符串 |
+| 优先级 | 最高——覆盖 `yamls` 片段与入口 YAML 里已写的值 |
+| 生效范围 | 预训练 / 微调共用 `app/main.py`，因此两边都支持；`app=` 也能改，且会真的切换分发模块 |
+| 启动方式 | `torchrun`、`python -m app.main --debugmode True`、手写 `mp.Process` 三条路径都透传 |
+| 位置 | 建议放最后。实测放中间也能解析——argparse 遇到下一个 `--flag` 会终止值列表；唯一歧义是值本身以 `-` 开头且不是负数 |
+| 键路径写错 | 中间层不存在或不是映射 → 启动即抛 `KeyError` / `ValueError`，不会静默忽略 |
+| 可写类型 | 字符串 / int / float / bool / list / dict（整块覆盖也算，见下方第 3 点） |
+
+### 10.2 `--set` 传不了什么
+
+`--set` 作用于**合并后的参数字典**，所以「配置里存在的键」都能覆盖；下面这些是边界：
+
+1. **`yamls` 引用键不能改**。`load_config` 在返回前已经 `pop` 掉 `yamls`，因此
+   `--set yamls.sampling=/x.yaml` 会抛 `KeyError: yamls is not a config mapping`。
+   想换采样就**直接覆盖采样键本身**（已实测可覆盖预设里的值）：
+
+   ```bash
+   # 等价于把入口的 sampling: 从 48-8.yaml 换成 64-16.yaml
+   --set data.fps=16 data.dataset_fpcs='[64]'
+   ```
+
+   代价是绕过了 `sampling:` 这层抽象——§8.4 那套「消融 = 换预设」的记账方式在此失效，
+   要在 `folder` 命名或实验记录里自己体现，否则回头对不上。
+
+2. **没有 schema 校验：改一个不存在的叶子键会静默无效**。`--set yamls=/x.yaml`、
+   `--set meta.seed_=7` 都不报错，只是往配置里塞了个没人读的键。
+   所以：**覆盖已存在的键 = 一定生效；发明新键 = 可能什么都不发生**。
+   尤其注意 §12.4 那个坑——`--set meta.use_sdpa=true` 会静默无效（该键读的是 `model`），
+   而 `--set model.use_sdpa=true` 才有效。
+
+3. **嵌套块不存在时不能逐键创建**。配置里没有 `meta.rankme` 时
+   `--set meta.rankme.n_hutchinson=3` 抛 `KeyError`。变通是**一次塞整块**：
+
+   ```bash
+   --set meta.rankme='{enabled: true, every_events: 2}'
+   ```
+
+4. **列表不能按下标改**。`--set mask.0.num_blocks=2`、
+   `--set data.datasets_weights.0=0.5` 都会抛 `KeyError`（报错明确，不会误改）。
+   只能**整条替换**：`--set mask='[{num_blocks: 1, ...}, {...}]'`。
+
+5. **纯数字 / `true` / `false` 值会被强制转类型，且无法强制回字符串**。
+   `--set folder=123` 得到的是 int `123`（`Path(123)` 会报错），
+   给值加引号也没用——`--set "folder='/123'"` 里的引号会成为字符串内容的一部分。
+   实际影响极小：路径类值（`folder` / `read_checkpoint` / `label_column`）都不会是纯数字。
+   值里带 `=` 和空格没问题（只按第一个 `=` 切分，shell 引号不会进入值）。
+
+6. **不在配置里的东西管不着**：`--fname` / `--devices` / `--debugmode`（argparse 自己的
+   参数）、torchrun 的 `--nproc_per_node` / `--master_port`、环境变量 `CUDA_VISIBLE_DEVICES`；
+   以及代码里硬编码的行为（如 `app/finetune_v/train.py` 的 `torch.device("cuda:0")`、
+   `drop_last=False`、`higher_is_better` 由 `data.task` 推导）。
+
+7. **架构相关的覆盖要自己保证与 ckpt 兼容**：`--set model.model_name=vit_huge` 能设进去，
+   但与 `read_checkpoint` 的 backbone 形状不匹配会在加载时报错；
+   `--set data.num_class=...` 与 CSV 实际标签不符会在 `train.py` 的越界校验处显式报错。
+
+> 一句话：**改已存在的键 = 可靠；改引用机制（`yamls`）、发明新键、动列表元素 = 别用 `--set`。**
+
+### 10.3 两条通用注意
+
+1. **override 会写进参数快照**。`{folder}/params-{app}.yaml` 是在覆盖之后 dump 的，
+   所以快照与 `best.pt` / `latest.pt` 里存的 `args` 都忠实反映命令行实际生效的值
+   （见 `app/main.py::process_main`），复现不受影响。
+2. **换 `folder` 就等于换实验**。`latest.pt` 是按 `folder` 找的，改 `folder` 后不会续跑
+   原目录的进度，而是从 `read_checkpoint` 重新开始（`meta.load_checkpoint` 仍为 `true` 时
+   只会找新目录下的 `latest.pt`，找不到就当新实验）。想在原目录续跑就不要覆盖 `folder`。
+
 ## 11. 其他文件
 
 - **`split_root_paths.csv`** — 数据集清单 TSV：`split_csv, root_path, original_csv_path, duration_mean, duration_median, duration_std, duration_var, duration_min, duration_max, sampled_mean_fps`。
@@ -482,10 +578,11 @@ python -m app.main --fname CONFIGS/test-finetune.yaml --devices cuda:0 --debugmo
 
 ## 12. 已知问题与注意事项
 
-1. **`multi_label_classification` 未实现** —— `datasets/video_finetune_dataset.py` 与
-   `app/finetune_v/train.py` 目前只支持 `classification` / `regression`。
-   `MER242526-26openset`、`CNSCED-emotion`、`M3ED-emotion` 三个入口及其 data 片段均为占位
-   （见 8.3），不能直接运行。
+1. **`multi_label_classification` 仅视频侧实现** —— `datasets/video_finetune_dataset.py`、
+   `models/finetune_v_model.py`、`app/finetune_v/train.py` 与 `utils/classification_metrics.py`
+   现已支持 `classification` / `regression` / `multi_label_classification` 三种 task，
+   `tasks/vfinetune/mlcls/MER242526-26openset.yaml` 端到端可跑（见 8.3）。
+   `CNSCED-emotion`、`M3ED-emotion` 两条**音频**多标签入口仍是占位，需等 `app/finetune_a` 落地。
 
 2. **18 个音频任务的 `app: finetune_a` 模块不存在** —— 见 8.2 / 8.3。`tasks.json` 里的 33 条
    任务同时含音频与视频数据集，但 `app/finetune_v/` 只吃 `video_path`。这 18 条已按音频侧

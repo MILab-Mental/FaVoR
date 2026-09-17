@@ -26,9 +26,12 @@ from optimization.optimizer import init_ft_opt
 from utils.classification_metrics import (
     classification_metrics,
     history_from_csv,
+    multilabel_metrics,
     save_best_reports,
     save_metric_curves,
+    save_multilabel_best_reports,
     write_history_csv,
+    write_multilabel_predictions_csv,
     write_predictions_csv,
 )
 
@@ -235,6 +238,7 @@ def main(args):
         label_column=label_column,
         task=task,
         root_paths=root_paths,
+        num_class=num_class,
         frames_per_clip=max_num_frames,
         fps=fps,
         frame_step=frame_step,
@@ -247,11 +251,19 @@ def main(args):
             "Loaded dataset: train=%d val=%d (task=%s, label_column=%s, num_class=%s)",
             len(train_dataset), len(val_dataset), task, label_column, num_class,
         )
-        LOGGER.info(
-            "Train class counts=%s | val class counts=%s",
-            dict(sorted(Counter(train_dataset.labels).items())),
-            dict(sorted(Counter(val_dataset.labels).items())),
-        )
+        if task == "multi_label_classification":
+            # Counts are per-class positive frequencies; Counter would reject the vectors.
+            LOGGER.info(
+                "Train positive counts=%s | val positive counts=%s",
+                np.asarray(train_dataset.labels).sum(axis=0).astype(int).tolist(),
+                np.asarray(val_dataset.labels).sum(axis=0).astype(int).tolist(),
+            )
+        else:
+            LOGGER.info(
+                "Train class counts=%s | val class counts=%s",
+                dict(sorted(Counter(train_dataset.labels).items())),
+                dict(sorted(Counter(val_dataset.labels).items())),
+            )
     train_sampler = DistributedSampler(train_dataset, num_replicas=world_size, rank=rank, shuffle=True) if distributed else None
     val_sampler = DistributedEvaluationSampler(val_dataset, rank, world_size) if distributed else None
     loader_kwargs = dict(
@@ -321,7 +333,8 @@ def main(args):
         )
 
     latest_path = folder / "latest.pt"
-    start_epoch, best_score, history = 0, float("-inf") if task == "classification" else float("inf"), []
+    higher_is_better = task in {"classification", "multi_label_classification"}
+    start_epoch, best_score, history = 0, float("-inf") if higher_is_better else float("inf"), []
     if cfgs_meta.get("load_checkpoint", True) and latest_path.is_file() and not cfgs_meta.get("reset_epoch", False):
         checkpoint = _restore_checkpoint(latest_path, encoder, task_head, optimizer, scaler, scheduler, wd_scheduler)
         start_epoch = int(checkpoint["epoch"])
@@ -361,10 +374,32 @@ def main(args):
         # weights = weights / weights.sum() * num_class
         # criterion = nn.CrossEntropyLoss(weight=weights)
         
+    elif task == "multi_label_classification":
+        if not isinstance(num_class, int) or num_class < 2:
+            raise ValueError("multi_label_classification requires data.num_class >= 2")
+        targets = np.asarray(train_dataset.labels, dtype=np.float64)
+        if targets.ndim != 2 or targets.shape[1] != num_class:
+            raise ValueError(
+                f"Expected multi-hot labels of shape [N, {num_class}], got {targets.shape}"
+            )
+        positives = targets.sum(axis=0)
+        negatives = len(targets) - positives
+        # Inverse-frequency weighting per class, mirroring the single-label CE weights.
+        # Classes with no positive example get weight 0 so they cannot destabilize BCE.
+        pos_weight = np.divide(negatives, positives, out=np.zeros_like(negatives), where=positives > 0)
+        criterion = nn.BCEWithLogitsLoss(
+            pos_weight=torch.tensor(pos_weight, dtype=torch.float32, device=device)
+        )
+        if is_main:
+            absent = np.flatnonzero(positives == 0).tolist()
+            LOGGER.info("pos_weight range=[%.2f, %.2f]; classes with no positive sample=%s",
+                        float(pos_weight.min()), float(pos_weight.max()), absent)
     elif task == "regression":
         criterion = nn.MSELoss()
     else:
-        raise ValueError("data.task must be 'classification' or 'regression'")
+        raise ValueError(
+            "data.task must be 'classification', 'multi_label_classification', or 'regression'"
+        )
 
     eval_freq = max(1, int(cfgs_meta.get("eval_freq", 1)))
     save_every_freq = int(cfgs_meta.get("save_every_freq", -1))
@@ -385,7 +420,7 @@ def main(args):
             optimizer.zero_grad(set_to_none=True)
             with torch.autocast(device_type=device.type, dtype=amp_dtype, enabled=mixed_precision):
                 outputs = _task_outputs(encoder, task_head, clips, frozen_encoder)
-                loss = criterion(outputs if task == "classification" else outputs.squeeze(-1), labels)
+                loss = criterion(outputs if higher_is_better else outputs.squeeze(-1), labels)
             if scaler is not None:
                 scaler.scale(loss).backward()
                 scaler.step(optimizer)
@@ -415,7 +450,7 @@ def main(args):
                     labels = labels.long() if task == "classification" else labels.float()
                     with torch.autocast(device_type=device.type, dtype=amp_dtype, enabled=mixed_precision):
                         outputs = _task_outputs(encoder, task_head, clips, frozen_encoder)
-                        loss = criterion(outputs if task == "classification" else outputs.squeeze(-1), labels)
+                        loss = criterion(outputs if higher_is_better else outputs.squeeze(-1), labels)
                     val_stats += torch.tensor([loss.item() * len(labels), len(labels)], dtype=torch.float64, device=device)
                     val_paths.extend(paths)
                     val_truth.extend(labels.cpu().tolist())
@@ -459,6 +494,22 @@ def main(args):
                                               train_predictions, train_array, train_probabilities)
                         write_predictions_csv(logs_dir / "eval_best_predict.csv", val_paths, val_truth,
                                               val_predictions, val_array, val_probabilities)
+                elif task == "multi_label_classification":
+                    train_metrics, train_predictions, train_probabilities = multilabel_metrics(
+                        train_truth, train_array, num_class)
+                    val_metrics, val_predictions, val_probabilities = multilabel_metrics(
+                        val_truth, val_array, num_class)
+                    epoch_metrics.update({f"train_{key}": value for key, value in train_metrics.items() if not key.startswith("class_")})
+                    epoch_metrics.update({f"val_{key}": value for key, value in val_metrics.items() if not key.startswith("class_")})
+                    score = val_metrics["f1_macro"]
+                    improved = score > best_score
+                    if improved:
+                        save_multilabel_best_reports(logs_dir, epoch + 1, val_metrics, val_paths, val_truth,
+                                                     val_predictions, val_array, val_probabilities)
+                        write_multilabel_predictions_csv(logs_dir / "train_best_predict.csv", train_paths, train_truth,
+                                                         train_predictions, train_array, train_probabilities)
+                        write_multilabel_predictions_csv(logs_dir / "eval_best_predict.csv", val_paths, val_truth,
+                                                         val_predictions, val_array, val_probabilities)
                 else:
                     train_predictions = train_array.squeeze(-1)
                     val_predictions = val_array.squeeze(-1)
@@ -501,6 +552,17 @@ def main(args):
                         epoch_metrics["train_loss"], epoch_metrics["val_loss"],
                         epoch_metrics["train_accuracy"], epoch_metrics["val_accuracy"],
                         epoch_metrics["train_f1_macro"], epoch_metrics["val_f1_macro"],
+                        best_score,
+                    )
+                elif task == "multi_label_classification":
+                    LOGGER.info(
+                        "epoch=%d train_loss=%.4f val_loss=%.4f train_subset_acc=%.4f val_subset_acc=%.4f "
+                        "train_f1=%.4f val_f1=%.4f val_hamming=%.4f best=%.4f",
+                        epoch + 1,
+                        epoch_metrics["train_loss"], epoch_metrics["val_loss"],
+                        epoch_metrics["train_accuracy"], epoch_metrics["val_accuracy"],
+                        epoch_metrics["train_f1_macro"], epoch_metrics["val_f1_macro"],
+                        epoch_metrics["val_hamming_loss"],
                         best_score,
                     )
                 else:

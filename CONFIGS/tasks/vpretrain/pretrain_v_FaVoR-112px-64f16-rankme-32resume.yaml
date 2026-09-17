@@ -36,12 +36,12 @@ meta:
     max_samples: 4096      # 子集样本数上限（可配，越小越省）
     feature: global        # global=全局池化 / tokens=逐 clip token / both=两者
     seed: 2024             # 子集抽样的固定种子（保证跨 checkpoint 同一批视频）
-  hessian_trace:
-    enabled: true
-    every_events: 10       # 每 10 个 event 算一次 Hessian 迹（贵，故频率低）
-    n_hutchinson: 5        # Hutchinson 随机向量数
-    n_clips: 1             # 固定 batch 的 clip 数（迹对 batch 大小线性，故固定以可比）
-    seed: 2024             # Hutchinson 随机向量种子（固定 -> 跨 checkpoint 可比）
+  # hessian_trace:
+  #   enabled: true
+  #   every_events: 10       # 每 10 个 event 算一次 Hessian 迹（贵，故频率低）
+  #   n_hutchinson: 5        # Hutchinson 随机向量数
+  #   n_clips: 1             # 固定 batch 的 clip 数（迹对 batch 大小线性，故固定以可比）
+  #   seed: 2024             # Hutchinson 随机向量种子（固定 -> 跨 checkpoint 可比）
 yamls:
   data: /home/data/sdc/FAVOR/CONFIGS/datas/vpretrain/vpretrain-data-64-16.yaml
   opt: /home/data/sdc/FAVOR/CONFIGS/opt/vpretrain-opt-s5000-150-40.yaml

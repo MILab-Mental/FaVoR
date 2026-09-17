@@ -23,11 +23,13 @@ FAVOR/
 ├── datasets/              # 数据集 / dataloader / 掩码 / 视频变换
 ├── models/                # vision_transformer / predictor / attentive_pooler / 微调模型
 ├── optimization/          # optimizer / 调度器（warmup-cosine / wd-schedule / anneal）
-├── utils/                 # 分布式 / 日志 / 指标 / checkpoint 加载 / 绘图
+├── utils/                 # 分布式 / 日志 / 指标 / checkpoint 加载
 ├── DATASET/               # 数据清单、split、合并与统计脚本（不纳入版本控制）
 ├── CKPT/                  # V-JEPA 2.1 官方预训练权重（不纳入版本控制）
 ├── OUTPUT/                # 训练产物：日志 / checkpoint / 参数快照（不纳入版本控制）
-├── run.sh                 # 15 个微调任务的一键运行脚本
+├── PLOT/                  # 论文统计、制表与可视化脚本，详见 PLOT/README.md
+├── run.sh                 # 15 个微调任务的一键运行脚本（含 vjepaori 基线 15 条）
+├── train.sh               # 候选命令队列执行器：N 路并发、逐任务落日志、结尾汇总
 ├── clean.py               # 递归清理 __pycache__ / .ipynb_checkpoints
 └── requirements.txt
 ```
@@ -49,22 +51,36 @@ python -m app.main --fname CONFIGS/test-finetune.yaml --devices cuda:0 --debugmo
 torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vpretrain/pretrain_v_FaVoR-112px-48f.yaml --devices cuda:0 cuda:1
 
 # 退火 / cooldown（长片段 64f，LR 退到 ~0）
-torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vpretrain/pretrain_v_FaVoR-cooldown.yaml --devices cuda:0 cuda:1
+torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vpretrain/pretrain_v_FaVoR-cooldown.yaml
 
 # 微调（例：RAVDESS emotion 8 类）
-torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/cls/RAVDESS-emotion.yaml --devices cuda:0 cuda:1
+torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/cls/RAVDESS-emotion.yaml
+
+# 不改 YAML，用 --set 覆盖任意配置项（点号表示嵌套键，值按 YAML 标量解析）
+# 覆盖在 YAML 合并之后生效，优先级最高；会一并写进 {folder}/params-{app}.yaml 快照。
+torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/cls/RAVDESS-emotion.yaml \
+  --set folder=/home/data/sdc/FAVOR/OUTPUT/finetune_v/vitl16/RAVDESS-emotion/e5-vs-e11 \
+        meta.read_checkpoint=/home/data/sdc/FAVOR/OUTPUT/pretrain_v/vitl16/FaVoR-112px-48f/e11.pt \
+        meta.seed=7
 
 # 一次性跑完 run.sh 里列的 15 个视频微调任务（内部已改为 torchrun）
-# 注意：tasks.json 共 33 条任务，其中 16 条是纯音频、3 条是多标签，当前不可运行，
+# 注意：tasks.json 共 33 条任务，其余 18 条当前不可运行（数据集均为纯音频），
 # 故没有列进 run.sh；33 条任务的完整清单与原因见 CONFIGS/README.md 第 8 节。
 bash run.sh
 
-# 画 loss 曲线
-python utils/plot_train.py --logdir OUTPUT/pretrain_v/vitl16/FaVoR-112px-48f/
+# 批量跑候选命令（默认写在 train.sh 里的是 run.sh 末尾那 15 条 vjepaori 基线）
+bash train.sh          # 串行（1 个槽位，最安全）
+bash train.sh 2        # 2 个任务同时跑（槽位轮流从列表领取，见脚本头部说明）
+# 单任务失败只记录不中断，跑完打印汇总并以非 0 退出；日志在 OUTPUT/train_sh_logs/<时间戳>/
+
 ```
 
 所有命令都通过 `--fname` 指向 `CONFIGS/` 下的任务 YAML，无需改动代码即可换数据 /
-换模型 / 换超参。
+换模型 / 换超参。**只改一两个键（如换 `folder` / 换预训练 ckpt / 换 seed）时不必新建
+YAML 变体**，用 `--set 键=值` 覆盖即可（点号索引嵌套键；值按 YAML 标量解析，
+`false` / `12` 会得到 bool / int）；`--set` 建议放在命令行最后。
+边界（`yamls` 引用键改不了、新键会被静默忽略、列表只能整条替换）见
+[`CONFIGS/README.md`](CONFIGS/README.md) 10.2。
 
 ## 模型与训练流程
 
@@ -106,7 +122,7 @@ loss = |z_context − h_target|^p / p     (p = loss_exp)
 | IEMOCAP | emotion（9 类）/ valence / activation / dominance（回归） |
 | EmotionTalk | emotion（7 类） |
 | MER2023 | emotion（6 类）/ pos_intensity（回归） |
-| MER242526 | emotion（6 类）/ pos_intensity（回归）/ 26openset（多标签，规划中） |
+| MER242526 | emotion（6 类）/ pos_intensity（回归）/ 26openset（多标签 23 类） |
 | AVEC2014 | PHQ 抑郁评分（回归） |
 
 完整的任务 ↔ 配置 ↔ 标签列映射见 [`CONFIGS/README.md`](CONFIGS/README.md)。
@@ -156,7 +172,7 @@ backbone 权重，任务头永远随机初始化。因此换预训练 checkpoint
 
 - **容错**：checkpoint 加载带指数退避重试（`robust_checkpoint_loader`）；视频解码失败
   自动重采样；加载 checkpoint 时形状不匹配的键自动跳过并告警；dataloader 用尽自动刷新。
-- **显式失败**：label 越界、空 dataloader、多标签任务未实现等**直接抛错**并给出可读信息，
+- **显式失败**：label 越界、空 dataloader、多标签缺 `num_class` / 类别索引越界等**直接抛错**并给出可读信息，
   绝不静默跑出一个错误结果；预训练对 NaN/Inf loss 立即断言退出。
 
 原则：**能自动恢复的自动恢复，不能恢复的尽早大声失败。**
@@ -190,8 +206,8 @@ GPU；rank 崩溃会立即报错并终止整组，不用再干等 NCCL 默认 60
   音频侧**配置已就位、代码未实现**：18 条音频任务的入口放在 `CONFIGS/tasks/afinetune/{cls,reg,mlcls}/<任务名>.yaml`
   （`app: finetune_a`），数据片段在 `CONFIGS/datas/afinetune/`，与视频侧一一平行。
   跑通还需补 `app/finetune_a/train.py` 与音频 dataset / encoder（见 CONFIGS/README.md 第 8、12 节）。
-- `multi_label_classification` 任务类型（`MER242526-26openset`、`CNSCED-emotion`、`M3ED-emotion`
-  目前均为占位，不可运行）。
+- `multi_label_classification` 任务类型（视频侧 `MER242526-26openset` 已实现；
+  音频侧 `CNSCED-emotion`、`M3ED-emotion` 仍为占位，见 CONFIGS/README.md 8.3）。
 
 ## 许可
 

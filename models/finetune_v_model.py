@@ -130,10 +130,12 @@ def build_model(
     are always freshly initialized because their output dimension is specific
     to the downstream task.
     """
-    if task not in {"classification", "regression"}:
-        raise ValueError(f"Unsupported task {task!r}; use 'classification' or 'regression'.")
-    if task == "classification" and (not isinstance(num_class, int) or num_class < 2):
-        raise ValueError("Classification requires data.num_class to be an integer of at least 2.")
+    if task not in {"classification", "regression", "multi_label_classification"}:
+        raise ValueError(
+            f"Unsupported task {task!r}; use 'classification', 'multi_label_classification', or 'regression'."
+        )
+    if task in {"classification", "multi_label_classification"} and (not isinstance(num_class, int) or num_class < 2):
+        raise ValueError(f"{task} requires data.num_class to be an integer of at least 2.")
     if not isinstance(out_layers, (list, tuple)) or not out_layers:
         raise ValueError("model.out_layers must be a non-empty list of transformer block indices")
 
@@ -163,7 +165,8 @@ def build_model(
         depth=classifier_depth,
         use_activation_checkpointing=use_activation_checkpointing,
     )
-    if task == "classification":
+    if task in {"classification", "multi_label_classification"}:
+        # Multi-label reuses the same logit head; sigmoid + BCE is applied in the loss.
         head = AttentiveClassifier(**head_kwargs, num_classes=num_class)
     else:
         head = AttentiveRegressor(**head_kwargs)

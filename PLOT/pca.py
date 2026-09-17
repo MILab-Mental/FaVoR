@@ -5,7 +5,12 @@
 # [H/p, W/p, 3] map back to the original video resolution.
 
 import argparse
-import os
+import sys
+from pathlib import Path
+
+PLOT_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = PLOT_ROOT.parent
+sys.path.insert(0, str(PROJECT_ROOT))
 
 import cv2
 import numpy as np
@@ -25,18 +30,18 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Patch-token PCA RGB visualization")
     parser.add_argument(
         "--input",
-        type=str,
-        default="/home/data/sdc/FAVOR/DATASET/splits-0901/demo_video/2_RAVDESS_SV/v01.mp4",
+        type=Path,
+        default=PROJECT_ROOT / "DATASET/splits-0901/demo_video/2_RAVDESS_SV/v01.mp4",
     )
     parser.add_argument(
         "--ckpt",
-        type=str,
-        default="/home/data/sdc/FAVOR/OUTPUT/pretrain_v/vitl16/FaVoR-112px-48f/latest.pt",
+        type=Path,
+        default=PROJECT_ROOT / "OUTPUT/pretrain_v/vitl16/FaVoR-112px-48f/latest.pt",
     )
     parser.add_argument(
         "--output",
-        type=str,
-        default="/home/data/sdc/FAVOR/OUTPUT/pretrain_v/vitl16/FaVoR-112px-48f/2_RAVDESS_SV_v01.mp4",
+        type=Path,
+        default=PLOT_ROOT / "output/pca/2_RAVDESS_SV_v01.mp4",
     )
     parser.add_argument("--pca-mode", type=str, default="clip", choices=["clip", "frame"])
     parser.add_argument("--interp", type=str, default="nearest", choices=["nearest", "bilinear"])
@@ -133,7 +138,7 @@ def main():
 
     encoder = load_encoder(args, device)
 
-    vr = VideoReader(args.input, num_threads=1, ctx=cpu(0))
+    vr = VideoReader(str(args.input), num_threads=1, ctx=cpu(0))
     total = len(vr)
     fps = float(vr.get_avg_fps())
     orig_h, orig_w = vr[0].asnumpy().shape[:2]
@@ -163,9 +168,8 @@ def main():
     print(f"all tokens: {all_tokens.shape}")
     comps = pca_all(all_tokens, len(offs), t, hp, wp, args.pca_mode)
 
-    out_dir = os.path.dirname(os.path.abspath(args.output))
-    os.makedirs(out_dir, exist_ok=True)
-    writer = cv2.VideoWriter(args.output, cv2.VideoWriter_fourcc(*"mp4v"), fps, (orig_w, orig_h))
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    writer = cv2.VideoWriter(str(args.output), cv2.VideoWriter_fourcc(*"mp4v"), fps, (orig_w, orig_h))
     if not writer.isOpened():
         raise RuntimeError(f"failed to open VideoWriter for {args.output}")
 

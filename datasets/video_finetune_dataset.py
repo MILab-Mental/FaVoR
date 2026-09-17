@@ -14,11 +14,16 @@ class VideoCSVDataset(VideoDataset):
     Video decoding, short-video handling, multi-clip sampling, and output
     layout are inherited unchanged from ``VideoDataset``. The split is read
     from ``{label_column}_split``. Classification labels are converted from
-    CSV's one-based ``1..num_class`` convention to zero-based targets; 
+    CSV's one-based ``1..num_class`` convention to zero-based targets;
     regression labels remain floating point values.
+
+    Multi-label classification reads a pipe-separated list of one-based class
+    indices (e.g. ``2|11|20``) and returns a zero-based ``[num_class]``
+    ``float32`` multi-hot vector.
     """
 
-    def __init__(self, csv_paths, split, *, label_column, task="classification", root_paths=None, **kwargs):
+    def __init__(self, csv_paths, split, *, label_column, task="classification", root_paths=None,
+                 num_class=None, **kwargs):
         if not isinstance(csv_paths, list):
             raise ValueError("csv_paths must be a list with one manifest per root_paths entry")
         paths = [Path(path).expanduser().resolve() for path in csv_paths]
@@ -37,8 +42,13 @@ class VideoCSVDataset(VideoDataset):
         self.split_column = f"{label_column}_split"
         self.task = task.lower()
         self._root_by_csv = dict(zip(paths, roots))
-        if self.task not in {"classification", "regression"}:
-            raise ValueError("task must be 'classification' or 'regression'")
+        if self.task not in {"classification", "regression", "multi_label_classification"}:
+            raise ValueError(
+                "task must be 'classification', 'regression', or 'multi_label_classification'"
+            )
+        self.num_class = num_class
+        if self.task == "multi_label_classification" and (not isinstance(num_class, int) or num_class < 2):
+            raise ValueError("multi_label_classification requires data.num_class to be an integer of at least 2")
         super().__init__(data_paths=[str(path) for path in paths], **kwargs)
         if not self.samples:
             raise ValueError(f"No samples with split={self.split} found in {paths}")
@@ -71,10 +81,14 @@ class VideoCSVDataset(VideoDataset):
                 try:
                     if self.task == "classification":
                         label = int(str(row[self.label_column]).strip()) - 1
+                    elif self.task == "multi_label_classification":
+                        label = self._parse_multilabel(row[self.label_column], csv_path, line_no)
                     else:
                         label = float(str(row[self.label_column]).strip())
                 except (TypeError, ValueError) as error:
-                    kind = "an integer" if self.task == "classification" else "a floating-point number"
+                    kind = {"classification": "an integer",
+                            "multi_label_classification": f"pipe-separated integers in [1, {self.num_class}]",
+                            "regression": "a floating-point number"}[self.task]
                     raise ValueError(
                         f"{self.label_column!r} must be {kind} at {csv_path}:{line_no}"
                     ) from error
@@ -84,6 +98,24 @@ class VideoCSVDataset(VideoDataset):
                 samples.append(str(video_path.resolve()))
                 labels.append(label)
         return samples, labels
+
+    def _parse_multilabel(self, raw, csv_path, line_no):
+        """Turn a pipe-separated one-based class list into a zero-based multi-hot vector."""
+        multi_hot = np.zeros(self.num_class, dtype=np.float32)
+        for token in str(raw).split("|"):
+            token = token.strip()
+            if not token:
+                continue
+            index = int(token) - 1
+            if index < 0 or index >= self.num_class:
+                raise ValueError(
+                    f"class index {token!r} out of range [1, {self.num_class}] "
+                    f"at {csv_path}:{line_no}"
+                )
+            multi_hot[index] = 1.0
+        if not multi_hot.any():
+            raise ValueError(f"no valid class index in {self.label_column!r} at {csv_path}:{line_no}")
+        return multi_hot
 
     def __getitem__(self, index):
         """Return parent-sampled clips paired with the CSV label for ``index``."""
@@ -97,7 +129,12 @@ class VideoCSVDataset(VideoDataset):
                 item = self.get_item_video(index)
             if item:
                 clips, label, clip_indices = item
-                label = int(label) if self.task == "classification" else np.float32(label)
+                if self.task == "classification":
+                    label = int(label)
+                elif self.task == "multi_label_classification":
+                    label = np.asarray(label, dtype=np.float32)
+                else:
+                    label = np.float32(label)
                 return clips, label, clip_indices, sample
             index = np.random.randint(len(self.samples))
             sample = self.samples[index]
@@ -109,6 +146,7 @@ def make_videodataset_finetune_v(
     label_column,
     task="classification",
     root_paths=None,
+    num_class=None,
     frames_per_clip,
     fps=None,
     frame_step=None,
@@ -121,6 +159,7 @@ def make_videodataset_finetune_v(
         label_column=label_column,
         task=task,
         root_paths=root_paths,
+        num_class=num_class,
         frames_per_clip=frames_per_clip,
         fps=fps,
         # Preserve the historical fine-tuning sampler when requested.  If an
