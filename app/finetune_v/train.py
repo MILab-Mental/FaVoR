@@ -34,6 +34,7 @@ from utils.classification_metrics import (
     write_multilabel_predictions_csv,
     write_predictions_csv,
 )
+from utils.progress import progress_ncols
 
 
 LOGGER = logging.getLogger(__name__)
@@ -413,7 +414,12 @@ def main(args):
         task_head.train()
         train_stats = torch.zeros(2, dtype=torch.float64, device=device)
         train_paths, train_truth, train_outputs = [], [], []
-        for clips, labels, _, paths in tqdm(train_loader, disable=not is_main, desc=f"train {epoch + 1}/{num_epochs}"):
+        for clips, labels, _, paths in tqdm(
+            train_loader,
+            disable=not is_main,
+            desc=f"train {epoch + 1}/{num_epochs}",
+            ncols=progress_ncols(),
+        ):
             clips = _move_clips(clips, device)
             labels = labels.to(device, non_blocking=True)
             labels = labels.long() if task == "classification" else labels.float()

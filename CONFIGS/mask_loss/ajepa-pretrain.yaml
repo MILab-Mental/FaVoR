@@ -1,0 +1,12 @@
+mask:
+  name: time_inverse
+  target_masks_per_context: 4
+  target_prob: 0.25
+  target_length: 10
+  context_mask_prob: 0.65
+  context_mask_length: 10
+  min_context_ratio: 0.10
+  max_tries: 100
+  curriculum: false
+  curriculum_ramp: 0.3
+

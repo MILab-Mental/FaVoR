@@ -1,0 +1,15 @@
+app: finetune_a
+folder: /home/data/sdc/FAVOR/OUTPUT/finetune_a/aemojepa-plus-large/MER242526-emotion/jepa-280k
+meta:
+  dtype: bfloat16
+  load_checkpoint: true
+  read_checkpoint: /home/data/sdc/lxc/audio-pretrain/AEmo-JEPA/outputs/emotion_jepa_full_dataset/checkpoint_final.pt
+  reset_epoch: true
+  seed: 239
+  frozen_encoder: false
+  min_load_ratio: 0.95
+yamls:
+  data: /home/data/sdc/FAVOR/CONFIGS/datas/afinetune/cls/MER242526-emotion-cls6.yaml
+  sampling: /home/data/sdc/FAVOR/CONFIGS/datas/afinetune/audio-4s-4clips.yaml
+  opt: /home/data/sdc/FAVOR/CONFIGS/opt/afinetune-opt-30.yaml
+  model: /home/data/sdc/FAVOR/CONFIGS/models/afinetune-aemojepa-plus-large.yaml

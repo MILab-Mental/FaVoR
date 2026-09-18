@@ -1,0 +1,36 @@
+model:
+  name: aemojepa_plus_large_50hz
+  extractor:
+    conv_layers:
+      - [512, 10, 5]
+      - [512, 3, 2]
+      - [512, 3, 2]
+      - [512, 3, 2]
+      - [512, 3, 2]
+      - [512, 2, 2]
+      - [512, 2, 2]
+    mode: layer_norm
+    conv_bias: false
+    dropout: 0.0
+  encoder:
+    depth: 8
+    d_model: 1024
+    nhead: 16
+    dim_feedforward: 4096
+    dropout: 0.0
+    qkv_bias: true
+  predictor:
+    depth: 12
+    d_model: 384
+    nhead: 12
+    dim_feedforward: 1536
+    dropout: 0.0
+  target:
+    topk_layers: 8
+    instance_norm_per_layer: true
+  init:
+    load_extractor: true
+    load_encoder: true
+    min_extractor_load_ratio: 0.95
+    min_encoder_load_ratio: 0.95
+

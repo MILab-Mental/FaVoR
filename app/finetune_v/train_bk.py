@@ -15,6 +15,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
+from utils.progress import progress_ncols
 
 from models.finetune_v_model import build_model
 
@@ -112,7 +113,12 @@ def main():
         encoder.train(not opt.freeze_backbone); classifier.train()
         train_stats = np.zeros(3)
         train_truth, train_paths, train_logits = [], [], []
-        for clips, labels, _, paths in tqdm(train_loader, disable=rank != 0, desc=f"train {epoch + 1}/{opt.epochs}"):
+        for clips, labels, _, paths in tqdm(
+            train_loader,
+            disable=rank != 0,
+            desc=f"train {epoch + 1}/{opt.epochs}",
+            ncols=progress_ncols(),
+        ):
             labels = labels.to(device, non_blocking=True)
             clips = [[x.to(device, non_blocking=True) for x in group] for group in clips]
             optimizer.zero_grad(set_to_none=True)

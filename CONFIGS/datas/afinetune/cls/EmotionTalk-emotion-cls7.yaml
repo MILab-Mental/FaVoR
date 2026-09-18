@@ -1,0 +1,9 @@
+# 2_EmotionTalk_SV.csv :: emotion :: classification
+data:
+  datasets:
+    - /home/data/sdc/FAVOR/DATASET/splits-0901/2_EmotionTalk_SV.csv
+  rootpaths:
+    - /home/data/sdb/基座模型数据集/2情绪数据集/EmotionTalk/
+  task: classification
+  num_class: 7
+  label_column: emotion

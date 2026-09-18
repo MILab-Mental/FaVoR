@@ -44,7 +44,8 @@ python PLOT/stat.py 'OUTPUT/finetune_v/vitl16/*/FaVoR-112px-48f-8fps-*' \
 ## LaTeX 指标表
 
 `latex_table.py` 复用 `stat.py` 的任务类型推断和最佳 epoch 选择口径。默认比较 FaVoR e5 与
-V-JEPA 2.1 基线，写入 `PLOT/output/stat/tables/`：
+V-JEPA 2.1 基线，把分类、多标签分类和回归排进同一个 `tabular`，写入
+`PLOT/output/stat/tables/`：
 
 ```bash
 python PLOT/latex_table.py --preview
@@ -55,8 +56,9 @@ python PLOT/latex_table.py \
   --out PLOT/output/stat/e11-tables
 ```
 
-输出包括 `table_classification.tex`、`table_multilabel.tex`、
-`table_regression.tex` 和包含所需宏包的 `preamble.tex`。
+输出包括 `table_all_tasks.tex` 和包含所需宏包的 `preamble.tex`。总表只有一个 `table*`、
+一个 `tabular`、一个 caption 和一个 label；三种任务用分组标题行和各自的指标表头区分。
+多标签与回归指标通过 `\multicolumn` 均匀铺满表宽，不会在右侧留下成片空列。
 
 ## 单任务配置分析
 

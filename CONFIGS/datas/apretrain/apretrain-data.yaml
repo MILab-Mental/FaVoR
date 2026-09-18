@@ -1,0 +1,16 @@
+data:
+  datasets:
+    - /home/data/sdc/FAVOR/DATASET/merged/pretrain_audios_0901.csv
+  datasets_weights: [1.0]
+  sample_rate: 16000
+  process_seconds: 2.0
+  min_process_seconds: 2.0
+  max_process_seconds: 4.0
+  samples_per_audio: 8
+  batch_size: 32
+  num_workers: 8
+  persistent_workers: true
+  pin_mem: false
+  normalize_waveform: true
+  max_retries: 10
+

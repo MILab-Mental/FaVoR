@@ -1,17 +1,15 @@
-# PLACEHOLDER — 纯音频数据集（CSV 的 video_path 整列为空），
-#   视频流水线 app/finetune_v 不可运行；需先实现音频侧 app/finetune_a。
 app: finetune_a
-folder: /home/data/sdc/FAVOR/OUTPUT/finetune_a/vitl16/ASVP-ESD-intensity/FaVoR-112px-48f-8fps-e5/
+folder: /home/data/sdc/FAVOR/OUTPUT/finetune_a/aemojepa-plus-large/ASVP-ESD-intensity/jepa-280k
 meta:
   dtype: bfloat16
-  eval_freq: 1
   load_checkpoint: true
-  read_checkpoint: /home/data/sdc/FAVOR/OUTPUT/pretrain_v/vitl16/FaVoR-112px-48f/e5.pt
+  read_checkpoint: /home/data/sdc/lxc/audio-pretrain/AEmo-JEPA/outputs/emotion_jepa_full_dataset/checkpoint_final.pt
   reset_epoch: true
-  save_every_freq: 10
   seed: 239
-  # frozen_encoder: true
+  frozen_encoder: false
+  min_load_ratio: 0.95
 yamls:
   data: /home/data/sdc/FAVOR/CONFIGS/datas/afinetune/cls/ASVP-ESD-intensity-cls2.yaml
-  opt: /home/data/sdc/FAVOR/CONFIGS/opt/vfinetune-opt-80-5-5e-5.yaml
-  model: /home/data/sdc/FAVOR/CONFIGS/models/vfinetune-vit-l-4layer.yaml
+  sampling: /home/data/sdc/FAVOR/CONFIGS/datas/afinetune/audio-4s-4clips.yaml
+  opt: /home/data/sdc/FAVOR/CONFIGS/opt/afinetune-opt-30.yaml
+  model: /home/data/sdc/FAVOR/CONFIGS/models/afinetune-aemojepa-plus-large.yaml

@@ -1,31 +1,9 @@
-# 3_MODMA_SA.csv :: label :: classification (2 classes)
-# 分类，2 类；1=HC（健康对照）, 2=MDD
+# 3_MODMA_SA.csv :: label :: classification
 data:
   datasets:
-  - /home/data/sdc/FAVOR/DATASET/splits-0901/3_MODMA_SA.csv
-  datasets_weights:
-  - 1
+    - /home/data/sdc/FAVOR/DATASET/splits-0901/3_MODMA_SA.csv
   rootpaths:
-  - /home/data/sdb/基座模型数据集/3心理数据集/MODMA/
-  batch_size: 64
-  crop_size: 112
-  patch_size: 16
-  dataset_fpcs:
-  - 48
-  tubelet_size: 2
-  fps: 4
-  num_workers: 8
-  persistent_workers: true
-  pin_mem: true
-  num_clips: 1
-
+    - /home/data/sdb/基座模型数据集/3心理数据集/MODMA/
   task: classification
   num_class: 2
-  # Column containing integer class labels or floating-point regression targets.
   label_column: label
-
-data_aug:
-  random_resize_aspect_ratio: [0.85, 1.15]
-  random_resize_scale: [0.6, 1.0]
-  random_horizontal_flip: 0.5
-  reprob: 0.0

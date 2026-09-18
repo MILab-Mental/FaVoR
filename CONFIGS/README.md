@@ -11,7 +11,8 @@ CONFIGS/
 ├── tasks/
 │   ├── vfinetune/{cls,reg,mlcls}/<任务名>.yaml            # 视频微调入口（app: finetune_v）
 │   │   └── <任务名>/*.yaml                     # 只有多入口任务才保留目录（当前 2 个）
-│   ├── afinetune/{cls,reg,mlcls}/<任务名>.yaml            # 音频微调入口（app: finetune_a，模块未实现）
+│   ├── apretrain/pretrain_a_FaVoR.yaml                   # AEmo-JEPA 音频预训练入口
+│   ├── afinetune/{cls,reg,mlcls}/<任务名>.yaml            # 全部 33 条任务的音频微调入口
 │   └── vpretrain/pretrain_v_*.yaml                        # 预训练入口
 ├── datas/
 │   ├── vfinetune/
@@ -22,8 +23,8 @@ CONFIGS/
 │   │   ├── 48-8.yaml  # │ 采样预设片段：只有 data.{采样/dataloader 键} + data_aug，
 │   │   ├── 64-16.yaml # │ 由入口的 sampling: 键引用，与上面的数据集片段叠加
 │   │   └── 128-step2-RAVDESS-reproduce.yaml  # ┘（含 frame_step: 2，无 fps）
-│   ├── afinetune/{cls,reg,mlcls}/   # 音频数据片段（命名同视频侧）
-│   │                  # 注意：音频片段尚未做「数据集 / 采样」剥离，仍自带采样键
+│   ├── afinetune/{cls,reg,mlcls}/   # 音频数据集片段（只含路径 / 任务 / 标签）
+│   ├── afinetune/audio-4s-4clips.yaml # 音频采样与 dataloader 公共预设
 │   └── vpretrain/     # 预训练数据片段
 ├── opt/          # 优化器与调度器片段
 ├── models/       # 模型配置片段（预训练 / 微调）
@@ -42,9 +43,9 @@ CONFIGS/
 | 多入口任务 | 保留 `tasks/vfinetune/<分组>/<任务名>/` 目录 | —（目前无） |
 | 入口 `app:` | `finetune_v` | `finetune_a` |
 | 数据片段 | `datas/vfinetune/<类型>/<任务>.yaml` | `datas/afinetune/<类型>/<任务>.yaml` |
-| 采样片段 | `datas/vfinetune/{48-4,48-8,64-16,...}.yaml`（由入口 `sampling:` 引用） | 暂无（待音频侧落地） |
+| 采样片段 | `datas/vfinetune/{48-4,48-8,64-16,...}.yaml`（由入口 `sampling:` 引用） | `datas/afinetune/audio-4s-4clips.yaml` |
 | 输出目录 | `OUTPUT/finetune_v/` | `OUTPUT/finetune_a/` |
-| 代码模块 | `app/finetune_v/` ✅ 已实现 | `app/finetune_a/` ❌ **尚未实现** |
+| 代码模块 | `app/finetune_v/` ✅ 已实现 | `app/finetune_a/` ✅ 已实现 |
 
 > 视频与音频侧任务目录的分组**完全一致**：`cls/` = `classification`、`reg/` = `regression`、
 > `mlcls/` = `multi_label_classification`，与 `datas/` 下的同名分组一一对应。
@@ -58,8 +59,8 @@ CONFIGS/
 > 因此采样预设**不能单独使用**（缺 `datasets` / `rootpaths` / `label_column` 会在
 > `app/finetune_v/train.py:208-214` 处 KeyError），必须与一个数据集片段叠加。
 >
-> 这一划分对**所有**视频微调入口生效，不区分常规任务与消融/复现变体：消融实验的采样差异
-> 同样通过「换一个 `sampling:` 预设」表达（详见第 8.4 节）。
+> 这一划分对视频和音频微调入口都生效。视频采样预设提供帧数、fps 和图像增强；
+> 音频采样预设提供采样率、crop 时长、clip 数和 dataloader 参数。任务数据片段不再复制这些键。
 
 ## 2. 配置加载与合并机制
 
@@ -92,7 +93,7 @@ yamls:
 
 | 键 | 来源 | 说明 |
 |---|---|---|
-| `app` | 入口 | 分发目标模块：`pretrain_v` / `finetune_v` |
+| `app` | 入口 | 分发目标模块：`pretrain_v` / `finetune_v` / `pretrain_a` / `finetune_a` |
 | `folder` | 入口 | 输出目录（日志、checkpoint、参数快照） |
 | `meta` | 入口 | 运行级参数（精度、seed、ckpt 路径等） |
 | `data` | `datas/` 片段 | 数据集与 dataloader |
@@ -313,24 +314,19 @@ flash / memory-efficient attention **没有二阶导**，故该 pass 会临时�
 ## 8. 微调任务总览（tasks/）
 
 `DATASET/splits-0901/tasks.json` 定义了 **33 条**下游任务，覆盖 **20 个**数据集。本节为全部
-33 条都建立了入口，但其中**只有 15 条当前可运行**——其余 18 条的数据集都是**纯音频**
-（16 条 `classification` / `regression` + 2 条 `multi_label_classification`）。
+33 个语义任务都建立了音频入口；其中 15 条同时具有视频入口。
 
 - **视频（15 条）** → `tasks/vfinetune/{cls,reg,mlcls}/<任务名>.yaml`（`app: finetune_v`，已实现）
-- **音频（18 条）** → `tasks/afinetune/{cls,reg,mlcls}/<任务名>.yaml`（`app: finetune_a`，**模块未实现**）
+- **音频（33 条）** → `tasks/afinetune/{cls,reg,mlcls}/<任务名>.yaml`（`app: finetune_a`）
 
-> **为什么 tasks.json 有 33 条而这里只有 14 条能跑**：`tasks.json` 是**数据集级任务注册表**，
-> 同时登记音频与视频数据集；而 `app/finetune_v/` 是**纯视频流水线**（`VideoCSVDataset` +
-> decord 解码 CSV 的 `video_path` 列）。8.2 那 16 条所属数据集的 `video_path` 在
-> `splits-0901` 中**整列为空**（0 / 165,702 行有值），磁盘上也没有视频文件，因此进不了这条
-> 流水线；音频侧目前**连模块都还没有**（无 `app/finetune_a/`、无 audio dataset、无 audio
-> encoder，`requirements.txt` 只有 `decord`）。详见第 12 节。
+> `app/finetune_v` 解码 `video_path`，`app/finetune_a` 解码 `audio_path`；两边共用
+> `<label_column>_split`、1-based 分类标签、任务类型和统一启动器的配置契约。
 
 数据片段按任务类型分目录：`cls/` = `classification`、`reg/` = `regression`、
 `mlcls/` = `multi_label_classification`。消融 / 复现实验**不单独建目录**，它们的差异
 全部落在入口引用的采样预设上（见 8.4）。
 
-### 8.1 可运行（14 条，视频数据集）
+### 8.1 视频数据集（15 条）
 
 入口均为 `tasks/vfinetune/<分组>/<下表中的名字>.yaml`。分组目录取该行 `task` 列的
 对应项：`classification` → `cls/`、`regression` → `reg/`、`multi_label_classification` → `mlcls/`。
@@ -368,16 +364,11 @@ flash / memory-efficient attention **没有二阶导**，故该 pass 会临时�
 > `48-4`，`-data48-8` / `-data64-16` 命名的用 `48-8` / `64-16`，两个 RAVDESS reproduce
 > 用 `128-step2-RAVDESS-reproduce`），见 8.4。
 
-### 8.2 纯音频数据集，当前不可运行（16 条）
+### 8.2 仅音频数据集对应的单标签任务（16 条）
 
 入口为 `tasks/afinetune/{cls,reg}/<下表中的名字>.yaml`（`app: finetune_a`）。
-这些入口与数据片段都已建好、字段与视频任务完全同构，**但有两道坎**：
-
-1. `data.video_path` 为空 —— CSV 该列整列为空，`VideoCSVDataset` 建数据集时直接抛
-   `ValueError: Empty video_path`。
-2. `app/finetune_a` **模块不存在** —— `app.main` 走 `importlib.import_module(f"app.{app}.train")`，
-   `app: finetune_a` 会先抛 `ModuleNotFoundError`。要跑通需先实现音频侧的 dataset 类、
-   encoder 与 `app/finetune_a/train.py`。
+这些入口均由 `app/finetune_a` 使用 `audio_path` 运行，并共用确定性的验证集多裁剪和
+AEmo-JEPA audio backbone。分类标签按 CSV 的 1-based 编码转为训练时的 0-based 编码。
 
 | # | 任务入口 | 数据集 CSV | task | 输出 | `label_column` | 备注 |
 |---|---|---|---|---|---|---|
@@ -400,25 +391,28 @@ flash / memory-efficient attention **没有二阶导**，故该 pass 会临时�
 
 > `Androids-Corpus/` 与 `CMDC/` 下有名为 `face_videos/` 的目录，但里面只有 `.wav`，**没有视频**。
 
-### 8.3 `multi_label_classification`（3 条：视频侧 1 条已实现，音频侧 2 条占位）
+### 8.3 `multi_label_classification`（3 条：音频侧全部可运行）
 
 | # | 任务入口 | 所在目录 | 数据集 CSV | 输出 | `label_column` | 状态 |
 |---|---|---|---|---|---|---|
-| 1 | `MER242526-26openset` | `tasks/vfinetune/mlcls/MER242526-26openset.yaml` | `2_MER242526_SV.csv` | 23 类，`\|` 分隔 | `26openset` | **可运行** |
-| 2 | `CNSCED-emotion` | `tasks/afinetune/mlcls/CNSCED-emotion.yaml` | `2_CNSCED_SA.csv` | 7 类，`\|` 分隔 | `emotion` | 占位（同时是纯音频） |
-| 3 | `M3ED-emotion` | `tasks/afinetune/mlcls/M3ED-emotion.yaml` | `2_M3ED_SA.csv` | 7 类，`\|` 分隔 | `emotion` | 占位（同时是纯音频） |
+| 1 | `MER242526-26openset` | `tasks/{vfinetune,afinetune}/mlcls/MER242526-26openset.yaml` | `2_MER242526_SV.csv` | 23 类，`\|` 分隔 | `26openset` | 视频 / 音频均可运行 |
+| 2 | `CNSCED-emotion` | `tasks/afinetune/mlcls/CNSCED-emotion.yaml` | `2_CNSCED_SA.csv` | 7 类，`\|` 分隔 | `emotion` | 音频可运行 |
+| 3 | `M3ED-emotion` | `tasks/afinetune/mlcls/M3ED-emotion.yaml` | `2_M3ED_SA.csv` | 7 类，`\|` 分隔 | `emotion` | 音频可运行 |
 
-标签列写法如 `5|7`，是**竖线分隔的 1-based 类别索引**，由 `VideoCSVDataset` 解析为 0-based
+标签列写法如 `5|7`，是**竖线分隔的 1-based 类别索引**，由对应模态的 CSV dataset 解析为 0-based
 multi-hot 向量（维度 = `data.num_class`，该键对多标签**必填且须 ≥2**，否则加载即报错）。
 训练用逐类 `pos_weight = 负样本数 / 正样本数` 加权的 `BCEWithLogitsLoss`，sigmoid 后以
-阈值 `0.5` 出预测，best 按 `val_f1_macro` 最大选取（与单标签一致）。第 1 条已端到端可跑；
-第 2、3 条的 data 片段仍标 `PLACEHOLDER`，且依赖尚未实现的 `app/finetune_a`，不能运行。
+阈值 `0.5` 出预测，best 按 `val_f1_macro` 最大选取（与单标签一致）。音频侧 3 条任务都由
+`app/finetune_a` 的 multi-hot 标签解析和 `BCEWithLogitsLoss` 支持。
 
 ### 8.4 采样预设
 
 采样参数集中在 `datas/vfinetune/` 顶层的 4 个预设片段，由入口的 `sampling:` 键引用（见第 2 节）。
 这 4 个片段是**唯一**的采样来源——`cls/`、`reg/`、`mlcls/` 下的数据集片段只描述「数据集是谁」，
 不含任何采样键（见第 1 节的职责划分）。
+
+音频侧的 33 个入口共用 `datas/afinetune/audio-4s-4clips.yaml`：16 kHz、4 秒 crop、
+每条样本 4 个 clip，并在该片段统一设置 batch size 和 dataloader 参数。
 
 | 预设 | `dataset_fpcs` | `fps` | `frame_step` | 引用它的入口 |
 |---|---|---|---|---|
@@ -578,22 +572,15 @@ torchrun --nproc_per_node=2 -m app.main \
 
 ## 12. 已知问题与注意事项
 
-1. **`multi_label_classification` 仅视频侧实现** —— `datasets/video_finetune_dataset.py`、
-   `models/finetune_v_model.py`、`app/finetune_v/train.py` 与 `utils/classification_metrics.py`
-   现已支持 `classification` / `regression` / `multi_label_classification` 三种 task，
-   `tasks/vfinetune/mlcls/MER242526-26openset.yaml` 端到端可跑（见 8.3）。
-   `CNSCED-emotion`、`M3ED-emotion` 两条**音频**多标签入口仍是占位，需等 `app/finetune_a` 落地。
+1. **音频 checkpoint 来源** —— 33 个 `afinetune` 入口默认读取原 AEmo-JEPA 的
+   `checkpoint_final.pt`，兼容加载器会抽取 CNN、projection 和 context encoder。完成新的
+   `pretrain_a` 后，应通过 `--set meta.read_checkpoint=<.../latest.pt>` 切换到 FAVOR 格式权重。
 
-2. **18 个音频任务的 `app: finetune_a` 模块不存在** —— 见 8.2 / 8.3。`tasks.json` 里的 33 条
-   任务同时含音频与视频数据集，但 `app/finetune_v/` 只吃 `video_path`。这 18 条已按音频侧
-   的组织方式放好（`tasks/afinetune/`、`datas/afinetune/`、`app: finetune_a`），**属于配置
-   先行、代码未实现**：`app.main` 的 `importlib.import_module(f"app.{app}.train")` 会抛
-   `ModuleNotFoundError: No module named 'app.finetune_a'`。要跑通需补齐音频侧的 dataset 类、
-   encoder / transforms 与 `app/finetune_a/train.py`（仓库当前无任何音频代码，
-   `requirements.txt` 无 `torchaudio`）。
+2. **音频解码依赖** —— 优先使用 `torchaudio`，当当前 PyTorch/Torchaudio 组合要求但未安装
+   TorchCodec 时会回退到 `soundfile`；对本地 libsndfile 不支持的 WebM / MP3 等格式，最后回退到 `ffmpeg`。
 
-3. **`frozen_encoder` 已统一注释** —— 33 个微调任务入口中的 `frozen_encoder: true` 现已
-   注释掉，实际走默认值 `false`（解冻 encoder、端到端训练）。
+3. **`frozen_encoder` 默认解冻** —— 33 个音频微调任务入口都显式设为
+   `frozen_encoder: false`（解冻 encoder、端到端训练）。
 
 4. **`use_sdpa` 位置** —— 必须写在 `model` 片段下（`app/pretrain_v/train.py` 从
    `cfgs_model` 读取）；早期 `bk/` 配置曾误写到 `meta` 下，会被忽略并回退到默认 `false`。

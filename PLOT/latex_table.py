@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
-"""把实验指标导出成三张 LaTeX 表（分类 / 多标签分类 / 回归）。
+"""把分类、多标签分类和回归实验指标导出成一张 LaTeX 表。
 
 用法:
     python PLOT/latex_table.py                       # 用默认通配符，写 PLOT/output/stat/tables/
     python PLOT/latex_table.py --out paper/tables    # 换个输出目录
     python PLOT/latex_table.py --favor 'OUTPUT/.../FaVoR-112px-48f-8fps-e11'
 
-除了三张 ``table_*.tex``，还会在同一目录落一份 ``preamble.tex``（三行 ``\\usepackage``），
-每个 ``table_*.tex`` 头部也带同样内容的注释。**务必先把宏包加进论文导言区**：少了
+输出 ``table_all_tasks.tex`` 和一份 ``preamble.tex``（三行 ``\\usepackage``），
+表格文件头部也带同样内容的注释。**务必先把宏包加进论文导言区**：少了
 ``multirow``，LaTeX 只报一条 ``Undefined control sequence`` 就把 ``\\multirow`` 丢掉，
 ``{2}{*}{MER242526 (Emotion)}`` 会被原样排成 ``2*MER242526 (Emotion)``——看起来就像
 ``\\multirow`` 没生效，实际是宏包没加载。
 
-每张表里一个任务占两行（上 FaVoR、下 V-JEPA 2.1 官方权重），列是指标。
+总表只使用一个 ``tabular``，按任务类型插入三个分组及各自的指标表头；每个任务占两行
+（上 FaVoR、下 V-JEPA 2.1 官方权重）。多标签和回归指标通过 ``\\multicolumn`` 均匀铺满
+分类表确定的 10 个指标列，因此不会产生一排尾部空列。
 被判定的方法在某个指标上更优时加粗；该方法这一行还没跑（目录不存在）就整行留空。
 训练还没跑满 epoch 的行，方法名后面会加 ``\\dag``，并在 caption 里注明当前进度。
 
@@ -84,20 +86,23 @@ TASK_SUFFIX_LABELS = {
 
 METHODS = (("FaVoR", "favor"), ("V-JEPA~2.1", "vjepaori"))
 
-TABLES = (
-    # (task 类型, 输出文件名, label, 表环境)
-    # 三张表都 ≥7 列，实测最窄的回归表也有 379pt，放不进双栏模板的单栏（约 244pt），
-    # 所以统一用 table* 跨栏；单栏模板下 table* 与 table 等价。
-    ("classification", "table_classification.tex", "tab:cls-results", "table*"),
-    ("multi_label_classification", "table_multilabel.tex", "tab:mlcls-results", "table*"),
-    ("regression", "table_regression.tex", "tab:reg-results", "table*"),
+SECTIONS = (
+    # (task 类型, 分组标题)
+    ("classification", "Classification"),
+    ("multi_label_classification", "Multi-label classification"),
+    ("regression", "Regression"),
 )
+TABLE_FILE = "table_all_tasks.tex"
+TABLE_LABEL = "tab:all-results"
 
-CAPTION_INTRO = {
-    "classification": "Classification results on {n}.",
-    "multi_label_classification": "Multi-label classification results on {n}.",
-    "regression": "Regression results on {n}.",
+# 单一 tabular 固定为 Task + Method + 10 个指标网格列。分类恰好 10 个指标；多标签和
+# 回归用 multicolumn 横跨网格列，既允许各任务类型保留不同表头，又能铺满同一张表。
+METRIC_SPANS = {
+    "classification": (1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
+    "multi_label_classification": (2, 2, 2, 1, 1, 1, 1),
+    "regression": (2, 2, 2, 2, 2),
 }
+GRID_METRIC_COLUMNS = 10
 
 # 生成物依赖的宏包，以及可直接 \input 的导言区片段文件名。
 # 少写 multirow 时 LaTeX 只报一条 Undefined control sequence 就把 \multirow 整个丢掉，
@@ -116,10 +121,10 @@ def uses_resizebox(task_type: str, fit: bool) -> bool:
     return fit and len(METRICS[task_type]) > 9
 
 
-def dependency_banner(task_type: str, fit: bool) -> str:
+def dependency_banner(task_types: list[str], fit: bool) -> str:
     """生成物头部的注释块，把宏包依赖写在最显眼的地方。"""
     needed = [line for line in PREAMBLE_LINES if "graphicx" not in line]
-    if uses_resizebox(task_type, fit):
+    if any(uses_resizebox(task_type, fit) for task_type in task_types):
         needed = list(PREAMBLE_LINES)
     lines = [
         "% " + "=" * 74,
@@ -229,41 +234,23 @@ def winner(favor_value, vjepaori_value, arrow: str):
     return "favor" if favor_wins else "vjepaori"
 
 
-def build_table(task_type: str, rows: list[tuple[str, dict, dict]], label: str, env: str,
-                fit: bool = True) -> str:
-    """把 (任务名, FaVoR 结果, V-JEPA 结果) 列表渲染成一张 LaTeX 表。"""
+def build_section(task_type: str, title: str,
+                  rows: list[tuple[str, dict, dict]]) -> list[str]:
+    """把一种任务类型渲染成单一 tabular 中的一组行。"""
     metrics = METRICS[task_type]
-    # 列多的表用小一号字，配合 3pt 列间距才放得下
-    font = "\\small" if len(metrics) <= 9 else "\\footnotesize"
-    finished = [name for name, favor, _ in rows if favor["in_progress"]]
-    missing = [name for name, _, vjepaori in rows if vjepaori["task"] is None]
+    spans = METRIC_SPANS[task_type]
+    if len(metrics) != len(spans) or sum(spans) != GRID_METRIC_COLUMNS:
+        raise ValueError(f"invalid metric spans for {task_type}")
 
-    intro = CAPTION_INTRO[task_type].format(n=count(len(rows), "task"))
-    notes = [
-        "Best epoch selected by validation F1-macro (highest) / RMSE (lowest), "
-        "matching the checkpoint used for evaluation; every column is read from that same epoch.",
-        r"FaVoR: encoder initialized from our self-supervised pretraining. "
-        r"V-JEPA~2.1: encoder initialized from the official released weights.",
+    header_cells = [
+        f"\\multicolumn{{{span}}}{{c}}{{\\textbf{{{head}}} {arrow}}}"
+        for (_column, head, arrow), span in zip(metrics, spans)
     ]
-    if missing:
-        notes.append(
-            f"Blank rows: the V-JEPA~2.1 run is not available yet "
-            f"({count(len(missing), 'task')})."
-        )
-    if finished:
-        progress = ", ".join(
-            f"{task_label(name)} ({favor['epochs_seen']}/{favor['target_epochs']})"
-            for name, favor, _ in rows if favor["in_progress"]
-        )
-        notes.append(r"$^{\dag}$Training still in progress, best-so-far: " + progress + ".")
-    caption = " ".join([intro, *notes])
-
     body = [
-        f"\\begin{{tabular}}{{ll{'c' * len(metrics)}}}",
-        "\\toprule",
-        "\\textbf{Task} & \\textbf{Method} & "
-        + " & ".join(f"\\textbf{{{head}}} {arrow}" for _, head, arrow in metrics)
-        + " \\\\",
+        f"\\multicolumn{{{GRID_METRIC_COLUMNS + 2}}}{{l}}{{\\textbf{{{title}}} "
+        f"({count(len(rows), 'task')})}} \\\\",
+        "\\addlinespace[2pt]",
+        "\\textbf{Task} & \\textbf{Method} & " + " & ".join(header_cells) + " \\\\",
         "\\midrule",
     ]
 
@@ -271,39 +258,76 @@ def build_table(task_type: str, rows: list[tuple[str, dict, dict]], label: str, 
         for position, (method, key) in enumerate(METHODS):
             side = favor if key == "favor" else vjepaori
             cells = []
-            for column, _head, arrow in metrics:
+            for (column, _head, arrow), span in zip(metrics, spans):
                 text = fmt(side["values"].get(column))
                 if text and winner(
                     favor["values"].get(column), vjepaori["values"].get(column), arrow
                 ) == key:
                     text = f"\\textbf{{{text}}}"
-                cells.append(text)
+                cells.append(f"\\multicolumn{{{span}}}{{c}}{{{text}}}")
             mark = r"\textsuperscript{\dag}" if side["in_progress"] else ""
             first = f"\\multirow{{2}}{{*}}{{{task_label(name)}}}" if position == 0 else ""
             body.append(f"{first} & {method}{mark} & " + " & ".join(cells) + " \\\\")
         if index != len(rows) - 1:
-            body.append("\\midrule")
-    body += ["\\bottomrule", "\\end{tabular}"]
+            body.append(f"\\cmidrule(lr){{1-{GRID_METRIC_COLUMNS + 2}}}")
+    return body
 
-    # 分类表 12 列，压到 \tabcolsep=3pt + \footnotesize 后仍有 497.6pt，
-    # 占满 \textwidth 的 99.4%——只差 2.8pt。换个窄一点的模板就会溢出，
-    # 所以列数多的表统一用 \resizebox 贴到 \textwidth（自然宽度接近时缩放≈1）。
-    # 窄表不用 \resizebox，否则会被放大到失真。
+
+def build_combined_table(sections: list[tuple[str, str, list[tuple[str, dict, dict]]]],
+                         fit: bool = True) -> str:
+    """把三种任务类型排进同一个 ``table*`` 和同一个 ``tabular``。"""
+    all_rows = [row for _task_type, _title, rows in sections for row in rows]
+    missing = [name for name, _favor, vjepaori in all_rows if vjepaori["task"] is None]
+    progress = []
+    for name, favor, vjepaori in all_rows:
+        for method, key in METHODS:
+            side = favor if key == "favor" else vjepaori
+            if side["in_progress"]:
+                progress.append(
+                    f"{task_label(name)}--{method} "
+                    f"({side['epochs_seen']}/{side['target_epochs']})"
+                )
+
+    notes = [
+        f"Results on {count(len(all_rows), 'downstream task')}, grouped by task type.",
+        "Best epoch is selected by validation F1-macro (highest) for classification and "
+        "multi-label classification, and by validation RMSE (lowest) for regression; "
+        "all metrics in a row are read from that same epoch.",
+        r"FaVoR uses our self-supervised initialization; V-JEPA~2.1 uses the official "
+        r"released weights.",
+    ]
+    if missing:
+        notes.append(
+            f"Blank V-JEPA~2.1 rows indicate unavailable runs ({count(len(missing), 'task')})."
+        )
+    if progress:
+        notes.append(
+            r"$^{\dag}$~Training still in progress, best-so-far: " + ", ".join(progress) + "."
+        )
+
+    table_body = [
+        f"\\begin{{tabular}}{{ll{'c' * GRID_METRIC_COLUMNS}}}",
+        "\\toprule",
+    ]
+    for index, (task_type, title, rows) in enumerate(sections):
+        if index:
+            table_body += ["\\midrule", "\\addlinespace[2pt]"]
+        table_body += build_section(task_type, title, rows)
+    table_body += ["\\bottomrule", "\\end{tabular}"]
+
     lines = [
-        f"\\begin{{{env}}}[t]",
+        "\\begin{table*}[t]",
         "\\centering",
         "\\setlength{\\tabcolsep}{3pt}",
-        font,
-        f"\\caption{{{caption}}}",
-        f"\\label{{{label}}}",
+        "\\small",
+        f"\\caption{{{' '.join(notes)}}}",
+        f"\\label{{{TABLE_LABEL}}}",
     ]
-    if uses_resizebox(task_type, fit):
-        lines.append("\\resizebox{\\textwidth}{!}{%")
-        lines += body
-        lines.append("}")
+    if fit:
+        lines += ["\\resizebox{\\textwidth}{!}{%", *table_body, "}"]
     else:
-        lines += body
-    lines.append(f"\\end{{{env}}}")
+        lines += table_body
+    lines.append("\\end{table*}")
     return "\n".join(lines) + "\n"
 
 
@@ -320,7 +344,7 @@ def print_preview(name: str, values: dict, task_type: str) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="导出分类 / 多标签 / 回归三张 LaTeX 指标表",
+        description="把分类 / 多标签 / 回归结果导出为一个 tabular 的 LaTeX 总表",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "示例:\n"
@@ -338,7 +362,7 @@ def main() -> int:
     parser.add_argument("--no-fit", action="store_true",
                         help="列数多的表不用 \\resizebox 贴齐 \\textwidth（默认会贴齐，避免溢出）")
     parser.add_argument("--preview", action="store_true",
-                        help="同时把三张表的纯文本预览打到终端")
+                        help="同时把三个任务类型的纯文本预览打到终端")
     args = parser.parse_args()
 
     favor_dirs = index_by_task(args.favor)
@@ -351,8 +375,8 @@ def main() -> int:
     measured = {name: (measure(favor_dirs.get(name)), measure(vjepaori_dirs.get(name))) for name in tasks}
 
     args.out.mkdir(parents=True, exist_ok=True)
-    written: list[tuple[str, int]] = []
-    for task_type, filename, label, env in TABLES:
+    sections: list[tuple[str, str, list[tuple[str, dict, dict]]]] = []
+    for task_type, title in SECTIONS:
         rows = [
             (name, favor, vjepaori)
             for name, (favor, vjepaori) in measured.items()
@@ -362,34 +386,38 @@ def main() -> int:
             continue
         # 按任务名排序（回归表按指标方向不同，名字序最稳定）
         rows.sort(key=lambda item: item[0])
-        fit = not args.no_fit
-        (args.out / filename).write_text(
-            dependency_banner(task_type, fit)
-            + build_table(task_type, rows, label, env, fit=fit),
-            encoding="utf-8",
-        )
-        written.append((filename, len(rows)))
+        sections.append((task_type, title, rows))
         if args.preview:
             print(f"\n===== {task_type} ({len(rows)} 个任务) =====")
             for name, favor, vjepaori in rows:
                 print_preview(name, {"favor": favor, "vjepaori": vjepaori}, task_type)
             print("  (* = 训练未跑完，当前阶段性最优)")
 
-    if not written:
+    if not sections:
         print("没有可写出的表", file=sys.stderr)
         return 2
 
+    fit = not args.no_fit
+    task_types = [task_type for task_type, _title, _rows in sections]
+    (args.out / TABLE_FILE).write_text(
+        dependency_banner(task_types, fit)
+        + build_combined_table(sections, fit=fit),
+        encoding="utf-8",
+    )
+
     # 导言区片段单独落一份，方便直接 \input 到论文里，不用去正文里抄宏包名
     preamble = (
-        "% 三张指标表所需的宏包，贴到论文导言区即可（已加载过的行可删）\n"
+        "% 单一 tabular 指标总表所需的宏包，贴到论文导言区即可（已加载过的行可删）\n"
         + "\n".join(PREAMBLE_LINES)
         + "\n"
     )
     (args.out / PREAMBLE_FILE).write_text(preamble, encoding="utf-8")
 
     print()
-    for filename, n_tasks in written:
-        print(f"写入 {args.out / filename}  ({n_tasks} 个任务)")
+    section_summary = ", ".join(
+        f"{title} {len(rows)}" for _task_type, title, rows in sections
+    )
+    print(f"写入 {args.out / TABLE_FILE}  ({section_summary})")
     print(f"写入 {args.out / PREAMBLE_FILE}")
     print(
         "\n\033[1m依赖宏包（漏了 multirow 会把 \\multirow{2}{*}{任务名} 原样印成 "

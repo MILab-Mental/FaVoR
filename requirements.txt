@@ -1,5 +1,8 @@
 torch>=2
 torchvision
+torchaudio
+soundfile
+torchcodec
 tensorboard
 wandb
 iopath

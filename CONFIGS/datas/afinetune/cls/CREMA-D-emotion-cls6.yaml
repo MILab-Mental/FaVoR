@@ -1,0 +1,9 @@
+# 2_CREMA-D_SV.csv :: emotion :: classification
+data:
+  datasets:
+    - /home/data/sdc/FAVOR/DATASET/splits-0901/2_CREMA-D_SV.csv
+  rootpaths:
+    - /home/data/sdb/基座模型数据集/2情绪数据集/CREMA-D/
+  task: classification
+  num_class: 6
+  label_column: emotion

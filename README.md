@@ -1,11 +1,11 @@
 # FAVOR
 
-**多模态语音 / 视频情感与心理数据集** —— 视频 V-JEPA 自监督预训练 + 下游微调。
+**多模态语音 / 视频情感与心理数据集** —— 视频 V-JEPA 与音频 AEmo-JEPA 预训练 + 下游微调。
 
 FAVOR（Facial / Audio / Video emotion & mental-health understanding）是一套面向
-**语音、视频、音视频联合**的情感与心理健康理解训练框架。当前实现聚焦于**视频模态**：
-以 V-JEPA（Joint Embedding Predictive Architecture）对大规模无标注人脸视频做自监督
-预训练，得到通用视频表征后，再在 7 个公开情感/心理数据集上做分类 / 回归微调。
+**语音、视频、音视频联合**的情感与心理健康理解训练框架。视频侧以 V-JEPA 对无标注
+人脸视频做自监督预训练；音频侧以 emotion2vec_plus_large 初始化 AEmo-JEPA 并继续
+预训练。两种模态都通过统一配置入口完成分类、回归和多标签下游微调。
 
 > 本仓库 fork 自 [facebookresearch/vjepa2](https://github.com/facebookresearch/vjepa2)
 > （V-JEPA 2.1），保留了其骨干模型与预训练管线（MIT 许可），并在此之上重构了
@@ -18,10 +18,12 @@ FAVOR/
 ├── app/
 │   ├── main.py            # 统一启动器：读 YAML → 每 GPU 一个进程 → 按 app 字段分发
 │   ├── pretrain_v/        # 视频 V-JEPA 自监督预训练
-│   └── finetune_v/        # 视频下游微调（分类 / 回归）
+│   ├── finetune_v/        # 视频下游微调
+│   ├── pretrain_a/        # 音频 AEmo-JEPA 自监督预训练
+│   └── finetune_a/        # 音频分类 / 回归 / 多标签微调
 ├── CONFIGS/               # 全部训练配置（任务入口 + 片段），详见 CONFIGS/README.md
-├── datasets/              # 数据集 / dataloader / 掩码 / 视频变换
-├── models/                # vision_transformer / predictor / attentive_pooler / 微调模型
+├── datasets/              # 视频与音频 dataset / dataloader / transforms
+├── models/                # V-JEPA、AEmo-JEPA 骨干与任务头
 ├── optimization/          # optimizer / 调度器（warmup-cosine / wd-schedule / anneal）
 ├── utils/                 # 分布式 / 日志 / 指标 / checkpoint 加载
 ├── DATASET/               # 数据清单、split、合并与统计脚本（不纳入版本控制）
@@ -29,7 +31,7 @@ FAVOR/
 ├── OUTPUT/                # 训练产物：日志 / checkpoint / 参数快照（不纳入版本控制）
 ├── PLOT/                  # 论文统计、制表与可视化脚本，详见 PLOT/README.md
 ├── run.sh                 # 15 个微调任务的一键运行脚本（含 vjepaori 基线 15 条）
-├── train.sh               # 候选命令队列执行器：N 路并发、逐任务落日志、结尾汇总
+├── train.sh               # 元数据生成训练命令：dry-run 校验 / N 路并发 / 日志汇总
 ├── clean.py               # 递归清理 __pycache__ / .ipynb_checkpoints
 └── requirements.txt
 ```
@@ -50,6 +52,12 @@ python -m app.main --fname CONFIGS/test-finetune.yaml --devices cuda:0 --debugmo
 # 预训练（48 帧 / 112px，vit_large）
 torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vpretrain/pretrain_v_FaVoR-112px-48f.yaml --devices cuda:0 cuda:1
 
+# 音频 AEmo-JEPA 预训练（emotion2vec_plus_large 初始化，2～4 秒变长 crop）
+torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/apretrain/pretrain_a_FaVoR.yaml
+
+# 音频微调（例：CASIA emotion 6 类；33 个任务均使用同一入口模式）
+torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/afinetune/cls/CASIA-emotion.yaml
+
 # 退火 / cooldown（长片段 64f，LR 退到 ~0）
 torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vpretrain/pretrain_v_FaVoR-cooldown.yaml
 
@@ -64,14 +72,17 @@ torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/cls/RAVD
         meta.seed=7
 
 # 一次性跑完 run.sh 里列的 15 个视频微调任务（内部已改为 torchrun）
-# 注意：tasks.json 共 33 条任务，其余 18 条当前不可运行（数据集均为纯音频），
-# 故没有列进 run.sh；33 条任务的完整清单与原因见 CONFIGS/README.md 第 8 节。
+# 注意：tasks.json 共 33 个语义任务；run.sh 当前只编排其中 15 条视频任务，全部
+# 33 条任务的音频版本可从 CONFIGS/tasks/afinetune/ 单独启动。
 bash run.sh
 
-# 批量跑候选命令（默认写在 train.sh 里的是 run.sh 末尾那 15 条 vjepaori 基线）
+# train.sh 从实验元数据 + 15 条任务元数据自动生成 torchrun 命令；先预览再运行
+bash train.sh --dry-run  # 只校验元数据并打印命令，不启动训练、不创建日志
 bash train.sh          # 串行（1 个槽位，最安全）
 bash train.sh 2        # 2 个任务同时跑（槽位轮流从列表领取，见脚本头部说明）
 # 单任务失败只记录不中断，跑完打印汇总并以非 0 退出；日志在 OUTPUT/train_sh_logs/<时间戳>/
+# 切换 checkpoint / scratch / 官方 V-JEPA 时只改 train.sh 的 EXPERIMENT_META；
+# 增删任务只改 TASK_META，不再复制整条命令。EXTRA_SET 可添加所有任务共享的 --set 覆盖。
 
 ```
 
@@ -194,20 +205,22 @@ GPU；rank 崩溃会立即报错并终止整组，不用再干等 NCCL 默认 60
 ### 7. 模态统一于「情感与心理」这一目标
 
 `root.txt` 用统一清单管理 30+ 数据集的音频 / 视频 / 音视频三种预训练用途（`v/a/va`），
-视频微调只是当前落地的第一块。架构上视频与音频共享同一套「配置片段 + 任务入口」范式，
-为后续 `finetune_a`、音视频联合（VA）预留了对称的扩展位置——**先做视频跑通闭环，再以
-相同机制横向复制到其他模态**，而不是一开始就维护一套过度设计的统一框架。
+视频与音频共享同一套「配置片段 + 任务入口」范式，但数据加载、采样和模型实现按
+模态分开。当前视频侧覆盖 15 条任务，音频侧已覆盖 `tasks.json` 的全部 33 条任务；
+音视频联合（VA）仍保留为后续扩展。
 
 ---
 
-## 规划中 / 未实现
+## 音频训练状态
 
-- 音频预训练与微调（`finetune_a`）、音视频联合（VA）训练。
-  音频侧**配置已就位、代码未实现**：18 条音频任务的入口放在 `CONFIGS/tasks/afinetune/{cls,reg,mlcls}/<任务名>.yaml`
-  （`app: finetune_a`），数据片段在 `CONFIGS/datas/afinetune/`，与视频侧一一平行。
-  跑通还需补 `app/finetune_a/train.py` 与音频 dataset / encoder（见 CONFIGS/README.md 第 8、12 节）。
-- `multi_label_classification` 任务类型（视频侧 `MER242526-26openset` 已实现；
-  音频侧 `CNSCED-emotion`、`M3ED-emotion` 仍为占位，见 CONFIGS/README.md 8.3）。
+- `app/pretrain_a` 已接入 AEmo-JEPA：以 emotion2vec_plus_large 初始化 CNN 与 context
+  encoder，使用独立 predictor 和 EMA target encoder 做音频 JEPA 继续预训练。默认入口为
+  `CONFIGS/tasks/apretrain/pretrain_a_FaVoR.yaml`。
+- `app/finetune_a` 已支持 `classification`、`regression` 和
+  `multi_label_classification`；tasks.json 中全部 33 条任务的音频版本位于
+  `CONFIGS/tasks/afinetune/{cls,reg,mlcls}/`。默认兼容读取原 AEmo-JEPA 的
+  `checkpoint["model"]`，新 `pretrain_a` checkpoint 则直接读取显式的 `encoder`。
+- 音视频联合（VA）训练仍未实现。
 
 ## 许可
 

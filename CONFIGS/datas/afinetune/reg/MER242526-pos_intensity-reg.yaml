@@ -1,0 +1,8 @@
+# 2_MER242526_SV.csv :: pos_intensity :: regression
+data:
+  datasets:
+    - /home/data/sdc/FAVOR/DATASET/splits-0901/2_MER242526_SV.csv
+  rootpaths:
+    - /home/data/sdc/MER/
+  task: regression
+  label_column: pos_intensity
