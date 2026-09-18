@@ -11,7 +11,7 @@ class FusedQKVSelfAttention(nn.Module):
       blocks.i.attn.proj.bias
     """
 
-    def __init__(self, d_model, nhead, dropout=0.0, qkv_bias=True):
+    def __init__(self, d_model, nhead, dropout=0.0, qkv_bias=True, proj_dropout=None):
         super().__init__()
         assert d_model % nhead == 0
 
@@ -23,9 +23,9 @@ class FusedQKVSelfAttention(nn.Module):
         self.proj = nn.Linear(d_model, d_model)
 
         self.attn_drop = nn.Dropout(dropout)
-        self.proj_drop = nn.Dropout(dropout)
+        self.proj_drop = nn.Dropout(dropout if proj_dropout is None else proj_dropout)
 
-    def forward(self, x, key_padding_mask=None):
+    def forward(self, x, key_padding_mask=None, alibi_bias=None):
         """
         x: [B, N, D]
         key_padding_mask: [B, N], True means ignored.
@@ -40,6 +40,10 @@ class FusedQKVSelfAttention(nn.Module):
 
         scale = self.head_dim ** -0.5
         attn = torch.matmul(q, k.transpose(-2, -1)) * scale
+
+        if alibi_bias is not None:
+            attn = attn.to(alibi_bias.dtype)
+            attn[:, :alibi_bias.shape[1]] += alibi_bias
 
         if key_padding_mask is not None:
             attn = attn.masked_fill(
@@ -56,6 +60,97 @@ class FusedQKVSelfAttention(nn.Module):
         out = self.proj_drop(out)
 
         return out
+
+
+class Emotion2VecTransformerBlock(nn.Module):
+    """The exact AltBlock forward used by emotion2vec/data2vec_multi.
+
+    ``layer_norm_first=False`` is the layout used by the published
+    emotion2vec+ large checkpoint.  ``target`` deliberately mirrors the
+    second value returned by the official AltBlock; it is used when averaging
+    teacher layers during JEPA pre-training.
+    """
+
+    def __init__(self, d_model, nhead, dim_feedforward, *, dropout=0.0,
+                 attention_dropout=0.0, activation_dropout=0.0,
+                 post_mlp_dropout=0.0, qkv_bias=True,
+                 layer_norm_first=False, ffn_targets=True, norm_eps=1e-6):
+        super().__init__()
+        self.layer_norm_first = bool(layer_norm_first)
+        self.ffn_targets = bool(ffn_targets)
+        self.norm1 = nn.LayerNorm(d_model, eps=norm_eps)
+        self.attn = FusedQKVSelfAttention(
+            d_model, nhead, dropout=attention_dropout, qkv_bias=qkv_bias,
+            proj_dropout=dropout,
+        )
+        self.norm2 = nn.LayerNorm(d_model, eps=norm_eps)
+        self.mlp = PreNormMLP(d_model, dim_feedforward, dropout=activation_dropout)
+        self.post_mlp_dropout = nn.Dropout(post_mlp_dropout)
+
+    def forward(self, x, key_padding_mask=None, alibi_bias=None):
+        if self.layer_norm_first:
+            x = x + self.attn(self.norm1(x), key_padding_mask, alibi_bias)
+            residual = x = self.mlp(self.norm2(x))
+            target = x
+            x = residual + self.post_mlp_dropout(x)
+            if not self.ffn_targets:
+                target = x
+        else:
+            x = x + self.attn(x, key_padding_mask, alibi_bias)
+            residual = x = self.norm1(x)
+            x = self.mlp(x)
+            target = x
+            x = self.norm2(residual + self.post_mlp_dropout(x))
+            if not self.ffn_targets:
+                target = x
+        return x, target
+
+
+class Emotion2VecTransformerEncoder(nn.Module):
+    """Stack of checkpoint-compatible emotion2vec AltBlocks."""
+
+    def __init__(self, depth, d_model, nhead, dim_feedforward, *,
+                 dropout=0.0, attention_dropout=0.0, activation_dropout=0.0,
+                 post_mlp_dropout=0.0, qkv_bias=True,
+                 layer_norm_first=False, ffn_targets=True, norm_eps=1e-6,
+                 input_norm=False, final_norm=False, input_dropout=0.0):
+        super().__init__()
+        self.layers = nn.ModuleList([
+            Emotion2VecTransformerBlock(
+                d_model, nhead, dim_feedforward,
+                dropout=dropout,
+                attention_dropout=attention_dropout,
+                activation_dropout=activation_dropout,
+                post_mlp_dropout=post_mlp_dropout,
+                qkv_bias=qkv_bias,
+                layer_norm_first=layer_norm_first,
+                ffn_targets=ffn_targets,
+                norm_eps=norm_eps,
+            ) for _ in range(depth)
+        ])
+        if input_norm and final_norm:
+            raise ValueError("Emotion2VecTransformerEncoder norm cannot be both input and final")
+        self.norm = nn.LayerNorm(d_model, eps=norm_eps) if input_norm or final_norm else None
+        self.input_norm = bool(input_norm)
+        self.dropout = nn.Dropout(input_dropout)
+
+    def forward(self, x, key_padding_mask=None, alibi_bias=None,
+                alibi_scale=None, return_all_layers=False):
+        if self.norm is not None and self.input_norm:
+            x = self.norm(x)
+        x = self.dropout(x)
+        layer_results = []
+        for index, layer in enumerate(self.layers):
+            bias = alibi_bias
+            if bias is not None and alibi_scale is not None:
+                scale = alibi_scale[index] if alibi_scale.shape[0] > 1 else alibi_scale.squeeze(0)
+                bias = bias * scale.to(bias.dtype)
+            x, target = layer(x, key_padding_mask=key_padding_mask, alibi_bias=bias)
+            if return_all_layers:
+                layer_results.append(target)
+        if self.norm is not None and not self.input_norm:
+            x = self.norm(x)
+        return (x, layer_results) if return_all_layers else x
 
 
 class PreNormMLP(nn.Module):

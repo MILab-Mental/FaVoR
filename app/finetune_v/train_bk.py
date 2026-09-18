@@ -198,11 +198,12 @@ def main():
                 torch.save(state, output_dir / "best.pt")
                 # best.csv follows the compact sample.csv layout and reports
                 # classification metrics on the validation samples.
-                save_best_reports(logs_dir, epoch + 1, metric_values, matrix, val_paths, truth,
-                                  preds_array, logits_array, probabilities)
+                save_best_reports(logs_dir, epoch + 1, metric_values, matrix)
                 write_predictions_csv(logs_dir / "train_best_predict.csv", train_paths,
                                       train_truth, train_preds_array, train_logits_array,
                                       train_probabilities)
+                write_predictions_csv(logs_dir / "eval_best_predict.csv", val_paths,
+                                      truth, preds_array, logits_array, probabilities)
     if rank == 0:
         save_metric_curves(history, logs_dir / "metrics_curves.png")
     if distributed:

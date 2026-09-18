@@ -1,5 +1,7 @@
 model:
   name: aemojepa_plus_large_50hz
+  backbone:
+    mode: aemojepa
   extractor:
     conv_layers:
       - [512, 10, 5]
@@ -19,10 +21,12 @@ model:
     dim_feedforward: 4096
     dropout: 0.0
     qkv_bias: true
+  features:
+    mode: topk_average
+    topk_layers: 8
   target:
     topk_layers: 8
   head:
     num_heads: 4
     hidden_dim: 256
     dropout: 0.1
-

@@ -549,10 +549,197 @@ import logging
 LOGGER = logging.getLogger(__name__)
 
 
+def _official_emotion2vec_mappings(backbone, state):
+    """Return per-component target/source mappings for a raw official checkpoint."""
+    audio = "d2v_model.modality_encoders.AUDIO."
+    components = {}
+
+    extractor = {}
+    pattern = re.compile(r"conv_layers\.(\d+)\.(\d+)(?:\.\d+)?\.(weight|bias)$")
+    for source_key, value in state.items():
+        if not source_key.startswith(audio + "local_encoder.") or not torch.is_tensor(value):
+            continue
+        match = pattern.search(source_key)
+        if not match:
+            continue
+        layer, submodule, parameter = match.groups()
+        if submodule == "0":
+            target_key = f"feature_extractor.conv_blocks.{layer}.conv.{parameter}"
+        elif submodule == "2":
+            target_key = f"feature_extractor.conv_blocks.{layer}.layer_norm.{parameter}"
+        else:
+            continue
+        extractor[target_key] = (source_key, value)
+    components["local_encoder"] = extractor
+
+    projection_keys = {
+        "feature_norm.weight": audio + "project_features.1.weight",
+        "feature_norm.bias": audio + "project_features.1.bias",
+        "post_extraction_mapper.weight": audio + "project_features.2.weight",
+        "post_extraction_mapper.bias": audio + "project_features.2.bias",
+    }
+    components["feature_projection"] = {
+        target: (source, state[source]) for target, source in projection_keys.items() if source in state
+    }
+
+    relative = {}
+    relative_pattern = re.compile(
+        re.escape(audio) + r"relative_positional_encoder\.(\d+)\.0\.(weight|bias)$"
+    )
+    for source_key, value in state.items():
+        match = relative_pattern.match(source_key)
+        if match:
+            layer, parameter = match.groups()
+            target_key = f"relative_positional_encoder.layers.{int(layer) - 1}.conv.{parameter}"
+            relative[target_key] = (source_key, value)
+    components["relative_position"] = relative
+
+    modality = {}
+    modality_prefix = audio + "context_encoder."
+    for source_key, value in state.items():
+        if not source_key.startswith(modality_prefix) or not torch.is_tensor(value):
+            continue
+        suffix = source_key[len(modality_prefix):]
+        if suffix.startswith("blocks."):
+            suffix = "layers." + suffix[len("blocks."):]
+        modality[f"modality_context_encoder.{suffix}"] = (source_key, value)
+    components["modality_context"] = modality
+
+    components["extra_tokens"] = {
+        "extra_tokens": (audio + "extra_tokens", state[audio + "extra_tokens"])
+    } if audio + "extra_tokens" in state else {}
+    components["alibi_scale"] = {
+        "alibi_scale": (audio + "alibi_scale", state[audio + "alibi_scale"])
+    } if audio + "alibi_scale" in state else {}
+
+    global_encoder = {}
+    for source_key, value in state.items():
+        if source_key.startswith("d2v_model.blocks.") and torch.is_tensor(value):
+            suffix = source_key[len("d2v_model.blocks."):]
+            global_encoder[f"context_encoder.layers.{suffix}"] = (source_key, value)
+        elif source_key.startswith("d2v_model.norm.") and torch.is_tensor(value):
+            suffix = source_key[len("d2v_model.norm."):]
+            global_encoder[f"context_encoder.norm.{suffix}"] = (source_key, value)
+    components["global_encoder"] = global_encoder
+    return components
+
+
+def load_official_emotion2vec_backbone(backbone, state, min_parameter_ratio=0.95):
+    """Load and audit every parameter on the official emotion2vec inference path."""
+    if getattr(backbone, "mode", None) != "emotion2vec":
+        raise ValueError(
+            "A full official emotion2vec checkpoint requires model.backbone.mode=emotion2vec"
+        )
+    target_state = backbone.state_dict()
+    components = _official_emotion2vec_mappings(backbone, state)
+    compatible = {}
+    consumed_sources = set()
+    reports = []
+
+    component_prefixes = {
+        "local_encoder": ("feature_extractor.",),
+        "feature_projection": ("feature_norm.", "post_extraction_mapper."),
+        "relative_position": ("relative_positional_encoder.",),
+        "modality_context": ("modality_context_encoder.",),
+        "extra_tokens": ("extra_tokens",),
+        "alibi_scale": ("alibi_scale",),
+        "global_encoder": ("context_encoder.",),
+    }
+    for name, mapping in components.items():
+        target_keys = [
+            key for key in target_state
+            if any(key == prefix or key.startswith(prefix) for prefix in component_prefixes[name])
+        ]
+        loaded_target = 0
+        loaded_source = 0
+        mismatches = []
+        for target_key, (source_key, value) in mapping.items():
+            if target_key in target_state and target_state[target_key].shape == value.shape:
+                compatible[target_key] = value
+                consumed_sources.add(source_key)
+                loaded_target += value.numel()
+                loaded_source += value.numel()
+            else:
+                mismatches.append((source_key, tuple(value.shape), target_key,
+                                   tuple(target_state[target_key].shape) if target_key in target_state else None))
+        target_total = sum(target_state[key].numel() for key in target_keys)
+        source_total = sum(value.numel() for _, value in mapping.values())
+        reports.append((name, loaded_target, target_total, loaded_source, source_total, mismatches))
+
+    official_source = {
+        key: value for key, value in state.items()
+        if torch.is_tensor(value) and (
+            key.startswith("d2v_model.modality_encoders.AUDIO.")
+            or key.startswith("d2v_model.blocks.")
+            or key.startswith("d2v_model.norm.")
+        )
+    }
+    loaded_target_total = sum(value.numel() for value in compatible.values())
+    target_total = sum(value.numel() for value in target_state.values())
+    source_total = sum(value.numel() for value in official_source.values())
+    loaded_source_total = sum(state[key].numel() for key in consumed_sources)
+    target_ratio = loaded_target_total / max(1, target_total)
+    source_ratio = loaded_source_total / max(1, source_total)
+
+    LOGGER.info("emotion2vec checkpoint coverage by component:")
+    for name, loaded_target, target_count, loaded_source, source_count, mismatches in reports:
+        LOGGER.info(
+            "  %-20s target=%7.2f%% (%8.3fM/%8.3fM) source=%7.2f%% (%8.3fM/%8.3fM)%s",
+            name,
+            100.0 * loaded_target / max(1, target_count), loaded_target / 1e6, target_count / 1e6,
+            100.0 * loaded_source / max(1, source_count), loaded_source / 1e6, source_count / 1e6,
+            f" mismatched={len(mismatches)}" if mismatches else "",
+        )
+    skipped_sources = [key for key in official_source if key not in consumed_sources]
+    missing_targets = [key for key in target_state if key not in compatible]
+    LOGGER.info(
+        "emotion2vec target coverage: %.2f%% (%.3fM/%.3fM parameters); missing tensors=%d",
+        target_ratio * 100, loaded_target_total / 1e6, target_total / 1e6, len(missing_targets),
+    )
+    LOGGER.info(
+        "emotion2vec source coverage: %.2f%% (%.3fM/%.3fM encoder parameters); skipped tensors=%d",
+        source_ratio * 100, loaded_source_total / 1e6, source_total / 1e6, len(skipped_sources),
+    )
+    excluded = {
+        key: value for key, value in state.items()
+        if torch.is_tensor(value) and key not in official_source
+    }
+    if excluded:
+        LOGGER.info(
+            "Excluded non-encoder checkpoint tensors: %d (%.3fM parameters), first keys=%s",
+            len(excluded), sum(value.numel() for value in excluded.values()) / 1e6,
+            list(excluded)[:10],
+        )
+    if missing_targets:
+        LOGGER.warning("First missing emotion2vec target tensors: %s", missing_targets[:10])
+    if skipped_sources:
+        LOGGER.warning("First unused official encoder tensors: %s", skipped_sources[:10])
+    if target_ratio < min_parameter_ratio or source_ratio < min_parameter_ratio:
+        raise RuntimeError(
+            f"Incomplete emotion2vec transfer: target={target_ratio:.2%}, source={source_ratio:.2%}, "
+            f"required={min_parameter_ratio:.2%}"
+        )
+    backbone.load_state_dict(compatible, strict=False)
+    return {
+        "target_ratio": target_ratio,
+        "source_ratio": source_ratio,
+        "missing_targets": missing_targets,
+        "skipped_sources": skipped_sources,
+    }
+
+
 def init_from_emotion2vec(model, path, cfg):
     """Initialize a FAVOR AudioJEPA model from an emotion2vec checkpoint."""
     state = load_checkpoint_state_dict(path)
     init_cfg = cfg.get("init", {})
+    if getattr(model.encoder, "mode", None) == "emotion2vec":
+        load_official_emotion2vec_backbone(
+            model.encoder,
+            state,
+            min_parameter_ratio=float(init_cfg.get("min_load_ratio", 0.95)),
+        )
+        model.sync_target_encoder()
+        return
     if init_cfg.get("load_extractor", True):
         load_extractor_weights(
             model.encoder.feature_extractor,
@@ -618,7 +805,9 @@ def audio_backbone_state(checkpoint):
         raise ValueError("Unsupported audio checkpoint format")
     allowed = (
         "feature_extractor.", "feature_norm.", "post_extraction_mapper.",
-        "pos_embed_encoder.", "context_encoder.",
+        "pos_embed_encoder.", "relative_positional_encoder.",
+        "modality_context_encoder.", "extra_tokens", "alibi_scale",
+        "context_encoder.",
     )
     extracted = {}
     for key, value in state.items():
@@ -641,17 +830,25 @@ def load_audio_backbone(backbone, checkpoint_path, min_parameter_ratio=0.95):
         # than FAVOR's AudioBackbone names. Reuse the same explicit mapping as
         # pretrain_a initialization so finetune_a can start directly from an
         # emotion2vec checkpoint without first producing an AEmo-JEPA file.
-        load_extractor_weights(
-            backbone.feature_extractor,
-            raw_state,
-            min_load_ratio=min_parameter_ratio,
-        )
-        load_feature_projection_weights(backbone, raw_state)
-        load_encoder_weights(
-            backbone.context_encoder,
-            raw_state,
-            min_load_ratio=min_parameter_ratio,
-        )
+        if getattr(backbone, "mode", None) == "emotion2vec":
+            load_official_emotion2vec_backbone(backbone, raw_state, min_parameter_ratio)
+        else:
+            LOGGER.warning(
+                "Loading only CNN/projection/global blocks because backbone.mode=%s. "
+                "Use backbone.mode=emotion2vec for the complete official encoder.",
+                getattr(backbone, "mode", None),
+            )
+            load_extractor_weights(
+                backbone.feature_extractor,
+                raw_state,
+                min_load_ratio=min_parameter_ratio,
+            )
+            load_feature_projection_weights(backbone, raw_state)
+            load_encoder_weights(
+                backbone.context_encoder,
+                raw_state,
+                min_load_ratio=min_parameter_ratio,
+            )
         LOGGER.info("Initialized audio backbone directly from emotion2vec checkpoint %s", checkpoint_path)
         return checkpoint
     source = audio_backbone_state(checkpoint)

@@ -244,8 +244,8 @@ def save_per_class_f1_chart(metrics, num_classes, output, epoch):
     plt.close(fig)
 
 
-def save_multilabel_best_reports(output_dir, epoch, metrics, paths, truth, predictions, logits, probabilities):
-    """Write best.csv, best_predict.csv, and the per-class F1 chart for a multi-label run."""
+def save_multilabel_best_reports(output_dir, epoch, metrics, num_classes):
+    """Write best.csv and the per-class F1 chart for a multi-label run."""
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     scalars = {key: value for key, value in metrics.items() if not key.startswith("class_")}
@@ -253,14 +253,13 @@ def save_multilabel_best_reports(output_dir, epoch, metrics, paths, truth, predi
         writer = csv.DictWriter(handle, fieldnames=["epoch", *scalars])
         writer.writeheader()
         writer.writerow({"epoch": epoch, **scalars})
-    write_multilabel_predictions_csv(output_dir / "best_predict.csv", paths, truth, predictions, logits, probabilities)
-    save_per_class_f1_chart(metrics, logits.shape[1], output_dir / "per_class_f1_best.png", epoch)
+    save_per_class_f1_chart(metrics, num_classes, output_dir / "per_class_f1_best.png", epoch)
 
 
 def write_metrics_csv(output, metrics, epoch=None):
     """Write the compact sample.csv-style classification report.
 
-    The detailed per-sample predictions remain in ``best_predict.csv``. This
+    The detailed per-sample predictions remain in ``eval_best_predict.csv``. This
     report intentionally contains only aggregate metrics and uses percentages
     so it can be compared directly with the supplied sample.csv template.
     """
@@ -322,24 +321,45 @@ def write_predictions_csv(output, paths, truth, predictions, logits, probabiliti
             writer.writerow(row)
 
 
-def save_evaluation_reports(outmetric, outpredict, outcm, metrics, matrix, paths,
-                            truth, predictions, logits, probabilities, epoch=None):
-    """Write metrics CSV, per-sample prediction CSV, and a confusion matrix."""
-    write_metrics_csv(outmetric, metrics, epoch=epoch)
-    write_predictions_csv(outpredict, paths, truth, predictions, logits, probabilities)
-    save_confusion_matrix(matrix, outcm, epoch)
+def write_regression_predictions_csv(output, paths, truth, predictions):
+    """Write scalar regression predictions and signed errors."""
+    output = Path(output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with output.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["path", "target", "prediction", "error"])
+        writer.writeheader()
+        for sample_path, target, prediction in zip(paths, truth, predictions):
+            writer.writerow({
+                "path": sample_path,
+                "target": float(target),
+                "prediction": float(prediction),
+                "error": float(prediction - target),
+            })
 
 
-def save_best_reports(output_dir, epoch, metrics, matrix, paths, truth, predictions, logits, probabilities):
-    """Write best.csv, best_predict.csv, and the best confusion-matrix figure."""
+def write_regression_best_reports(output_dir, epoch, train_paths, train_truth, train_predictions,
+                                  eval_paths, eval_truth, eval_predictions, metrics):
+    """Write best metrics plus train/eval predictions for a regression run."""
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    save_evaluation_reports(
-        output_dir / "best.csv",
-        output_dir / "best_predict.csv",
-        output_dir / "confusion_matrix_best.png",
-        metrics, matrix, paths, truth, predictions, logits, probabilities, epoch,
+    write_regression_predictions_csv(
+        output_dir / "train_best_predict.csv", train_paths, train_truth, train_predictions
     )
+    write_regression_predictions_csv(
+        output_dir / "eval_best_predict.csv", eval_paths, eval_truth, eval_predictions
+    )
+    with (output_dir / "best.csv").open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["epoch", *metrics])
+        writer.writeheader()
+        writer.writerow({"epoch": epoch, **metrics})
+
+
+def save_best_reports(output_dir, epoch, metrics, matrix):
+    """Write best.csv and the best confusion-matrix figure."""
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    write_metrics_csv(output_dir / "best.csv", metrics, epoch=epoch)
+    save_confusion_matrix(matrix, output_dir / "confusion_matrix_best.png", epoch)
 
 
 def save_confusion_matrix(matrix, output, epoch):

@@ -572,9 +572,12 @@ torchrun --nproc_per_node=2 -m app.main \
 
 ## 12. 已知问题与注意事项
 
-1. **音频 checkpoint 来源** —— 33 个 `afinetune` 入口默认读取原 AEmo-JEPA 的
-   `checkpoint_final.pt`，兼容加载器会抽取 CNN、projection 和 context encoder。完成新的
-   `pretrain_a` 后，应通过 `--set meta.read_checkpoint=<.../latest.pt>` 切换到 FAVOR 格式权重。
+1. **音频 backbone 模式与 checkpoint 来源** —— `model.backbone.mode: aemojepa` 保留旧版
+   简化结构（CNN + projection + 固定位置编码 + 8 层 global blocks），用于兼容已有
+   AEmo-JEPA checkpoint；`model.backbone.mode: emotion2vec` 是完整官方路径，包含相对位置
+   卷积、extra tokens、4 层 modality context encoder、ALiBi 和 8 层 global blocks。
+   `IEMOCAP-emotion.yaml` 已默认采用后者和官方 `model.pt`；新的 `pretrain_a` 也采用完整路径。
+   两种结构的 FAVOR checkpoint 不能互相 strict resume。
 
 2. **音频解码依赖** —— 优先使用 `torchaudio`，当当前 PyTorch/Torchaudio 组合要求但未安装
    TorchCodec 时会回退到 `soundfile`；对本地 libsndfile 不支持的 WebM / MP3 等格式，最后回退到 `ffmpeg`。
@@ -589,3 +592,9 @@ torchrun --nproc_per_node=2 -m app.main \
    会自动相对入口目录解析）。**移动 / 重构 `datas/` 或 `tasks/` 下的文件后，记得同步更新
    引用方**：`CONFIGS/tasks/**` 各入口的 `yamls`、`CONFIGS/test*.yaml`、以及 `run.sh` 的
    `--fname`。仓库没有覆盖这些引用的校验，路径写错只会在启动时以 `FileNotFoundError` 暴露。
+
+6. **音频下游特征与 loss** —— `model.features.mode` 支持 `last` 和 `topk_average`，后者由
+   `model.features.topk_layers` 控制层数；完整 emotion2vec 配置默认 `last`。微调 loss 统一放在
+   `optimization.loss`：分类默认 `cross_entropy + class_weighting: none`，可选
+   `inverse_frequency`、`sqrt_inverse_frequency`、`effective_number`；多标签支持是否启用
+   `positive_weighting: inverse_frequency`；回归支持 `mse`、`mae`、`smooth_l1`。

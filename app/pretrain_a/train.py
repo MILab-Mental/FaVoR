@@ -30,24 +30,38 @@ def _state():
 
 
 def _optimizer(model, cfg):
-    groups = {"pretrained": [], "new": [], "no_decay": []}
+    groups = {
+        "pretrained_decay": [], "pretrained_no_decay": [],
+        "new_decay": [], "new_no_decay": [],
+    }
     for name, parameter in model.named_parameters():
         if not parameter.requires_grad:
             continue
-        if parameter.ndim <= 1 or "norm" in name.lower() or name.endswith("bias"):
-            groups["no_decay"].append(parameter)
-        elif name.startswith("encoder.feature_extractor") or name.startswith("encoder.context_encoder"):
-            groups["pretrained"].append(parameter)
-        else:
-            groups["new"].append(parameter)
-    return torch.optim.AdamW([
-        {"params": groups["pretrained"], "base_lr": float(cfg["lr_pretrained"]),
-         "lr": float(cfg["lr_pretrained"]), "weight_decay": float(cfg["weight_decay"])},
-        {"params": groups["new"], "base_lr": float(cfg["lr_new"]),
-         "lr": float(cfg["lr_new"]), "weight_decay": float(cfg["weight_decay"])},
-        {"params": groups["no_decay"], "base_lr": float(cfg["lr_new"]),
-         "lr": float(cfg["lr_new"]), "weight_decay": 0.0},
-    ], betas=tuple(cfg.get("betas", (0.9, 0.98))), eps=float(cfg.get("eps", 1e-8)))
+        pretrained = name.startswith("encoder.")
+        no_decay = parameter.ndim <= 1 or "norm" in name.lower() or name.endswith("bias")
+        family = "pretrained" if pretrained else "new"
+        decay = "no_decay" if no_decay else "decay"
+        groups[f"{family}_{decay}"].append(parameter)
+    weight_decay = float(cfg["weight_decay"])
+    pretrained_lr = float(cfg["lr_pretrained"])
+    new_lr = float(cfg["lr_new"])
+    parameter_groups = []
+    for name, parameters in groups.items():
+        if not parameters:
+            continue
+        base_lr = pretrained_lr if name.startswith("pretrained") else new_lr
+        parameter_groups.append({
+            "params": parameters,
+            "base_lr": base_lr,
+            "lr": base_lr,
+            "weight_decay": 0.0 if name.endswith("no_decay") else weight_decay,
+            "group_name": name,
+        })
+    return torch.optim.AdamW(
+        parameter_groups,
+        betas=tuple(cfg.get("betas", (0.9, 0.98))),
+        eps=float(cfg.get("eps", 1e-8)),
+    )
 
 
 def _lr_step(optimizer, step, cfg):

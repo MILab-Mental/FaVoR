@@ -5,4 +5,13 @@ optimization:
   final_lr: 1.0e-6
   weight_decay: 1.0e-4
   betas: [0.9, 0.999]
-
+  loss:
+    classification:
+      name: cross_entropy
+      class_weighting: none
+      label_smoothing: 0.0
+    multi_label_classification:
+      name: bce_with_logits
+      positive_weighting: none
+    regression:
+      name: mse

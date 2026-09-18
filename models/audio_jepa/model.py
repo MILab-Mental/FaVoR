@@ -52,8 +52,11 @@ class AudioJEPA(nn.Module):
             parameter.requires_grad_(False)
 
     def forward(self, waveforms, valid_wave_lens=None, step=None, total_steps=None):
-        embedded = self.encoder.encode_waveform(waveforms)
-        batch_size, token_count = embedded.shape[:2]
+        embedded, transformer_pad_mask, bias, scale = self.encoder.prepare_transformer_input(
+            waveforms, valid_wave_lens
+        )
+        batch_size = embedded.shape[0]
+        token_count = embedded.shape[1] - self.encoder.num_extra_tokens
         token_lens = self.encoder.token_lengths(valid_wave_lens)
         if token_lens is None:
             pad_mask = torch.zeros(batch_size, token_count, dtype=torch.bool, device=embedded.device)
@@ -65,12 +68,22 @@ class AudioJEPA(nn.Module):
         )
         context_mask = (~context_visible) | pad_mask
         target_positions = target_positions & ~pad_mask[:, None]
-        context_last, _ = self.encoder.context_encoder(
-            embedded, key_padding_mask=context_mask, return_all_layers=True
+        if self.encoder.num_extra_tokens:
+            context_transformer_mask = torch.nn.functional.pad(
+                context_mask, (self.encoder.num_extra_tokens, 0), value=False
+            )
+        else:
+            context_transformer_mask = context_mask
+        # ``transformer_pad_mask`` also covers the extra-token prefix.  The
+        # context mask is stricter for audio tokens and therefore supersedes it.
+        context_last, _, _ = self.encoder.encode_transformer(
+            embedded, context_transformer_mask, bias, scale,
+            return_all_layers=True, remove_extra_tokens=True,
         )
         with torch.no_grad():
-            _, target_layers = self.target_encoder.context_encoder(
-                embedded, key_padding_mask=pad_mask, return_all_layers=True
+            _, target_layers, _ = self.target_encoder.encode_transformer(
+                embedded, transformer_pad_mask, bias, scale,
+                return_all_layers=True, remove_extra_tokens=True,
             )
             targets = topk_instance_average(target_layers, self.encoder.topk_layers)
         predictions = self.predictor(context_last, context_mask, target_positions)

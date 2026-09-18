@@ -137,9 +137,12 @@ favor-e5-23out-data48-8-newnewopt
   best loss: 1.4165 @ epoch 6 
 
 
+torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/afinetune/cls/IEMOCAP-emotion.yaml --set  meta.read_checkpoint=/home/data/sdc/FAVOR/CKPT/emotion2vec_plus_large/model.pt    folder=/home/data/sdc/FAVOR/OUTPUT/finetune_a/emotion2vec-plus-large/IEMOCAP-emotion
+
+
+
 
 torchrun --master_port 12358 --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/cls/MER242526-emotion.yaml --set meta.read_checkpoint=OUTPUT/pretrain_v/vitl16/FaVoR-112px-64f16-rankme/latest.pt folder=OUTPUT/finetune_v/vitl16/MER242526-emotion/FaVoR-112px-48f-8fps-0-32-e32
-
 
 
 ##############################

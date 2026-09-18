@@ -1,5 +1,5 @@
 model:
-  name: aemojepa_plus_large_50hz
+  name: emotion2vec_plus_large_50hz
   backbone:
     mode: emotion2vec
     conv_pos_depth: 5
@@ -26,21 +26,19 @@ model:
     nhead: 16
     dim_feedforward: 4096
     dropout: 0.0
+    attention_dropout: 0.0
+    activation_dropout: 0.0
+    post_mlp_dropout: 0.0
     qkv_bias: true
     layer_norm_first: false
     norm_eps: 1.0e-6
     ffn_targets: true
-    attention_dropout: 0.0
-    activation_dropout: 0.0
-    post_mlp_dropout: 0.0
-  predictor:
-    depth: 12
-    d_model: 384
-    nhead: 12
-    dim_feedforward: 1536
-    dropout: 0.0
+  features:
+    mode: last
+    topk_layers: 8
   target:
     topk_layers: 8
-    instance_norm_per_layer: true
-  init:
-    min_load_ratio: 0.95
+  head:
+    num_heads: 4
+    hidden_dim: 256
+    dropout: 0.1

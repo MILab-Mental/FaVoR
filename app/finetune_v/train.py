@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import contextlib
-import csv
 import logging
 import os
 import random
@@ -33,6 +32,7 @@ from utils.classification_metrics import (
     write_history_csv,
     write_multilabel_predictions_csv,
     write_predictions_csv,
+    write_regression_best_reports,
 )
 from utils.progress import progress_ncols
 
@@ -125,29 +125,6 @@ def _regression_extra_metrics(predictions, targets):
     r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan")
     adjusted_r2 = 1.0 - (1.0 - r2) * (n - 1) / (n - 2) if n > 2 else float("nan")
     return mse, r2, adjusted_r2
-
-
-def _write_regression_best_logs(logs_dir, epoch, train_paths, train_truth, train_predictions,
-                                eval_paths, eval_truth, eval_predictions, metrics):
-    def write_predictions(path, paths, truth, predictions):
-        with Path(path).open("w", newline="", encoding="utf-8") as handle:
-            writer = csv.DictWriter(handle, fieldnames=["path", "target", "prediction", "error"])
-            writer.writeheader()
-            for sample_path, target, prediction in zip(paths, truth, predictions):
-                writer.writerow({
-                    "path": sample_path,
-                    "target": float(target),
-                    "prediction": float(prediction),
-                    "error": float(prediction - target),
-                })
-
-    logs_dir.mkdir(parents=True, exist_ok=True)
-    write_predictions(logs_dir / "train_best_predict.csv", train_paths, train_truth, train_predictions)
-    write_predictions(logs_dir / "eval_best_predict.csv", eval_paths, eval_truth, eval_predictions)
-    with (logs_dir / "best.csv").open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=["epoch", *metrics])
-        writer.writeheader()
-        writer.writerow({"epoch": epoch, **metrics})
 
 
 def main(args):
@@ -494,8 +471,7 @@ def main(args):
                     score = val_metrics["f1_macro"]
                     improved = score > best_score
                     if improved:
-                        save_best_reports(logs_dir, epoch + 1, val_metrics, matrix, val_paths, val_truth,
-                                          val_predictions, val_array, val_probabilities)
+                        save_best_reports(logs_dir, epoch + 1, val_metrics, matrix)
                         write_predictions_csv(logs_dir / "train_best_predict.csv", train_paths, train_truth,
                                               train_predictions, train_array, train_probabilities)
                         write_predictions_csv(logs_dir / "eval_best_predict.csv", val_paths, val_truth,
@@ -510,8 +486,7 @@ def main(args):
                     score = val_metrics["f1_macro"]
                     improved = score > best_score
                     if improved:
-                        save_multilabel_best_reports(logs_dir, epoch + 1, val_metrics, val_paths, val_truth,
-                                                     val_predictions, val_array, val_probabilities)
+                        save_multilabel_best_reports(logs_dir, epoch + 1, val_metrics, num_class)
                         write_multilabel_predictions_csv(logs_dir / "train_best_predict.csv", train_paths, train_truth,
                                                          train_predictions, train_array, train_probabilities)
                         write_multilabel_predictions_csv(logs_dir / "eval_best_predict.csv", val_paths, val_truth,
@@ -539,11 +514,14 @@ def main(args):
                     score = epoch_metrics["val_rmse"]
                     improved = score < best_score
                     if improved:
-                        _write_regression_best_logs(logs_dir, epoch + 1, train_paths, train_truth, train_predictions,
-                                                     val_paths, val_truth, val_predictions,
-                                                     {"val_loss": epoch_metrics["val_loss"], "val_mse": val_mse,
-                                                      "val_mae": epoch_metrics["val_mae"], "val_rmse": epoch_metrics["val_rmse"],
-                                                      "val_r2": val_r2, "val_adjusted_r2": val_adjusted_r2})
+                        write_regression_best_reports(
+                            logs_dir, epoch + 1,
+                            train_paths, train_truth, train_predictions,
+                            val_paths, val_truth, val_predictions,
+                            {"val_loss": epoch_metrics["val_loss"], "val_mse": val_mse,
+                             "val_mae": epoch_metrics["val_mae"], "val_rmse": epoch_metrics["val_rmse"],
+                             "val_r2": val_r2, "val_adjusted_r2": val_adjusted_r2},
+                        )
                 history.append(epoch_metrics)
                 write_history_csv(history, logs_dir / "history.csv")
                 save_metric_curves(history, logs_dir / "metrics_curves.png")

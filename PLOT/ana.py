@@ -97,11 +97,8 @@ def _read_best_csv(path: Path) -> dict[str, float]:
 
 
 def _find_predictions(result_dir: Path) -> Path | None:
-    for name in ("best_predict.csv", "eval_best_predict.csv"):
-        candidate = result_dir / "logs" / name
-        if candidate.is_file():
-            return candidate
-    return None
+    candidate = result_dir / "logs" / "eval_best_predict.csv"
+    return candidate if candidate.is_file() else None
 
 
 def _load_result(result_dir: Path) -> dict:

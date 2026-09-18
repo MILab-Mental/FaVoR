@@ -23,8 +23,8 @@
     metrics_bootstrap.csv         # 逐任务、逐方法、逐指标的 bootstrap 均值/标准差/95% CI
     README.txt                    # 口径说明
 
-取数是**每个任务各自的评测集预测文件**（``logs/best_predict.csv``，回归用
-``logs/eval_best_predict.csv``），不是 ``history.csv``——因为 bootstrap 需要逐样本的
+取数是**每个任务各自的评测集预测文件**（``logs/eval_best_predict.csv``），
+不是 ``history.csv``——因为 bootstrap 需要逐样本的
 预测，而且要保证两个方法比较的是同一批样本。所有指标都在同一条代码路径上重算，
 两个方法口径完全一致，比拿训练时写进 CSV 的数字更可比。
 
@@ -141,8 +141,8 @@ TASK_TYPE_DIR = {
     "multi_label_classification": "multilabel",
     "regression": "regression",
 }
-# 预测文件名，按优先级找；分类/多标签用 best_predict.csv，回归只有 eval_best_predict.csv
-PREDICTION_FILES = ("best_predict.csv", "eval_best_predict.csv")
+# 所有任务统一使用最佳 epoch 的评测集预测。
+PREDICTION_FILES = ("eval_best_predict.csv",)
 
 
 # --------------------------------------------------------------------------------------
@@ -955,8 +955,7 @@ def _readme(tasks: dict[str, Task], count: int, roc_drawn: list[str]) -> str:
         "ana_bench.py 产出说明",
         "",
         f"bootstrap 次数: {count}（非参数重采样，有放回，每次抽满整个评测集）",
-        "采样口径: 每个任务各自评测集的预测文件（分类/多标签 logs/best_predict.csv，"
-        "回归 logs/eval_best_predict.csv）。",
+        "采样口径: 每个任务各自评测集的预测文件（logs/eval_best_predict.csv）。",
         "         所有指标都由 ana_bench.py 在同一条代码路径上从逐样本预测重算，"
         "两个方法完全一致；",
         "         因此数值可能与 history.csv / best.csv 里训练时记下的略有出入"
