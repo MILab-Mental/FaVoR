@@ -215,7 +215,10 @@ GPU；rank 崩溃会立即报错并终止整组，不用再干等 NCCL 默认 60
 
 - `app/pretrain_a` 已接入 AEmo-JEPA：以 emotion2vec_plus_large 初始化 CNN 与 context
   encoder，使用独立 predictor 和 EMA target encoder 做音频 JEPA 继续预训练。默认入口为
-  `CONFIGS/tasks/apretrain/pretrain_a_FaVoR.yaml`。
+  `CONFIGS/tasks/apretrain/pretrain_a_FaVoR.yaml`。rank 0 会输出 `init.pt`、可恢复的
+  `latest.pt`、`train.log`，并在 `logs/history.csv` 按日志周期记录 loss、掩码比例、
+  target 标准差、两组学习率、EMA、梯度范数与吞吐；`logs/metrics_curves.png` 随 checkpoint
+  和训练结束更新。
 - `app/finetune_a` 已支持 `classification`、`regression` 和
   `multi_label_classification`；tasks.json 中全部 33 条任务的音频版本位于
   `CONFIGS/tasks/afinetune/{cls,reg,mlcls}/`。默认兼容读取原 AEmo-JEPA 的

@@ -756,10 +756,10 @@ def init_from_emotion2vec(model, path, cfg):
     model.sync_target_encoder()
 
 
-def save_audio_pretrain_checkpoint(path, *, model, optimizer, step, epoch, args):
+def save_audio_pretrain_checkpoint(path, *, model, optimizer, step, epoch, args, history=None):
     raw = model.module if hasattr(model, "module") else model
     torch.save({
-        "schema_version": 1,
+        "schema_version": 2,
         "modality": "audio",
         "stage": "pretrain",
         "step": int(step),
@@ -768,6 +768,7 @@ def save_audio_pretrain_checkpoint(path, *, model, optimizer, step, epoch, args)
         "target_encoder": raw.target_encoder.state_dict(),
         "predictor": raw.predictor.state_dict(),
         "optimizer": optimizer.state_dict(),
+        "history": list(history or []),
         "args": args,
     }, path)
 

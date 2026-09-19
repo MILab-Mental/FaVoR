@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import logging
 import math
-import os
 import random
+import time
 from pathlib import Path
 
 import numpy as np
@@ -19,6 +19,11 @@ from utils.audio_checkpoint import (
     init_from_emotion2vec,
     restore_audio_pretrain_checkpoint,
     save_audio_pretrain_checkpoint,
+)
+from utils.audio_pretrain_logging import (
+    load_audio_pretrain_history,
+    save_audio_pretrain_curves,
+    write_audio_pretrain_history,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -83,6 +88,72 @@ def _ema_update(target, source, decay):
         target_parameter.data.mul_(decay).add_(source_parameter.data, alpha=1.0 - decay)
 
 
+def _install_file_logger(path, append):
+    path = Path(path).resolve()
+    root = logging.getLogger()
+    for handler in root.handlers:
+        if isinstance(handler, logging.FileHandler) and Path(handler.baseFilename).resolve() == path:
+            return
+    handler = logging.FileHandler(path, mode="a" if append else "w", encoding="utf-8")
+    handler.setFormatter(logging.Formatter(
+        "[%(levelname)-8s][%(asctime)s][%(name)-20s][%(funcName)-25s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    ))
+    root.addHandler(handler)
+
+
+def _learning_rates(optimizer):
+    pretrained = [
+        group["lr"] for group in optimizer.param_groups
+        if str(group.get("group_name", "")).startswith("pretrained")
+    ]
+    new = [
+        group["lr"] for group in optimizer.param_groups
+        if str(group.get("group_name", "")).startswith("new")
+    ]
+    return (
+        float(pretrained[0] if pretrained else optimizer.param_groups[0]["lr"]),
+        float(new[0] if new else optimizer.param_groups[-1]["lr"]),
+    )
+
+
+def _empty_window():
+    return {
+        "loss": 0.0,
+        "context_ratio": 0.0,
+        "target_ratio": 0.0,
+        "pad_ratio": 0.0,
+        "target_std": 0.0,
+        "micro_batches": 0.0,
+        "samples": 0.0,
+        "grad_norm": 0.0,
+        "optimizer_updates": 0.0,
+    }
+
+
+def _reduce_window(window, elapsed, device, distributed, world_size):
+    fields = tuple(window)
+    values = torch.tensor([window[field] for field in fields], dtype=torch.float64, device=device)
+    elapsed_value = torch.tensor(float(elapsed), dtype=torch.float64, device=device)
+    if distributed:
+        dist.all_reduce(values, op=dist.ReduceOp.SUM)
+        dist.all_reduce(elapsed_value, op=dist.ReduceOp.MAX)
+    reduced = dict(zip(fields, values.cpu().tolist()))
+    micro_batches = max(1.0, reduced["micro_batches"])
+    optimizer_updates = max(1.0, reduced["optimizer_updates"] / max(1, world_size))
+    elapsed_seconds = max(1e-12, float(elapsed_value.cpu()))
+    return {
+        "loss": reduced["loss"] / micro_batches,
+        "context_ratio": reduced["context_ratio"] / micro_batches,
+        "target_ratio": reduced["target_ratio"] / micro_batches,
+        "pad_ratio": reduced["pad_ratio"] / micro_batches,
+        "target_std": reduced["target_std"] / micro_batches,
+        "grad_norm": reduced["grad_norm"] / max(1.0, reduced["optimizer_updates"]),
+        "step_time": elapsed_seconds / optimizer_updates,
+        "samples_per_second": reduced["samples"] / elapsed_seconds,
+    }
+
+
 def main(args):
     distributed, rank, world_size = _state()
     is_main = rank == 0
@@ -105,17 +176,23 @@ def main(args):
     if device.type == "cuda":
         torch.cuda.set_device(device)
     folder = Path(args["folder"])
-    if is_main:
-        folder.mkdir(parents=True, exist_ok=True)
-
-    model = build_audio_jepa(model_cfg)
+    logs_dir = folder / "logs"
+    history_path = logs_dir / "history.csv"
+    curves_path = logs_dir / "metrics_curves.png"
     latest_path = folder / "latest.pt"
     explicit_resume = meta.get("read_checkpoint")
     resume_path = Path(explicit_resume) if explicit_resume else None
     if resume_path is None and meta.get("auto_resume", True) and latest_path.is_file():
         resume_path = latest_path
+    if is_main:
+        folder.mkdir(parents=True, exist_ok=True)
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        _install_file_logger(folder / "train.log", append=resume_path is not None)
+
+    model = build_audio_jepa(model_cfg)
 
     step = epoch = 0
+    checkpoint = None
     if resume_path is not None:
         checkpoint = restore_audio_pretrain_checkpoint(resume_path, model, strict=True)
         step = int(checkpoint.get("step", 0))
@@ -130,13 +207,22 @@ def main(args):
         if not distributed or is_main:
             init_from_emotion2vec(model, init_path, model_cfg)
 
+    history = []
+    if is_main:
+        if resume_path is not None:
+            history = load_audio_pretrain_history(history_path, max_step=step)
+            if not history and checkpoint is not None:
+                history = [row for row in checkpoint.get("history", []) if int(row["step"]) <= step]
+        write_audio_pretrain_history(history_path, history)
+
     model.to(device)
     optimizer = _optimizer(model, opt_cfg)
     if resume_path is not None and checkpoint.get("optimizer") is not None:
         optimizer.load_state_dict(checkpoint["optimizer"])
     elif is_main:
         save_audio_pretrain_checkpoint(
-            folder / "init.pt", model=model, optimizer=optimizer, step=0, epoch=0, args=args
+            folder / "init.pt", model=model, optimizer=optimizer, step=0, epoch=0,
+            args=args, history=history,
         )
     if distributed:
         model = DistributedDataParallel(
@@ -150,13 +236,22 @@ def main(args):
     accumulation = int(opt_cfg.get("grad_accum_steps", 1))
     log_every = int(meta.get("log_every_steps", 50))
     save_every = int(meta.get("save_every_steps", 5000))
+    if total_steps < 1:
+        raise ValueError("optimization.total_steps must be at least 1")
+    if accumulation < 1:
+        raise ValueError("optimization.grad_accum_steps must be at least 1")
+    if log_every < 1:
+        raise ValueError("meta.log_every_steps must be at least 1")
+    if save_every < 0:
+        raise ValueError("meta.save_every_steps must be non-negative")
     dtype_name = str(meta.get("dtype", "bfloat16")).lower()
     amp_dtype = torch.bfloat16 if dtype_name == "bfloat16" else torch.float16
     mixed = device.type == "cuda" and dtype_name in {"bfloat16", "float16"}
     scaler = torch.amp.GradScaler("cuda", enabled=mixed and dtype_name == "float16")
     optimizer.zero_grad(set_to_none=True)
-    running_loss = 0.0
     micro_step = 0
+    window = _empty_window()
+    window_started = time.perf_counter()
 
     while step < total_steps:
         sampler.set_epoch(epoch)
@@ -168,12 +263,22 @@ def main(args):
                 loss, logs = model(waveforms, valid_wave_lens=lengths, step=step, total_steps=total_steps)
                 scaled_loss = loss / accumulation
             scaler.scale(scaled_loss).backward()
-            running_loss += float(loss.detach())
+            window["loss"] += float(loss.detach())
+            window["context_ratio"] += float(logs["context_ratio"])
+            window["target_ratio"] += float(logs["target_ratio"])
+            window["pad_ratio"] += float(logs["pad_ratio"])
+            window["target_std"] += float(logs["target_std"])
+            window["micro_batches"] += 1
+            window["samples"] += int(waveforms.shape[0])
             micro_step += 1
             if micro_step % accumulation:
                 continue
             scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), float(opt_cfg.get("clip_grad_norm", 1.0)))
+            grad_norm = torch.nn.utils.clip_grad_norm_(
+                model.parameters(), float(opt_cfg.get("clip_grad_norm", 1.0))
+            )
+            window["grad_norm"] += float(grad_norm.detach())
+            window["optimizer_updates"] += 1
             scaler.step(optimizer)
             scaler.update()
             optimizer.zero_grad(set_to_none=True)
@@ -183,29 +288,52 @@ def main(args):
             decay = float(ema_cfg["start"]) + progress * (float(ema_cfg["end"]) - float(ema_cfg["start"]))
             _ema_update(raw_model.target_encoder.context_encoder, raw_model.encoder.context_encoder, decay)
             step += 1
-            if is_main and (step == 1 or step % log_every == 0):
-                LOGGER.info(
-                    "step=%d/%d loss=%.5f context=%.3f target=%.3f padding=%.3f lr=%.3e ema=%.6f",
-                    step, total_steps, running_loss / (1 if step == 1 else log_every),
-                    float(logs["context_ratio"]), float(logs["target_ratio"]),
-                    float(logs["pad_ratio"]), optimizer.param_groups[0]["lr"], decay,
+            log_due = step == 1 or step % log_every == 0 or step >= total_steps
+            if log_due:
+                summary = _reduce_window(
+                    window, time.perf_counter() - window_started,
+                    device, distributed, world_size,
                 )
-                running_loss = 0.0
+                if is_main:
+                    lr_pretrained, lr_new = _learning_rates(optimizer)
+                    row = {
+                        "step": step,
+                        "epoch": epoch + 1,
+                        **summary,
+                        "lr_pretrained": lr_pretrained,
+                        "lr_new": lr_new,
+                        "ema_decay": decay,
+                    }
+                    history = [item for item in history if int(item["step"]) < step]
+                    history.append(row)
+                    write_audio_pretrain_history(history_path, history)
+                    LOGGER.info(
+                        "step=%d/%d epoch=%d loss=%.5f context=%.3f target=%.3f "
+                        "padding=%.3f target_std=%.4f lr_pretrained=%.3e lr_new=%.3e "
+                        "ema=%.6f grad_norm=%.4f step_time=%.3fs samples/s=%.2f",
+                        step, total_steps, epoch + 1, row["loss"], row["context_ratio"],
+                        row["target_ratio"], row["pad_ratio"], row["target_std"],
+                        row["lr_pretrained"], row["lr_new"], row["ema_decay"],
+                        row["grad_norm"], row["step_time"], row["samples_per_second"],
+                    )
+                window = _empty_window()
+                window_started = time.perf_counter()
             if is_main and save_every > 0 and step % save_every == 0:
                 save_audio_pretrain_checkpoint(
-                    folder / f"s{step}.pt", model=model, optimizer=optimizer, step=step, epoch=epoch, args=args
+                    latest_path, model=model, optimizer=optimizer,
+                    step=step, epoch=epoch, args=args, history=history,
                 )
-                save_audio_pretrain_checkpoint(
-                    latest_path, model=model, optimizer=optimizer, step=step, epoch=epoch, args=args
-                )
+                save_audio_pretrain_curves(history, curves_path)
             if step >= total_steps:
                 break
         epoch += 1
 
     if is_main:
         save_audio_pretrain_checkpoint(
-            latest_path, model=model, optimizer=optimizer, step=step, epoch=epoch, args=args
+            latest_path, model=model, optimizer=optimizer, step=step, epoch=epoch,
+            args=args, history=history,
         )
+        save_audio_pretrain_curves(history, curves_path)
     if distributed:
         dist.barrier()
     return {"latest_checkpoint": latest_path}
