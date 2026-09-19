@@ -303,6 +303,14 @@ flash / memory-efficient attention **没有二阶导**，故该 pass 会临时�
 | `backbone_drop_path` | backbone stochastic-depth 最大概率（各层从 0 线性递增），默认 `0.0` |
 | `classifier_dropout` | attentive pooler 输出与最终 linear 之间的 dropout，默认 `0.0` |
 
+`finetune_v` 的 `optimization` 还可启用 Grokfast EMA 梯度滤波：
+
+| 字段 | 默认 | 说明 |
+|---|---:|---|
+| `grokfast` | `false` | 是否在反向传播与 optimizer step 之间应用 Grokfast |
+| `grokfast_alpha` | `0.98` | 慢梯度 EMA 系数，须位于 `[0, 1)` |
+| `grokfast_lambda` | `2.0` | EMA 慢梯度的放大系数，须非负 |
+
 `model_name` → `out_layers` 对应关系：
 
 | model_name | out_layers |

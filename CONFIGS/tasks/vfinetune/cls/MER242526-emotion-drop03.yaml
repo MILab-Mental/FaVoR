@@ -13,6 +13,10 @@ model:
   backbone_attention_dropout: 0.0
   backbone_drop_path: 0.1
   classifier_dropout: 0.3
+optimization:
+  grokfast: true
+  grokfast_alpha: 0.98
+  grokfast_lambda: 2.0
 yamls:
   data: CONFIGS/datas/vfinetune/cls/MER242526-emotion-cls6.yaml
   sampling: CONFIGS/datas/vfinetune/48-8.yaml

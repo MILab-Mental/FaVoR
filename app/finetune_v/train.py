@@ -21,6 +21,7 @@ from tqdm import tqdm
 from datasets.video_finetune_dataset import make_videodataset_finetune_v
 from datasets.video_transforms import make_finetune_transforms
 from models.finetune_v_model import build_model
+from optimization.grokfast import gradfilter_ema
 from optimization.optimizer import init_ft_opt
 from utils.classification_metrics import (
     classification_metrics,
@@ -100,7 +101,7 @@ def _restore_checkpoint(path, encoder, task_head, optimizer, scaler, scheduler, 
 
 
 def _save_checkpoint(path, epoch, encoder, task_head, optimizer, scaler, scheduler, wd_scheduler,
-                     best_score, history, args):
+                     best_score, history, args, grokfast_grads=None):
     state = {
         "epoch": epoch,
         "encoder": _unwrap(encoder).state_dict(),
@@ -111,6 +112,7 @@ def _save_checkpoint(path, epoch, encoder, task_head, optimizer, scaler, schedul
         "wd_scheduler_step": wd_scheduler._step,
         "best_score": best_score,
         "history": history,
+        "grokfast_grads": grokfast_grads,
         "args": args,
     }
     torch.save(state, path)
@@ -166,6 +168,13 @@ def main(args):
     final_lr = cfgs_opt["final_lr"]
     betas = cfgs_opt.get("betas", (0.9, 0.999))
     eps = cfgs_opt.get("eps", 1.0e-8)
+    grokfast_enabled = bool(cfgs_opt.get("grokfast", False))
+    grokfast_alpha = float(cfgs_opt.get("grokfast_alpha", 0.98))
+    grokfast_lambda = float(cfgs_opt.get("grokfast_lambda", 2.0))
+    if not 0.0 <= grokfast_alpha < 1.0:
+        raise ValueError("optimization.grokfast_alpha must be in [0, 1)")
+    if grokfast_lambda < 0.0:
+        raise ValueError("optimization.grokfast_lambda must be non-negative")
     frozen_encoder = cfgs_meta.get("frozen_encoder", False)
 
     # -- MODEL
@@ -323,15 +332,22 @@ def main(args):
             backbone_dropout, backbone_attention_dropout,
             backbone_drop_path, classifier_dropout,
         )
+        LOGGER.info(
+            "Grokfast: enabled=%s alpha=%.4f lambda=%.4f",
+            grokfast_enabled, grokfast_alpha, grokfast_lambda,
+        )
 
     latest_path = folder / "latest.pt"
     higher_is_better = task in {"classification", "multi_label_classification"}
     start_epoch, best_score, history = 0, float("-inf") if higher_is_better else float("inf"), []
+    grokfast_grads = None
     if cfgs_meta.get("load_checkpoint", True) and latest_path.is_file() and not cfgs_meta.get("reset_epoch", False):
         checkpoint = _restore_checkpoint(latest_path, encoder, task_head, optimizer, scaler, scheduler, wd_scheduler)
         start_epoch = int(checkpoint["epoch"])
         best_score = float(checkpoint.get("best_score", best_score))
         history = checkpoint.get("history", [])
+        if grokfast_enabled:
+            grokfast_grads = checkpoint.get("grokfast_grads")
         if is_main:
             LOGGER.info("Resumed fine-tuning checkpoint %s at epoch %d", latest_path, start_epoch)
     elif (logs_dir / "history.csv").is_file():
@@ -420,10 +436,20 @@ def main(args):
                 loss = criterion(outputs if higher_is_better else outputs.squeeze(-1), labels)
             if scaler is not None:
                 scaler.scale(loss).backward()
+                scaler.unscale_(optimizer)
+            else:
+                loss.backward()
+            if grokfast_enabled:
+                grokfast_grads = gradfilter_ema(
+                    {"encoder": _unwrap(encoder), "task_head": _unwrap(task_head)},
+                    grads=grokfast_grads,
+                    alpha=grokfast_alpha,
+                    lamb=grokfast_lambda,
+                )
+            if scaler is not None:
                 scaler.step(optimizer)
                 scaler.update()
             else:
-                loss.backward()
                 optimizer.step()
             scheduler.step()
             wd_scheduler.step()
@@ -542,7 +568,8 @@ def main(args):
                 if improved:
                     best_score = score
                     _save_checkpoint(folder / "best.pt", epoch + 1, encoder, task_head, optimizer, scaler,
-                                     scheduler, wd_scheduler, best_score, history, args)
+                                     scheduler, wd_scheduler, best_score, history, args,
+                                     grokfast_grads=grokfast_grads)
                 if task == "classification":
                     LOGGER.info(
                         "epoch=%d train_loss=%.4f val_loss=%.4f train_acc=%.4f val_acc=%.4f train_f1=%.4f val_f1=%.4f best=%.4f",
@@ -575,10 +602,12 @@ def main(args):
 
         if is_main:
             _save_checkpoint(latest_path, epoch + 1, encoder, task_head, optimizer, scaler, scheduler,
-                             wd_scheduler, best_score, history, args)
+                             wd_scheduler, best_score, history, args,
+                             grokfast_grads=grokfast_grads)
             if save_every_freq > 0 and (epoch + 1) % save_every_freq == 0:
                 _save_checkpoint(folder / f"e{epoch + 1}.pt", epoch + 1, encoder, task_head,
-                                 optimizer, scaler, scheduler, wd_scheduler, best_score, history, args)
+                                 optimizer, scaler, scheduler, wd_scheduler, best_score, history, args,
+                                 grokfast_grads=grokfast_grads)
         if distributed:
             dist.barrier()
 
