@@ -7,7 +7,7 @@ data:
   min_process_seconds: 2.0
   max_process_seconds: 4.0
   samples_per_audio: 8
-  batch_size: 32
+  batch_size: 16
   num_workers: 8
   persistent_workers: true
   pin_mem: false

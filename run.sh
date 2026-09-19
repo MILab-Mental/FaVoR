@@ -27,21 +27,21 @@ torchrun --master_port 12354 --nproc_per_node=2 -m app.main --fname CONFIGS/task
 #   folder               -> 任务同名目录下的 FaVoR-112px-48f-8fps-vjepaori/
 # 写法说明见 CONFIGS/README.md 10.1；单任务先例见
 # CONFIGS/tasks/vfinetune/cls/RAVDESS-emotion/vjepa.yaml
-torchrun --master_port 12345 --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/cls/CREMA-D-emotion.yaml --set meta.read_checkpoint=/home/data/sdc/FAVOR/CKPT/vjepa2/vitl.pt folder=/home/data/sdc/FAVOR/OUTPUT/finetune_v/vitl16/CREMA-D-emotion/FaVoR-112px-48f-8fps-vjepaori
-torchrun --master_port 12347 --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/cls/EmotionTalk-emotion.yaml --set meta.read_checkpoint=/home/data/sdc/FAVOR/CKPT/vjepa2/vitl.pt folder=/home/data/sdc/FAVOR/OUTPUT/finetune_v/vitl16/EmotionTalk-emotion/FaVoR-112px-48f-8fps-vjepaori
-torchrun --master_port 12350 --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/cls/IEMOCAP-emotion.yaml --set meta.read_checkpoint=/home/data/sdc/FAVOR/CKPT/vjepa2/vitl.pt folder=/home/data/sdc/FAVOR/OUTPUT/finetune_v/vitl16/IEMOCAP-emotion/FaVoR-112px-48f-8fps-vjepaori
-torchrun --master_port 12352 --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/cls/MER2023-emotion.yaml --set meta.read_checkpoint=/home/data/sdc/FAVOR/CKPT/vjepa2/vitl.pt folder=/home/data/sdc/FAVOR/OUTPUT/finetune_v/vitl16/MER2023-emotion/FaVoR-112px-48f-8fps-vjepaori
-torchrun --master_port 12355 --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/cls/MER242526-emotion.yaml --set meta.read_checkpoint=/home/data/sdc/FAVOR/CKPT/vjepa2/vitl.pt folder=/home/data/sdc/FAVOR/OUTPUT/finetune_v/vitl16/MER242526-emotion/FaVoR-112px-48f-8fps-vjepaori
-torchrun --master_port 12357 --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/cls/RAVDESS-emotion.yaml --set meta.read_checkpoint=/home/data/sdc/FAVOR/CKPT/vjepa2/vitl.pt folder=/home/data/sdc/FAVOR/OUTPUT/finetune_v/vitl16/RAVDESS-emotion/FaVoR-112px-48f-8fps-vjepaori
-torchrun --master_port 12358 --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/cls/RAVDESS-intensity.yaml --set meta.read_checkpoint=/home/data/sdc/FAVOR/CKPT/vjepa2/vitl.pt folder=/home/data/sdc/FAVOR/OUTPUT/finetune_v/vitl16/RAVDESS-intensity/FaVoR-112px-48f-8fps-vjepaori
-torchrun --master_port 12344 --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/reg/AVEC2014-PHQ.yaml --set meta.read_checkpoint=/home/data/sdc/FAVOR/CKPT/vjepa2/vitl.pt folder=/home/data/sdc/FAVOR/OUTPUT/finetune_v/vitl16/AVEC2014-PHQ/FaVoR-112px-48f-8fps-vjepaori
-torchrun --master_port 12346 --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/reg/CREMA-D-intensity.yaml --set meta.read_checkpoint=/home/data/sdc/FAVOR/CKPT/vjepa2/vitl.pt folder=/home/data/sdc/FAVOR/OUTPUT/finetune_v/vitl16/CREMA-D-intensity/FaVoR-112px-48f-8fps-vjepaori
-torchrun --master_port 12348 --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/reg/IEMOCAP-activation.yaml --set meta.read_checkpoint=/home/data/sdc/FAVOR/CKPT/vjepa2/vitl.pt folder=/home/data/sdc/FAVOR/OUTPUT/finetune_v/vitl16/IEMOCAP-activation/FaVoR-112px-48f-8fps-vjepaori
-torchrun --master_port 12349 --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/reg/IEMOCAP-dominance.yaml --set meta.read_checkpoint=/home/data/sdc/FAVOR/CKPT/vjepa2/vitl.pt folder=/home/data/sdc/FAVOR/OUTPUT/finetune_v/vitl16/IEMOCAP-dominance/FaVoR-112px-48f-8fps-vjepaori
-torchrun --master_port 12351 --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/reg/IEMOCAP-valence.yaml --set meta.read_checkpoint=/home/data/sdc/FAVOR/CKPT/vjepa2/vitl.pt folder=/home/data/sdc/FAVOR/OUTPUT/finetune_v/vitl16/IEMOCAP-valence/FaVoR-112px-48f-8fps-vjepaori
-torchrun --master_port 12353 --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/reg/MER2023-pos_intensity.yaml --set meta.read_checkpoint=/home/data/sdc/FAVOR/CKPT/vjepa2/vitl.pt folder=/home/data/sdc/FAVOR/OUTPUT/finetune_v/vitl16/MER2023-pos_intensity/FaVoR-112px-48f-8fps-vjepaori
-torchrun --master_port 12356 --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/reg/MER242526-pos_intensity.yaml --set meta.read_checkpoint=/home/data/sdc/FAVOR/CKPT/vjepa2/vitl.pt folder=/home/data/sdc/FAVOR/OUTPUT/finetune_v/vitl16/MER242526-pos_intensity/FaVoR-112px-48f-8fps-vjepaori
-torchrun --master_port 12354 --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/mlcls/MER242526-26openset.yaml --set meta.read_checkpoint=/home/data/sdc/FAVOR/CKPT/vjepa2/vitl.pt folder=/home/data/sdc/FAVOR/OUTPUT/finetune_v/vitl16/MER242526-26openset/FaVoR-112px-48f-8fps-vjepaori
+torchrun --master_port 12345 --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/cls/CREMA-D-emotion.yaml --set meta.read_checkpoint=CKPT/vjepa2/vitl.pt folder=OUTPUT/finetune_v/vitl16/CREMA-D-emotion/FaVoR-112px-48f-8fps-vjepaori
+torchrun --master_port 12347 --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/cls/EmotionTalk-emotion.yaml --set meta.read_checkpoint=CKPT/vjepa2/vitl.pt folder=OUTPUT/finetune_v/vitl16/EmotionTalk-emotion/FaVoR-112px-48f-8fps-vjepaori
+torchrun --master_port 12350 --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/cls/IEMOCAP-emotion.yaml --set meta.read_checkpoint=CKPT/vjepa2/vitl.pt folder=OUTPUT/finetune_v/vitl16/IEMOCAP-emotion/FaVoR-112px-48f-8fps-vjepaori
+torchrun --master_port 12352 --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/cls/MER2023-emotion.yaml --set meta.read_checkpoint=CKPT/vjepa2/vitl.pt folder=OUTPUT/finetune_v/vitl16/MER2023-emotion/FaVoR-112px-48f-8fps-vjepaori
+torchrun --master_port 12355 --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/cls/MER242526-emotion.yaml --set meta.read_checkpoint=CKPT/vjepa2/vitl.pt folder=OUTPUT/finetune_v/vitl16/MER242526-emotion/FaVoR-112px-48f-8fps-vjepaori
+torchrun --master_port 12357 --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/cls/RAVDESS-emotion.yaml --set meta.read_checkpoint=CKPT/vjepa2/vitl.pt folder=OUTPUT/finetune_v/vitl16/RAVDESS-emotion/FaVoR-112px-48f-8fps-vjepaori
+torchrun --master_port 12358 --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/cls/RAVDESS-intensity.yaml --set meta.read_checkpoint=CKPT/vjepa2/vitl.pt folder=OUTPUT/finetune_v/vitl16/RAVDESS-intensity/FaVoR-112px-48f-8fps-vjepaori
+torchrun --master_port 12344 --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/reg/AVEC2014-PHQ.yaml --set meta.read_checkpoint=CKPT/vjepa2/vitl.pt folder=OUTPUT/finetune_v/vitl16/AVEC2014-PHQ/FaVoR-112px-48f-8fps-vjepaori
+torchrun --master_port 12346 --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/reg/CREMA-D-intensity.yaml --set meta.read_checkpoint=CKPT/vjepa2/vitl.pt folder=OUTPUT/finetune_v/vitl16/CREMA-D-intensity/FaVoR-112px-48f-8fps-vjepaori
+torchrun --master_port 12348 --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/reg/IEMOCAP-activation.yaml --set meta.read_checkpoint=CKPT/vjepa2/vitl.pt folder=OUTPUT/finetune_v/vitl16/IEMOCAP-activation/FaVoR-112px-48f-8fps-vjepaori
+torchrun --master_port 12349 --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/reg/IEMOCAP-dominance.yaml --set meta.read_checkpoint=CKPT/vjepa2/vitl.pt folder=OUTPUT/finetune_v/vitl16/IEMOCAP-dominance/FaVoR-112px-48f-8fps-vjepaori
+torchrun --master_port 12351 --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/reg/IEMOCAP-valence.yaml --set meta.read_checkpoint=CKPT/vjepa2/vitl.pt folder=OUTPUT/finetune_v/vitl16/IEMOCAP-valence/FaVoR-112px-48f-8fps-vjepaori
+torchrun --master_port 12353 --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/reg/MER2023-pos_intensity.yaml --set meta.read_checkpoint=CKPT/vjepa2/vitl.pt folder=OUTPUT/finetune_v/vitl16/MER2023-pos_intensity/FaVoR-112px-48f-8fps-vjepaori
+torchrun --master_port 12356 --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/reg/MER242526-pos_intensity.yaml --set meta.read_checkpoint=CKPT/vjepa2/vitl.pt folder=OUTPUT/finetune_v/vitl16/MER242526-pos_intensity/FaVoR-112px-48f-8fps-vjepaori
+torchrun --master_port 12354 --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/mlcls/MER242526-26openset.yaml --set meta.read_checkpoint=CKPT/vjepa2/vitl.pt folder=OUTPUT/finetune_v/vitl16/MER242526-26openset/FaVoR-112px-48f-8fps-vjepaori
 
 python PLOT/pca.py --ckpt OUTPUT/pretrain_v/vitl16/FaVoR-112px-64f16-rankme/best_rankme.pt
 
@@ -137,8 +137,9 @@ favor-e5-23out-data48-8-newnewopt
   best loss: 1.4165 @ epoch 6 
 
 
-torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/afinetune/cls/IEMOCAP-emotion.yaml --set  meta.read_checkpoint=/home/data/sdc/FAVOR/CKPT/emotion2vec_plus_large/model.pt    folder=/home/data/sdc/FAVOR/OUTPUT/finetune_a/emotion2vec-plus-large/IEMOCAP-emotion
+torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/afinetune/cls/IEMOCAP-emotion.yaml --set  meta.read_checkpoint=CKPT/emotion2vec_plus_large/model.pt    folder=OUTPUT/finetune_a/IEMOCAP-emotion/emotion2vec-plus-large
 
+torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/afinetune/cls/IEMOCAP-emotion.yaml --set  meta.read_checkpoint=OUTPUT/pretrain_a/emotion_jepa_full_dataset/checkpoint_final.pt folder=OUTPUT/finetune_a/IEMOCAP-emotion/favor-a-lxc-final
 
 
 

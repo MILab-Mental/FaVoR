@@ -1,9 +1,9 @@
 app: pretrain_a
-folder: /home/data/sdc/FAVOR/OUTPUT/pretrain_a/aemojepa-plus-large/FaVoR-2to4s
+folder: OUTPUT/pretrain_a/aemojepa-plus-large/FaVoR-2to4s
 meta:
   dtype: bfloat16
   seed: 42
-  init_checkpoint: /home/data/sdc/lxc/audio-pretrain/AEmo-JEPA/pretrained/emotion2vec_plus_large/model.pt
+  init_checkpoint: CKPT/emotion2vec_plus_large/model.pt
   read_checkpoint: null
   auto_resume: true
   save_every_steps: 5000
