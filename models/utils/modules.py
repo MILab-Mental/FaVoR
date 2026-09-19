@@ -89,12 +89,14 @@ class SwiGLUFFN(nn.Module):
         self.fc2 = nn.Linear(in_features, swiglu_hidden_features)
         self.act = act_layer()
         self.fc3 = nn.Linear(swiglu_hidden_features, out_features)
+        self.drop = nn.Dropout(drop)
 
     def forward(self, x):
         x1 = self.fc1(x)
         x2 = self.fc2(x)
         hidden = F.silu(x1) * x2
-        return self.fc3(hidden)
+        hidden = self.drop(hidden)
+        return self.drop(self.fc3(hidden))
 
 
 class RoPEAttention(nn.Module):
@@ -206,7 +208,10 @@ class RoPEAttention(nn.Module):
         if attn_mask is not None or self.use_sdpa:
             with torch.backends.cuda.sdp_kernel():
                 x = F.scaled_dot_product_attention(
-                    q, k, v, dropout_p=self.proj_drop_prob, is_causal=self.is_causal, attn_mask=attn_mask
+                    q, k, v,
+                    dropout_p=self.attn_drop.p if self.training else 0.0,
+                    is_causal=self.is_causal,
+                    attn_mask=attn_mask,
                 )
                 attn = None
         else:
@@ -253,7 +258,10 @@ class Attention(nn.Module):
         if attn_mask is not None or self.use_sdpa:
             with torch.backends.cuda.sdp_kernel():
                 x = F.scaled_dot_product_attention(
-                    q, k, v, dropout_p=self.proj_drop_prob, is_causal=self.is_causal, attn_mask=attn_mask
+                    q, k, v,
+                    dropout_p=self.attn_drop.p if self.training else 0.0,
+                    is_causal=self.is_causal,
+                    attn_mask=attn_mask,
                 )
                 attn = None
         else:

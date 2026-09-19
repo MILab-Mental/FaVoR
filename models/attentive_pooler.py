@@ -115,6 +115,7 @@ class AttentiveClassifier(nn.Module):
         num_classes=1000,
         complete_block=True,
         use_activation_checkpointing=False,
+        dropout=0.0,
     ):
         super().__init__()
         self.pooler = AttentivePooler(
@@ -129,9 +130,11 @@ class AttentiveClassifier(nn.Module):
             complete_block=complete_block,
             use_activation_checkpointing=use_activation_checkpointing,
         )
+        self.dropout = nn.Dropout(dropout)
         self.linear = nn.Linear(embed_dim, num_classes, bias=True)
 
     def forward(self, x):
         x = self.pooler(x).squeeze(1)
+        x = self.dropout(x)
         x = self.linear(x)
         return x

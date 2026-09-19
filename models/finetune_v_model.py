@@ -123,6 +123,10 @@ def build_model(
     use_sdpa=False,
     use_silu=False,
     wide_silu=True,
+    backbone_dropout=0.0,
+    backbone_attention_dropout=0.0,
+    backbone_drop_path=0.0,
+    classifier_dropout=0.0,
 ):
     """Build a fine-tuning encoder and task head from configuration values.
 
@@ -138,6 +142,15 @@ def build_model(
         raise ValueError(f"{task} requires data.num_class to be an integer of at least 2.")
     if not isinstance(out_layers, (list, tuple)) or not out_layers:
         raise ValueError("model.out_layers must be a non-empty list of transformer block indices")
+    regularization = {
+        "backbone_dropout": float(backbone_dropout),
+        "backbone_attention_dropout": float(backbone_attention_dropout),
+        "backbone_drop_path": float(backbone_drop_path),
+        "classifier_dropout": float(classifier_dropout),
+    }
+    invalid = {name: value for name, value in regularization.items() if not 0.0 <= value < 1.0}
+    if invalid:
+        raise ValueError(f"Video dropout probabilities must be in [0, 1), got {invalid}")
 
     try:
         backbone_factory = vit.__dict__[model_name]
@@ -156,6 +169,9 @@ def build_model(
         use_rope=use_rope,
         wide_silu=wide_silu,
         out_layers=out_layers,
+        drop_rate=regularization["backbone_dropout"],
+        attn_drop_rate=regularization["backbone_attention_dropout"],
+        drop_path_rate=regularization["backbone_drop_path"],
     )
     checkpoint = load_backbone(backbone, checkpoint_path)
     encoder = ClipEncoder(backbone)
@@ -164,6 +180,7 @@ def build_model(
         num_heads=classifier_num_heads or backbone.num_heads,
         depth=classifier_depth,
         use_activation_checkpointing=use_activation_checkpointing,
+        dropout=regularization["classifier_dropout"],
     )
     if task in {"classification", "multi_label_classification"}:
         # Multi-label reuses the same logit head; sigmoid + BCE is applied in the loss.

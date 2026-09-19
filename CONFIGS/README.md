@@ -298,6 +298,10 @@ flash / memory-efficient attention **没有二阶导**，故该 pass 会临时�
 | `uniform_power` / `use_rope` / `use_sdpa` / `use_silu` / `wide_silu` / `use_activation_checkpointing` | 同预训练 |
 | `out_layers` | 取哪些 transformer block 输出做多层级聚合（`ClipEncoder`） |
 | `classifier_depth` / `classifier_num_heads` | 分类 / 回归头（`AttentiveClassifier`/`AttentiveRegressor`）深度与头数 |
+| `backbone_dropout` | backbone attention 输出投影与 MLP dropout，默认 `0.0` |
+| `backbone_attention_dropout` | backbone attention probability dropout，默认 `0.0` |
+| `backbone_drop_path` | backbone stochastic-depth 最大概率（各层从 0 线性递增），默认 `0.0` |
+| `classifier_dropout` | attentive pooler 输出与最终 linear 之间的 dropout，默认 `0.0` |
 
 `model_name` → `out_layers` 对应关系：
 

@@ -180,6 +180,10 @@ def main(args):
     out_layers = cfgs_model.get("out_layers")
     classifier_depth = cfgs_model.get("classifier_depth", 1)
     classifier_num_heads = cfgs_model.get("classifier_num_heads")
+    backbone_dropout = float(cfgs_model.get("backbone_dropout", 0.0))
+    backbone_attention_dropout = float(cfgs_model.get("backbone_attention_dropout", 0.0))
+    backbone_drop_path = float(cfgs_model.get("backbone_drop_path", 0.0))
+    classifier_dropout = float(cfgs_model.get("classifier_dropout", 0.0))
 
     # -- DATA
     cfgs_data = args.get("data", {})
@@ -279,6 +283,10 @@ def main(args):
         use_sdpa=use_sdpa,
         use_silu=use_silu,
         wide_silu=wide_silu,
+        backbone_dropout=backbone_dropout,
+        backbone_attention_dropout=backbone_attention_dropout,
+        backbone_drop_path=backbone_drop_path,
+        classifier_dropout=classifier_dropout,
     )
     encoder.to(device)
     task_head.to(device)
@@ -308,6 +316,12 @@ def main(args):
             (backbone_total + head_total) / 1e6, (backbone_trainable + head_trainable) / 1e6,
             backbone_total / 1e6, backbone_trainable / 1e6,
             head_total / 1e6, head_trainable / 1e6,
+        )
+        LOGGER.info(
+            "Model regularization: backbone_dropout=%.3f backbone_attention_dropout=%.3f "
+            "backbone_drop_path=%.3f classifier_dropout=%.3f",
+            backbone_dropout, backbone_attention_dropout,
+            backbone_drop_path, classifier_dropout,
         )
 
     latest_path = folder / "latest.pt"
