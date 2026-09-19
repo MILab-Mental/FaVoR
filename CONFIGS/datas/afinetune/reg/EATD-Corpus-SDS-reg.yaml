@@ -1,7 +1,7 @@
 # 3_EATD-Corpus_SA.csv :: SDS :: regression
 data:
   datasets:
-    - /home/data/sdc/FAVOR/DATASET/splits-0901/3_EATD-Corpus_SA.csv
+    - DATASET/splits-0901/3_EATD-Corpus_SA.csv
   rootpaths:
     - /home/data/sdb/基座模型数据集/3心理数据集/EATD-Corpus/
   task: regression

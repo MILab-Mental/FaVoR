@@ -1,15 +1,15 @@
 app: finetune_a
-folder: /home/data/sdc/FAVOR/OUTPUT/finetune_a/emotion2vec-plus-large/IEMOCAP-emotion
+folder: OUTPUT/finetune_a/emotion2vec-plus-large/IEMOCAP-emotion
 meta:
   dtype: bfloat16
   load_checkpoint: true
-  read_checkpoint: /home/data/sdc/FAVOR/CKPT/emotion2vec_plus_large/model.pt
+  read_checkpoint: CKPT/emotion2vec_plus_large/model.pt
   reset_epoch: true
   seed: 239
   frozen_encoder: false
   min_load_ratio: 0.95
 yamls:
-  data: /home/data/sdc/FAVOR/CONFIGS/datas/afinetune/cls/IEMOCAP-emotion-cls9.yaml
-  sampling: /home/data/sdc/FAVOR/CONFIGS/datas/afinetune/audio-4s-4clips.yaml
-  opt: /home/data/sdc/FAVOR/CONFIGS/opt/afinetune-opt-30.yaml
-  model: /home/data/sdc/FAVOR/CONFIGS/models/afinetune-emotion2vec-plus-large.yaml
+  data: CONFIGS/datas/afinetune/cls/IEMOCAP-emotion-cls9.yaml
+  sampling: CONFIGS/datas/afinetune/audio-4s-4clips.yaml
+  opt: CONFIGS/opt/afinetune-opt-30.yaml
+  model: CONFIGS/models/afinetune-emotion2vec-plus-large.yaml

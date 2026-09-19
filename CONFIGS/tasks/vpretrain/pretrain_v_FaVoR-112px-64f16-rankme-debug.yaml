@@ -12,12 +12,12 @@
 #       完整落盘与 RankMe / Hessian 计算在真实 vit-l + DDP 下无崩溃。
 #       正式训练请用 pretrain_v_FaVoR-112px-64f16-rankme.yaml。
 app: pretrain_v
-folder: /home/data/sdc/FAVOR/OUTPUT/pretrain_v/vitl16/FaVoR-112px-64f16-rankme-debug
+folder: OUTPUT/pretrain_v/vitl16/FaVoR-112px-64f16-rankme-debug
 meta:
   dtype: bfloat16
   eval_freq: 1
   load_checkpoint: true
-  read_checkpoint: /home/data/sdc/FAVOR/CKPT/vjepa2/vitl.pt
+  read_checkpoint: CKPT/vjepa2/vitl.pt
   reset_epoch: true
   save_every_freq: 5
   seed: 239
@@ -39,7 +39,7 @@ optimization:
   epochs: 2
   warmup: 1
 yamls:
-  data: /home/data/sdc/FAVOR/CONFIGS/datas/vpretrain/vpretrain-data-64-16.yaml
-  opt: /home/data/sdc/FAVOR/CONFIGS/opt/vpretrain-opt-s5000-150-40.yaml
-  model: /home/data/sdc/FAVOR/CONFIGS/models/vpretrain-vit-l.yaml
-  mask: /home/data/sdc/FAVOR/CONFIGS/mask_loss/vjepa-pretrain.yaml
+  data: CONFIGS/datas/vpretrain/vpretrain-data-64-16.yaml
+  opt: CONFIGS/opt/vpretrain-opt-s5000-150-40.yaml
+  model: CONFIGS/models/vpretrain-vit-l.yaml
+  mask: CONFIGS/mask_loss/vjepa-pretrain.yaml

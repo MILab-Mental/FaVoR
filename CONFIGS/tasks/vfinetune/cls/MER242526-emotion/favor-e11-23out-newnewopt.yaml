@@ -1,17 +1,17 @@
 app: finetune_v
-folder: /home/data/sdc/FAVOR/OUTPUT/finetune_v/vitl16/MER242526-emotion/favor-e11-23out-newnewopt/
+folder: OUTPUT/finetune_v/vitl16/MER242526-emotion/favor-e11-23out-newnewopt/
 meta:
   dtype: bfloat16
   eval_freq: 1
   load_checkpoint: true
-  # read_checkpoint: /home/data/sdc/vjepa2/outputs/videos_all/e35.pt
-  read_checkpoint: /home/data/sdc/FAVOR/OUTPUT/pretrain_v/vitl16/FaVoR-112px-48f/latest.pt
+  # read_checkpoint: OUTPUT/pretrain_v/vitl16/videos_all/e35.pt
+  read_checkpoint: OUTPUT/pretrain_v/vitl16/FaVoR-112px-48f/latest.pt
   reset_epoch: true
   save_every_freq: 100
   seed: 239
   # frozen_encoder: true
 yamls:
-  data: /home/data/sdc/FAVOR/CONFIGS/datas/vfinetune/cls/MER242526-emotion-cls6.yaml
-  sampling: /home/data/sdc/FAVOR/CONFIGS/datas/vfinetune/48-4.yaml
-  opt: /home/data/sdc/FAVOR/CONFIGS/opt/vfinetune-opt-80-5-5e-5.yaml
-  model: /home/data/sdc/FAVOR/CONFIGS/models/vfinetune-vit-l.yaml
+  data: CONFIGS/datas/vfinetune/cls/MER242526-emotion-cls6.yaml
+  sampling: CONFIGS/datas/vfinetune/48-4.yaml
+  opt: CONFIGS/opt/vfinetune-opt-80-5-5e-5.yaml
+  model: CONFIGS/models/vfinetune-vit-l.yaml

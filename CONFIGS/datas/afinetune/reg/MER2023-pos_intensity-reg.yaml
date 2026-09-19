@@ -1,7 +1,7 @@
 # 2_MER2023_SV.csv :: pos_intensity :: regression
 data:
   datasets:
-    - /home/data/sdc/FAVOR/DATASET/splits-0901/2_MER2023_SV.csv
+    - DATASET/splits-0901/2_MER2023_SV.csv
   rootpaths:
     - /home/data/sdc/MER/MER2023/
   task: regression

@@ -75,11 +75,19 @@ CONFIGS/
 
 ```yaml
 yamls:
-  data:     /home/data/sdc/FAVOR/CONFIGS/datas/vfinetune/cls/CREMA-D-emotion-cls6.yaml
-  sampling: /home/data/sdc/FAVOR/CONFIGS/datas/vfinetune/48-8.yaml
-  opt:      /home/data/sdc/FAVOR/CONFIGS/opt/vfinetune-opt-80-5-5e-5.yaml
-  model:    /home/data/sdc/FAVOR/CONFIGS/models/vfinetune-vit-l-4layer.yaml
+  data:     CONFIGS/datas/vfinetune/cls/CREMA-D-emotion-cls6.yaml
+  sampling: CONFIGS/datas/vfinetune/48-8.yaml
+  opt:      CONFIGS/opt/vfinetune-opt-80-5-5e-5.yaml
+  model:    CONFIGS/models/vfinetune-vit-l-4layer.yaml
 ```
+
+`yamls` 路径支持三种形式：
+
+- `CONFIGS/...`：相对于仓库根目录，推荐写法，不依赖入口 YAML 的目录深度；
+- `../../../datas/...`：相对于入口 YAML 所在目录，保留兼容；
+- `/absolute/path/...`：绝对路径，保留兼容。
+
+若相对路径不存在，启动时的 `FileNotFoundError` 会列出所有尝试过的完整路径。
 
 `data` 与 `sampling` 都指向 `datas/` 片段、都写进合并结果的同一个 `data` 顶层键，但两者的键集
 **互不重叠**（数据集标识 vs 采样参数），因此谁先谁后都不影响结果。`sampling` 是可换的旋钮：
@@ -112,21 +120,21 @@ yamls:
 
 ```yaml
 app: finetune_v
-folder: /home/data/sdc/FAVOR/OUTPUT/finetune_v/.../RAVDESS-emotion/
+folder: OUTPUT/finetune_v/.../RAVDESS-emotion/
 meta:
   dtype: bfloat16
   eval_freq: 1
   load_checkpoint: true
-  read_checkpoint: /home/data/sdc/FAVOR/OUTPUT/pretrain_v/.../latest.pt
+  read_checkpoint: OUTPUT/pretrain_v/.../latest.pt
   reset_epoch: true
   save_every_freq: 10
   seed: 239
   frozen_encoder: true          # 现已统一注释掉，见第 8 节
 yamls:
-  data: /home/data/sdc/FAVOR/CONFIGS/datas/vfinetune/cls/RAVDESS-emotion-cls8.yaml
-  sampling: /home/data/sdc/FAVOR/CONFIGS/datas/vfinetune/48-8.yaml
-  opt: /home/data/sdc/FAVOR/CONFIGS/opt/vfinetune-opt-250-40.yaml
-  model: /home/data/sdc/FAVOR/CONFIGS/models/vfinetune-vit-l.yaml
+  data: CONFIGS/datas/vfinetune/cls/RAVDESS-emotion-cls8.yaml
+  sampling: CONFIGS/datas/vfinetune/48-8.yaml
+  opt: CONFIGS/opt/vfinetune-opt-250-40.yaml
+  model: CONFIGS/models/vfinetune-vit-l.yaml
 ```
 
 ### 3.1 `meta` 字段
@@ -481,13 +489,13 @@ python -m app.main --fname CONFIGS/test-finetune.yaml --devices cuda:0 --debugmo
 # 同一个入口跑两组对比：只换输出目录与预训练 ckpt
 torchrun --nproc_per_node=2 -m app.main \
   --fname CONFIGS/tasks/vfinetune/cls/RAVDESS-emotion.yaml --devices cuda:0 cuda:1 \
-  --set folder=/home/data/sdc/FAVOR/OUTPUT/finetune_v/vitl16/RAVDESS-emotion/e5 \
-        meta.read_checkpoint=/home/data/sdc/FAVOR/OUTPUT/pretrain_v/vitl16/FaVoR-112px-48f/e5.pt
+  --set folder=OUTPUT/finetune_v/vitl16/RAVDESS-emotion/e5 \
+        meta.read_checkpoint=OUTPUT/pretrain_v/vitl16/FaVoR-112px-48f/e5.pt
 
 torchrun --nproc_per_node=2 -m app.main \
   --fname CONFIGS/tasks/vfinetune/cls/RAVDESS-emotion.yaml --devices cuda:0 cuda:1 \
-  --set folder=/home/data/sdc/FAVOR/OUTPUT/finetune_v/vitl16/RAVDESS-emotion/e11 \
-        meta.read_checkpoint=/home/data/sdc/FAVOR/OUTPUT/pretrain_v/vitl16/FaVoR-112px-48f/e11.pt
+  --set folder=OUTPUT/finetune_v/vitl16/RAVDESS-emotion/e11 \
+        meta.read_checkpoint=OUTPUT/pretrain_v/vitl16/FaVoR-112px-48f/e11.pt
 ```
 
 规则：

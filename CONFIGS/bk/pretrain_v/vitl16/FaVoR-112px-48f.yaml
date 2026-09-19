@@ -3,11 +3,11 @@ nodes: 1
 tasks_per_node: 2
 cpus_per_task: 16
 mem_per_gpu: 90G
-folder: /home/data/sdc/FAVOR/OUTPUT/pretrain_v/vitl16/FaVoR-112px-48f
+folder: OUTPUT/pretrain_v/vitl16/FaVoR-112px-48f
 data:
   dataset_type: VideoDataset
   datasets:
-  - /home/data/sdc/FAVOR/DATASET/merged/pretrain_facevideos_0831.csv
+  - DATASET/merged/pretrain_facevideos_0831.csv
   datasets_weights:
   - 1
   # Per-rank smoke-test batch.  Keep this small while both GPUs are shared;
@@ -65,7 +65,7 @@ meta:
   dtype: bfloat16
   eval_freq: 1
   load_checkpoint: true
-  read_checkpoint: /home/data/sdc/FAVOR/CKPT/vjepa2/vitl.pt
+  read_checkpoint: CKPT/vjepa2/vitl.pt
   reset_epoch: true
   save_every_freq: 5
   seed: 239

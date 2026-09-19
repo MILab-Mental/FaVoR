@@ -4,7 +4,7 @@
 #   文件名原始编码（01=normal / 02=strong）。
 data:
   datasets:
-  - /home/data/sdc/FAVOR/DATASET/splits-0901/2_RAVDESS_SV.csv
+  - DATASET/splits-0901/2_RAVDESS_SV.csv
   datasets_weights:
   - 1
   rootpaths:

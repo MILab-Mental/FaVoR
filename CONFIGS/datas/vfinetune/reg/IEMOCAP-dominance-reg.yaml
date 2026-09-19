@@ -1,7 +1,7 @@
 # 2_IEMOCAP_SV.csv :: dominance :: regression (range 0.5~5.0)
 data:
   datasets:
-  - /home/data/sdc/FAVOR/DATASET/splits-0901/2_IEMOCAP_SV.csv
+  - DATASET/splits-0901/2_IEMOCAP_SV.csv
   datasets_weights:
   - 1
   rootpaths:

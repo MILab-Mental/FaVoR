@@ -1,7 +1,7 @@
 app: finetune_v
 folder: /OUTPUT/finetune_v/vitl16/FaVoR-112px-48f-latest/
 
-pretrained_ckpt: /home/data/sdc/FAVOR/OUTPUT/pretrain_v/vitl16/FaVoR-112px-48f/latest.pt
+pretrained_ckpt: OUTPUT/pretrain_v/vitl16/FaVoR-112px-48f/latest.pt
 
 
 csv_path: /path/to/RAVDESS/face_videos/split.csv

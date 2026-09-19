@@ -1,7 +1,7 @@
 # 2_MER242526_SV.csv :: emotion :: classification
 data:
   datasets:
-    - /home/data/sdc/FAVOR/DATASET/splits-0901/2_MER242526_SV.csv
+    - DATASET/splits-0901/2_MER242526_SV.csv
   rootpaths:
     - /home/data/sdc/MER/
   task: classification

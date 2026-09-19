@@ -1,7 +1,7 @@
 # 2_IEMOCAP_SV.csv :: dominance :: regression
 data:
   datasets:
-    - /home/data/sdc/FAVOR/DATASET/splits-0901/2_IEMOCAP_SV.csv
+    - DATASET/splits-0901/2_IEMOCAP_SV.csv
   rootpaths:
     - /home/data/sdb/基座模型数据集/2情绪数据集/IEMOCAP/
   task: regression

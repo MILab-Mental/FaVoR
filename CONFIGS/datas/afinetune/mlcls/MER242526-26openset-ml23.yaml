@@ -1,7 +1,7 @@
 # 2_MER242526_SV.csv :: 26openset :: multi_label_classification
 data:
   datasets:
-    - /home/data/sdc/FAVOR/DATASET/splits-0901/2_MER242526_SV.csv
+    - DATASET/splits-0901/2_MER242526_SV.csv
   rootpaths:
     - /home/data/sdc/MER/
   task: multi_label_classification

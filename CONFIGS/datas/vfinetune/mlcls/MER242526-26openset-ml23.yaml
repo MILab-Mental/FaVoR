@@ -2,7 +2,7 @@
 # 标签列为竖线分隔的 1-based 类别索引（如 `2|11|20`），解析为 0-based 23 维 multi-hot。
 data:
   datasets:
-  - /home/data/sdc/FAVOR/DATASET/splits-0901/2_MER242526_SV.csv
+  - DATASET/splits-0901/2_MER242526_SV.csv
   datasets_weights:
   - 1
   rootpaths:

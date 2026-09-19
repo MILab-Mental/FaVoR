@@ -1,7 +1,7 @@
 # 3_AVEC2014_LV.csv :: PHQ :: regression (range 0~45)
 data:
   datasets:
-  - /home/data/sdc/FAVOR/DATASET/splits-0901/3_AVEC2014_LV.csv
+  - DATASET/splits-0901/3_AVEC2014_LV.csv
   datasets_weights:
   - 1
   rootpaths:

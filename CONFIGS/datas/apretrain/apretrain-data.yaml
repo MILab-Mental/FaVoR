@@ -1,6 +1,6 @@
 data:
   datasets:
-    - /home/data/sdc/FAVOR/DATASET/merged/pretrain_audios_0901.csv
+    - DATASET/merged/pretrain_audios_0901.csv
   datasets_weights: [1.0]
   sample_rate: 16000
   process_seconds: 2.0

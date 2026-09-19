@@ -2,7 +2,7 @@
 # ordinal 0=low/1=medium/2=high
 data:
   datasets:
-  - /home/data/sdc/FAVOR/DATASET/splits-0901/2_CREMA-D_SV.csv
+  - DATASET/splits-0901/2_CREMA-D_SV.csv
   datasets_weights:
   - 1
   rootpaths:

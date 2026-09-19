@@ -1,7 +1,7 @@
 # cooldown/anneal data — 长片段 64f；crop/patch/tubelet/fps 与主训练一致
 data:
   datasets:
-  - /home/data/sdc/FAVOR/DATASET/merged/pretrain_videos_0901.csv
+  - DATASET/merged/pretrain_videos_0901.csv
   datasets_weights:
   - 1
   batch_size: 32

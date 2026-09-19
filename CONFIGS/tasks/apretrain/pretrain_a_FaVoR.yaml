@@ -9,7 +9,7 @@ meta:
   save_every_steps: 5000
   log_every_steps: 50
 yamls:
-  data: /home/data/sdc/FAVOR/CONFIGS/datas/apretrain/apretrain-data.yaml
-  opt: /home/data/sdc/FAVOR/CONFIGS/opt/apretrain-opt-100k.yaml
-  model: /home/data/sdc/FAVOR/CONFIGS/models/apretrain-aemojepa-plus-large.yaml
-  mask: /home/data/sdc/FAVOR/CONFIGS/mask_loss/ajepa-pretrain.yaml
+  data: CONFIGS/datas/apretrain/apretrain-data.yaml
+  opt: CONFIGS/opt/apretrain-opt-100k.yaml
+  model: CONFIGS/models/apretrain-aemojepa-plus-large.yaml
+  mask: CONFIGS/mask_loss/ajepa-pretrain.yaml

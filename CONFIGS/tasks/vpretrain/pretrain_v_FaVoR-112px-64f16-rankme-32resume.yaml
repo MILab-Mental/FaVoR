@@ -19,12 +19,12 @@
 #   * 再次中断后要续跑：把下面的 read_checkpoint 注释掉，
 #     加载路径会自动回落到本目录的 latest.pt（app/pretrain_v/train.py:217）。
 app: pretrain_v
-folder: /home/data/sdc/FAVOR/OUTPUT/pretrain_v/vitl16/FaVoR-112px-64f16-rankme-32resume
+folder: OUTPUT/pretrain_v/vitl16/FaVoR-112px-64f16-rankme-32resume
 meta:
   dtype: bfloat16
   eval_freq: 1
   load_checkpoint: true
-  read_checkpoint: /home/data/sdc/FAVOR/OUTPUT/pretrain_v/vitl16/FaVoR-112px-64f16-rankme/latest.pt
+  read_checkpoint: OUTPUT/pretrain_v/vitl16/FaVoR-112px-64f16-rankme/latest.pt
   reset_epoch: false
   save_every_freq: 5
   seed: 239
@@ -43,7 +43,7 @@ meta:
   #   n_clips: 1             # 固定 batch 的 clip 数（迹对 batch 大小线性，故固定以可比）
   #   seed: 2024             # Hutchinson 随机向量种子（固定 -> 跨 checkpoint 可比）
 yamls:
-  data: /home/data/sdc/FAVOR/CONFIGS/datas/vpretrain/vpretrain-data-64-16.yaml
-  opt: /home/data/sdc/FAVOR/CONFIGS/opt/vpretrain-opt-s5000-150-40.yaml
-  model: /home/data/sdc/FAVOR/CONFIGS/models/vpretrain-vit-l.yaml
-  mask: /home/data/sdc/FAVOR/CONFIGS/mask_loss/vjepa-pretrain.yaml
+  data: CONFIGS/datas/vpretrain/vpretrain-data-64-16.yaml
+  opt: CONFIGS/opt/vpretrain-opt-s5000-150-40.yaml
+  model: CONFIGS/models/vpretrain-vit-l.yaml
+  mask: CONFIGS/mask_loss/vjepa-pretrain.yaml

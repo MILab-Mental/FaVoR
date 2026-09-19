@@ -67,8 +67,8 @@ torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/cls/RAVD
 # 不改 YAML，用 --set 覆盖任意配置项（点号表示嵌套键，值按 YAML 标量解析）
 # 覆盖在 YAML 合并之后生效，优先级最高；会一并写进 {folder}/params-{app}.yaml 快照。
 torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/cls/RAVDESS-emotion.yaml \
-  --set folder=/home/data/sdc/FAVOR/OUTPUT/finetune_v/vitl16/RAVDESS-emotion/e5-vs-e11 \
-        meta.read_checkpoint=/home/data/sdc/FAVOR/OUTPUT/pretrain_v/vitl16/FaVoR-112px-48f/e11.pt \
+  --set folder=OUTPUT/finetune_v/vitl16/RAVDESS-emotion/e5-vs-e11 \
+        meta.read_checkpoint=OUTPUT/pretrain_v/vitl16/FaVoR-112px-48f/e11.pt \
         meta.seed=7
 
 # 一次性跑完 run.sh 里列的 15 个视频微调任务（内部已改为 torchrun）

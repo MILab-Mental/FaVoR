@@ -1,15 +1,15 @@
 app: finetune_a
-folder: /home/data/sdc/FAVOR/OUTPUT/finetune_a/aemojepa-plus-large/EATD-Corpus-SDS/jepa-280k
+folder: OUTPUT/finetune_a/aemojepa-plus-large/EATD-Corpus-SDS/jepa-280k
 meta:
   dtype: bfloat16
   load_checkpoint: true
-  read_checkpoint: /home/data/sdc/lxc/audio-pretrain/AEmo-JEPA/outputs/emotion_jepa_full_dataset/checkpoint_final.pt
+  read_checkpoint: OUTPUT/pretrain_a/emotion_jepa_full_dataset/checkpoint_final.pt
   reset_epoch: true
   seed: 239
   frozen_encoder: false
   min_load_ratio: 0.95
 yamls:
-  data: /home/data/sdc/FAVOR/CONFIGS/datas/afinetune/reg/EATD-Corpus-SDS-reg.yaml
-  sampling: /home/data/sdc/FAVOR/CONFIGS/datas/afinetune/audio-4s-4clips.yaml
-  opt: /home/data/sdc/FAVOR/CONFIGS/opt/afinetune-opt-30.yaml
-  model: /home/data/sdc/FAVOR/CONFIGS/models/afinetune-aemojepa-plus-large.yaml
+  data: CONFIGS/datas/afinetune/reg/EATD-Corpus-SDS-reg.yaml
+  sampling: CONFIGS/datas/afinetune/audio-4s-4clips.yaml
+  opt: CONFIGS/opt/afinetune-opt-30.yaml
+  model: CONFIGS/models/afinetune-aemojepa-plus-large.yaml

@@ -26,6 +26,7 @@ from utils.distributed import init_distributed
 
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 logger = logging.getLogger()
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--fname", type=str, help="name of config file to load", default="configs.yaml")
@@ -86,8 +87,48 @@ def _merge_config(base, override):
     return merged
 
 
+def _resolve_yaml_fragment(yaml_path, config_path):
+    """Resolve a ``yamls`` fragment with portable repository-relative support.
+
+    Resolution order is intentionally deterministic:
+
+    - absolute paths are used unchanged;
+    - paths beginning with ``CONFIGS/`` are relative to the repository root;
+    - all other relative paths are relative to the entry YAML directory;
+    - the other relative interpretation is retained as a compatibility fallback.
+    """
+    raw = str(yaml_path)
+    fragment_path = Path(raw).expanduser()
+    if fragment_path.is_absolute():
+        candidates = [fragment_path]
+    else:
+        repository_relative = PROJECT_ROOT / fragment_path
+        config_relative = config_path.parent / fragment_path
+        if fragment_path.parts and fragment_path.parts[0] == "CONFIGS":
+            candidates = [repository_relative, config_relative]
+        else:
+            candidates = [config_relative, repository_relative]
+
+    unique_candidates = []
+    for candidate in candidates:
+        candidate = candidate.resolve()
+        if candidate not in unique_candidates:
+            unique_candidates.append(candidate)
+        if candidate.is_file():
+            return candidate
+    attempted = ", ".join(str(candidate) for candidate in unique_candidates)
+    raise FileNotFoundError(
+        f"YAML fragment {raw!r} referenced by {config_path} was not found; "
+        f"tried: {attempted}"
+    )
+
+
 def load_config(fname):
-    """Load a YAML config and its ordered ``yamls`` fragments, if present."""
+    """Load a YAML config and its ordered ``yamls`` fragments, if present.
+
+    ``CONFIGS/...`` fragment paths are repository-root-relative. Other
+    relative paths remain relative to the entry YAML for compatibility.
+    """
     config_path = Path(fname).expanduser().resolve()
     with config_path.open("r", encoding="utf-8") as y_file:
         config = yaml.load(y_file, Loader=yaml.FullLoader) or {}
@@ -106,10 +147,7 @@ def load_config(fname):
 
     params = {}
     for yaml_path in yaml_paths:
-        fragment_path = Path(yaml_path).expanduser()
-        if not fragment_path.is_absolute():
-            fragment_path = config_path.parent / fragment_path
-        fragment_path = fragment_path.resolve()
+        fragment_path = _resolve_yaml_fragment(yaml_path, config_path)
         with fragment_path.open("r", encoding="utf-8") as y_file:
             fragment = yaml.load(y_file, Loader=yaml.FullLoader) or {}
         if not isinstance(fragment, dict):

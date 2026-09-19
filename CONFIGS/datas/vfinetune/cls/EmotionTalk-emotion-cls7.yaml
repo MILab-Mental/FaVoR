@@ -1,7 +1,7 @@
 # 2_EmotionTalk_SV.csv :: emotion :: classification (7 classes)
 data:
   datasets:
-  - /home/data/sdc/FAVOR/DATASET/splits-0901/2_EmotionTalk_SV.csv
+  - DATASET/splits-0901/2_EmotionTalk_SV.csv
   datasets_weights:
   - 1
   rootpaths:

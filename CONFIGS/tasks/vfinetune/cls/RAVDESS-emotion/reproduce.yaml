@@ -1,7 +1,7 @@
-# Reproduces the original /home/data/sdc/finetune RAVDESS run through the
+# Reproduces the original RAVDESS run through the
 # current finetune_v entry point.
 app: finetune_v
-folder: /home/data/sdc/FAVOR/OUTPUT/finetune_v/vitl16/RAVDESS-emotion/reproduce-stage1-latest/
+folder: OUTPUT/finetune_v/vitl16/RAVDESS-emotion/reproduce-stage1-latest/
 meta:
   dtype: bfloat16
   eval_freq: 1
@@ -11,7 +11,7 @@ meta:
   save_every_freq: 100
   seed: 239
 yamls:
-  data: /home/data/sdc/FAVOR/CONFIGS/datas/vfinetune/cls/RAVDESS-emotion-cls8.yaml
-  sampling: /home/data/sdc/FAVOR/CONFIGS/datas/vfinetune/128-step2-RAVDESS-reproduce.yaml
-  opt: /home/data/sdc/FAVOR/CONFIGS/opt/vfinetune-opt-ravdess-reproduce.yaml
-  model: /home/data/sdc/FAVOR/CONFIGS/models/vfinetune-vit-l-reproduce.yaml
+  data: CONFIGS/datas/vfinetune/cls/RAVDESS-emotion-cls8.yaml
+  sampling: CONFIGS/datas/vfinetune/128-step2-RAVDESS-reproduce.yaml
+  opt: CONFIGS/opt/vfinetune-opt-ravdess-reproduce.yaml
+  model: CONFIGS/models/vfinetune-vit-l-reproduce.yaml

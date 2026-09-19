@@ -1,7 +1,7 @@
 # 2_M3ED_SA.csv :: emotion :: multi_label_classification
 data:
   datasets:
-    - /home/data/sdc/FAVOR/DATASET/splits-0901/2_M3ED_SA.csv
+    - DATASET/splits-0901/2_M3ED_SA.csv
   rootpaths:
     - /home/data/sdb/基座模型数据集/2情绪数据集/M3ED/
   task: multi_label_classification

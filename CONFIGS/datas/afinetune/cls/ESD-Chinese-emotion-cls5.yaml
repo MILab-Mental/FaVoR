@@ -1,7 +1,7 @@
 # 2_ESD-Chinese_SA.csv :: emotion :: classification
 data:
   datasets:
-    - /home/data/sdc/FAVOR/DATASET/splits-0901/2_ESD-Chinese_SA.csv
+    - DATASET/splits-0901/2_ESD-Chinese_SA.csv
   rootpaths:
     - /home/data/sdb/基座模型数据集/2情绪数据集/ESD-Chinese/
   task: classification
