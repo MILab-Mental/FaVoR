@@ -9,9 +9,9 @@ meta:
   save_every_freq: 100
   seed: 239
 model:
-  backbone_dropout: 0.0
-  backbone_attention_dropout: 0.0
-  backbone_drop_path: 0.1
+  backbone_dropout: 0.3
+  backbone_attention_dropout: 0.3
+  backbone_drop_path: 0.3
   classifier_dropout: 0.3
 optimization:
   grokfast: true

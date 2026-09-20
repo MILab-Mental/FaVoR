@@ -29,4 +29,5 @@ model:
   head:
     num_heads: 4
     hidden_dim: 256
+    attention_dropout: 0.0
     dropout: 0.1

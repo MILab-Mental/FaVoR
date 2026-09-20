@@ -8,10 +8,13 @@ import torch.nn as nn
 from models.audio_jepa import AudioBackbone
 
 class MultiClipAttentionHead(nn.Module):
-    def __init__(self, embed_dim, num_heads, task, num_class=None, hidden_dim=256, dropout=0.1):
+    def __init__(self, embed_dim, num_heads, task, num_class=None, hidden_dim=256,
+                 dropout=0.1, attention_dropout=0.0):
         super().__init__()
         self.query = nn.Parameter(torch.randn(1, 1, embed_dim) * 0.02)
-        self.attention = nn.MultiheadAttention(embed_dim, num_heads=num_heads, batch_first=True)
+        self.attention = nn.MultiheadAttention(
+            embed_dim, num_heads=num_heads, dropout=attention_dropout, batch_first=True,
+        )
         self.norm = nn.LayerNorm(embed_dim)
         output_dim = num_class if task in {"classification", "multi_label_classification"} else 1
         self.output = nn.Sequential(
@@ -36,6 +39,7 @@ class AudioFineTuneModel(nn.Module):
             num_class=num_class,
             hidden_dim=int(head_cfg.get("hidden_dim", 256)),
             dropout=float(head_cfg.get("dropout", 0.1)),
+            attention_dropout=float(head_cfg.get("attention_dropout", 0.0)),
         )
 
     def forward(self, clips):

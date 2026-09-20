@@ -6,6 +6,7 @@ model:
     conv_pos_width: 95
     conv_pos_groups: 16
     prenet_depth: 4
+    prenet_dropout: 0.0
     num_extra_tokens: 10
     learned_alibi_scale: false
   extractor:
@@ -29,6 +30,7 @@ model:
     attention_dropout: 0.0
     activation_dropout: 0.0
     post_mlp_dropout: 0.0
+    dropout_input: 0.0
     qkv_bias: true
     layer_norm_first: false
     norm_eps: 1.0e-6
@@ -41,4 +43,5 @@ model:
   head:
     num_heads: 4
     hidden_dim: 256
+    attention_dropout: 0.0
     dropout: 0.1

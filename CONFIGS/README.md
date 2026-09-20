@@ -618,3 +618,10 @@ torchrun --nproc_per_node=2 -m app.main \
    `optimization.loss`：分类默认 `cross_entropy + class_weighting: none`，可选
    `inverse_frequency`、`sqrt_inverse_frequency`、`effective_number`；多标签支持是否启用
    `positive_weighting: inverse_frequency`；回归支持 `mse`、`mae`、`smooth_l1`。
+
+7. **音频微调 dropout 与 Grokfast** —— dropout 可分别配置在
+   `model.extractor.dropout`、`model.backbone.prenet_dropout`、
+   `model.encoder.{dropout_input,dropout,attention_dropout,activation_dropout,post_mlp_dropout}`、
+   `model.head.{attention_dropout,dropout}`；未配置项沿用模型片段中的值，新增的 head attention
+   dropout 默认 `0.0`。`optimization.grokfast` 默认 `false`，开启时复用视频侧相同的
+   `grokfast_alpha`（默认 `0.98`）和 `grokfast_lambda`（默认 `2.0`）。

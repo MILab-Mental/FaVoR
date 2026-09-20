@@ -19,6 +19,7 @@ from tqdm import tqdm
 
 from datasets.audio_finetune_dataset import make_audiodataset_finetune_a
 from models.finetune_a_model import AudioFineTuneModel
+from optimization.grokfast import gradfilter_ema
 from utils.audio_checkpoint import load_audio_backbone
 from utils.classification_metrics import (
     classification_metrics,
@@ -177,13 +178,14 @@ def _regression_metrics(predictions, targets):
     }
 
 
-def _checkpoint(path, model, optimizer, scheduler, epoch, best_score, history, args):
+def _checkpoint(path, model, optimizer, scheduler, epoch, best_score, history, args,
+                grokfast_grads=None):
     torch.save({
-        "schema_version": 1, "modality": "audio", "stage": "finetune",
+        "schema_version": 2, "modality": "audio", "stage": "finetune",
         "epoch": epoch, "encoder": _raw(model).backbone.state_dict(),
         "task_head": _raw(model).head.state_dict(), "optimizer": optimizer.state_dict(),
         "scheduler": scheduler.state_dict(), "best_score": best_score,
-        "history": history, "args": args,
+        "history": history, "grokfast_grads": grokfast_grads, "args": args,
     }, path)
 
 
@@ -197,7 +199,8 @@ def _restore(path, model, optimizer, scheduler):
 
 
 def _run_epoch(model, loader, criterion, optimizer, scaler, device, task, training, mixed, amp_dtype,
-               *, epoch, epochs, is_main):
+               *, epoch, epochs, is_main, grokfast_enabled=False, grokfast_alpha=0.98,
+               grokfast_lambda=2.0, grokfast_grads=None):
     model.train(training)
     if not any(parameter.requires_grad for parameter in _raw(model).backbone.parameters()):
         _raw(model).backbone.eval()
@@ -226,6 +229,12 @@ def _run_epoch(model, loader, criterion, optimizer, scaler, device, task, traini
                 loss = criterion(logits if task != "regression" else logits.squeeze(-1), labels)
             if training:
                 scaler.scale(loss).backward()
+                scaler.unscale_(optimizer)
+                if grokfast_enabled:
+                    grokfast_grads = gradfilter_ema(
+                        {"model": _raw(model)}, grads=grokfast_grads,
+                        alpha=grokfast_alpha, lamb=grokfast_lambda,
+                    )
                 scaler.step(optimizer)
                 scaler.update()
             total_loss += float(loss.detach()) * len(labels)
@@ -235,7 +244,7 @@ def _run_epoch(model, loader, criterion, optimizer, scaler, device, task, traini
             paths.extend(batch_paths)
             truths.extend(labels.detach().cpu().tolist())
             outputs.append(logits.detach().float().cpu().numpy())
-    return total_loss, count, paths, truths, outputs
+    return (total_loss, count, paths, truths, outputs), grokfast_grads
 
 
 def main(args):
@@ -248,6 +257,13 @@ def main(args):
         "process_seconds": data_cfg.get("process_seconds", 4.0),
         "max_process_seconds": data_cfg.get("process_seconds", 4.0),
     }
+    grokfast_enabled = bool(opt_cfg.get("grokfast", False))
+    grokfast_alpha = float(opt_cfg.get("grokfast_alpha", 0.98))
+    grokfast_lambda = float(opt_cfg.get("grokfast_lambda", 2.0))
+    if not 0.0 <= grokfast_alpha < 1.0:
+        raise ValueError("optimization.grokfast_alpha must be in [0, 1)")
+    if grokfast_lambda < 0.0:
+        raise ValueError("optimization.grokfast_lambda must be non-negative")
     seed = int(meta.get("seed", 0))
     random.seed(seed + rank); np.random.seed(seed + rank); torch.manual_seed(seed + rank)
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -314,11 +330,14 @@ def main(args):
     higher_is_better = task != "regression"
     best_score = -math.inf if higher_is_better else math.inf
     history = []
+    grokfast_grads = None
     if will_resume:
         checkpoint = _restore(latest_path, model, optimizer, scheduler)
         start_epoch = int(checkpoint["epoch"])
         best_score = float(checkpoint.get("best_score", best_score))
         history = checkpoint.get("history", [])
+        if grokfast_enabled:
+            grokfast_grads = checkpoint.get("grokfast_grads")
         if is_main:
             LOGGER.info("Resumed audio fine-tuning checkpoint %s at epoch %d", latest_path, start_epoch)
     elif (logs_dir / "history.csv").is_file():
@@ -338,15 +357,36 @@ def main(args):
     if task == "classification" and (not isinstance(num_class, int) or num_class < 2):
         raise ValueError("classification requires data.num_class >= 2")
     criterion = _criterion(task, opt_cfg, train_dataset, num_class, device)
+    if is_main:
+        LOGGER.info(
+            "Audio dropout: extractor=%.3f prenet=%.3f encoder_input=%.3f "
+            "encoder_projection=%.3f attention=%.3f activation=%.3f post_mlp=%.3f "
+            "head_attention=%.3f head=%.3f",
+            float(model_cfg.get("extractor", {}).get("dropout", 0.0)),
+            float(model_cfg.get("backbone", {}).get("prenet_dropout", 0.0)),
+            float(model_cfg.get("encoder", {}).get("dropout_input", 0.0)),
+            float(model_cfg.get("encoder", {}).get("dropout", 0.0)),
+            float(model_cfg.get("encoder", {}).get("attention_dropout", 0.0)),
+            float(model_cfg.get("encoder", {}).get("activation_dropout", 0.0)),
+            float(model_cfg.get("encoder", {}).get("post_mlp_dropout", 0.0)),
+            float(model_cfg.get("head", {}).get("attention_dropout", 0.0)),
+            float(model_cfg.get("head", {}).get("dropout", 0.1)),
+        )
+        LOGGER.info(
+            "Grokfast: enabled=%s alpha=%.4f lambda=%.4f",
+            grokfast_enabled, grokfast_alpha, grokfast_lambda,
+        )
 
     for epoch in range(start_epoch, epochs):
         if train_sampler is not None:
             train_sampler.set_epoch(epoch)
-        train_result = _run_epoch(
+        train_result, grokfast_grads = _run_epoch(
             model, train_loader, criterion, optimizer, scaler, device,
             task, True, mixed, amp_dtype, epoch=epoch, epochs=epochs, is_main=is_main,
+            grokfast_enabled=grokfast_enabled, grokfast_alpha=grokfast_alpha,
+            grokfast_lambda=grokfast_lambda, grokfast_grads=grokfast_grads,
         )
-        val_result = _run_epoch(
+        val_result, _ = _run_epoch(
             model, val_loader, criterion, optimizer, scaler, device,
             task, False, mixed, amp_dtype, epoch=epoch, epochs=epochs, is_main=is_main,
         )
@@ -444,11 +484,11 @@ def main(args):
             if improved:
                 _checkpoint(
                     folder / "best.pt", model, optimizer, scheduler,
-                    epoch + 1, best_score, history, args,
+                    epoch + 1, best_score, history, args, grokfast_grads=grokfast_grads,
                 )
             _checkpoint(
                 latest_path, model, optimizer, scheduler,
-                epoch + 1, best_score, history, args,
+                epoch + 1, best_score, history, args, grokfast_grads=grokfast_grads,
             )
             if task == "classification":
                 LOGGER.info(

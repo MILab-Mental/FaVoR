@@ -137,9 +137,23 @@ favor-e5-23out-data48-8-newnewopt
   best loss: 1.4165 @ epoch 6 
 
 
+#AUDIO#AUDIO#AUDIO#AUDIO#AUDIO#AUDIO#AUDIO#AUDIO#AUDIO#AUDIO#AUDIO#AUDIO#AUDIO#AUDIO#AUDIO#AUDIO#AUDIO#AUDIO#AUDIO#AUDIO#AUDIO#AUDIO#AUDIO#AUDIO#AUDIO#AUDIO#AUDIO#AUDIO#AUDIO#AUDIO
+
 torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/afinetune/cls/IEMOCAP-emotion.yaml --set  meta.read_checkpoint=CKPT/emotion2vec_plus_large/model.pt    folder=OUTPUT/finetune_a/IEMOCAP-emotion/emotion2vec-plus-large
 
+torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/afinetune/cls/IEMOCAP-emotion.yaml --set  meta.read_checkpoint=CKPT/emotion2vec_plus_large/model.pt    folder=OUTPUT/finetune_a/IEMOCAP-emotion/emotion2vec-plus-large-rep
+
+torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/afinetune/cls/IEMOCAP-emotion-drop03.yaml --set  meta.read_checkpoint=CKPT/emotion2vec_plus_large/model.pt    folder=OUTPUT/finetune_a/IEMOCAP-emotion/emotion2vec-plus-large-drop03all-grokfast
+
+torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/afinetune/cls/IEMOCAP-emotion-drop02.yaml --set  meta.read_checkpoint=CKPT/emotion2vec_plus_large/model.pt    folder=OUTPUT/finetune_a/IEMOCAP-emotion/emotion2vec-plus-large-drop02all-grokfast
+
+
 torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/afinetune/cls/IEMOCAP-emotion.yaml --set  meta.read_checkpoint=OUTPUT/pretrain_a/emotion_jepa_full_dataset/checkpoint_final.pt folder=OUTPUT/finetune_a/IEMOCAP-emotion/favor-a-lxc-final
+
+
+
+
+#VIDEO#VIDEO#VIDEO#VIDEO#VIDEO#VIDEO#VIDEO#VIDEO#VIDEO#VIDEO#VIDEO#VIDEO#VIDEO#VIDEO#VIDEO#VIDEO#VIDEO#VIDEO#VIDEO#VIDEO#VIDEO#VIDEO#VIDEO#VIDEO#VIDEO#VIDEO#VIDEO#VIDEO#VIDEO#VIDEO
 
 
 
@@ -153,3 +167,7 @@ torchrun --master_port 12362 --nproc_per_node=2 -m app.main --fname CONFIGS/task
 torchrun --master_port 12361 --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/cls/MER242526-emotion.yaml --set meta.read_checkpoint=OUTPUT/pretrain_v/vitl16/FaVoR-112px-64f16-rankme-32resume/best_trace.pt folder=OUTPUT/finetune_v/vitl16/MER242526-emotion/FaVoR-112px-48f-8fps-32-38-besttrace
 
 torchrun --master_port 12361 --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/cls/MER242526-emotion.yaml --set meta.read_checkpoint=OUTPUT/pretrain_v/vitl16/FaVoR-112px-48f/e5.pt folder=OUTPUT/finetune_v/vitl16/MER242526-emotion/FaVoR-112px-48f-8fps-e5-rep
+
+
+
+torchrun --master_port 12363 --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/cls/MER242526-emotion-drop03.yaml --set folder=OUTPUT/finetune_v/vitl16/MER242526-emotion/FaVoR-112px-64f-16fps-32-38latest-drop03all-grokfast meta.read_checkpoint=OUTPUT/pretrain_v/vitl16/FaVoR-112px-64f16-rankme-32resume/latest.pt data.dataset_fpcs='[64]' data.fps=16
