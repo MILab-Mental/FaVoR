@@ -18,8 +18,8 @@ from torch.utils.data import DataLoader, Sampler
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
 
-from datasets.video_finetune_dataset import make_videodataset_finetune_v
-from datasets.video_transforms import make_finetune_transforms
+from datasets.video_jepa.finetune_dataset import make_videodataset_finetune_v
+from datasets.video_jepa.transforms import make_finetune_transforms
 from models.finetune_v_model import build_model
 from optimization.grokfast import gradfilter_ema
 from optimization.optimizer import init_ft_opt

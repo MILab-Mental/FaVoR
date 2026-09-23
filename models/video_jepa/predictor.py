@@ -9,9 +9,9 @@ from functools import partial
 import torch
 import torch.nn as nn
 
-from datasets.masks.utils import apply_masks
-from models.utils.modules import Block
-from models.utils.pos_embs import get_2d_sincos_pos_embed, get_3d_sincos_pos_embed
+from .utils.masking import apply_masks
+from .utils.modules import Block
+from .utils.pos_embs import get_2d_sincos_pos_embed, get_3d_sincos_pos_embed
 from utils.tensors import repeat_interleave_batch, trunc_normal_
 
 

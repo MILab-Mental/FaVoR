@@ -1,0 +1,1 @@
+"""Video JEPA model components."""

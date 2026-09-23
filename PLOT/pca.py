@@ -19,7 +19,7 @@ import torch.nn.functional as F
 from decord import VideoReader, cpu
 from sklearn.decomposition import PCA
 
-import models.vision_transformer as video_vit
+from models.video_jepa import vision_transformer as video_vit
 from utils.checkpoint_loader import robust_checkpoint_loader
 
 IMAGENET_MEAN = (0.485, 0.456, 0.406)

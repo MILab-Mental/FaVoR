@@ -19,8 +19,8 @@ from utils.progress import progress_ncols
 
 from models.finetune_v_model import build_model
 
-from datasets.video_finetune_dataset import VideoCSVDataset
-from datasets.video_transforms import make_finetune_transforms
+from datasets.video_jepa.finetune_dataset import VideoCSVDataset
+from datasets.video_jepa.transforms import make_finetune_transforms
 
 from utils.classification_metrics import (classification_metrics, save_best_reports, save_metric_curves,
                    write_history_csv, write_predictions_csv)

@@ -8,7 +8,7 @@ import torch
 import torch.nn as nn
 
 from .backbone import AudioBackbone
-from datasets.masks.audio_jepa import TimeInverseBlockMasker50Hz
+from datasets.audio_jepa.masks import TimeInverseBlockMasker50Hz
 from optimization.audio_jepa_loss import jepa_loss
 from .predictor import JEPAPredictor
 from .target import topk_instance_average

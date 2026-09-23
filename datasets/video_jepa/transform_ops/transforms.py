@@ -16,8 +16,8 @@ from PIL import Image
 from torch import Tensor
 from torchvision import transforms
 
-import datasets.utils.video.functional as FF
-from datasets.utils.video.randaugment import rand_augment_transform
+from . import functional as FF
+from .randaugment import rand_augment_transform
 
 _pil_interpolation_to_str = {
     Image.NEAREST: "PIL.Image.NEAREST",

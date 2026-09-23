@@ -283,7 +283,7 @@ flash / memory-efficient attention **没有二阶导**，故该 pass 会临时�
 
 | 字段 | 说明 |
 |---|---|
-| `model_name` | `vit_large` / `vit_huge` / `vit_giant_xformers`（见 `models/vision_transformer.py`） |
+| `model_name` | `vit_large` / `vit_huge` / `vit_giant_xformers`（见 `models/video_jepa/vision_transformer.py`） |
 | `uniform_power` | 是否用均匀（无 CLS）patch 编码 |
 | `use_rope` / `use_sdpa` / `use_silu` / `wide_silu` | RoPE / SDPA attention / SiLU 激活开关 |
 | `use_activation_checkpointing` | 梯度检查点 |

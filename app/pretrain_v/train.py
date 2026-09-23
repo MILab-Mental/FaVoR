@@ -31,10 +31,10 @@ from models.pretrain_v_model import init_video_model, load_checkpoint
 
 from optimization.optimizer import init_opt
 
-from datasets.video_transforms import make_pretrain_transforms
-from datasets.video_pretrain_dataset import make_videodataset
-from datasets.masks.multiseq_multiblock3d import MaskCollator
-from datasets.masks.utils import apply_masks
+from datasets.video_jepa.transforms import make_pretrain_transforms
+from datasets.video_jepa.pretrain_dataset import make_videodataset
+from datasets.video_jepa.masks.collator import MaskCollator
+from models.video_jepa.utils.masking import apply_masks
 
 from utils.distributed import init_distributed
 from utils.logging import AverageMeter, CSVLogger, get_logger, gpu_timer

@@ -41,8 +41,8 @@ import torch.distributed as dist
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Subset
 
-from datasets.masks.multiseq_multiblock3d import MaskCollator
-from datasets.masks.utils import apply_masks
+from datasets.video_jepa.masks.collator import MaskCollator
+from models.video_jepa.utils.masking import apply_masks
 
 __all__ = ["PretrainEvalMetrics", "build_center_crop_transform", "rankme_metrics"]
 

@@ -10,7 +10,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from datasets.audio_pretrain_dataset import crop_waveform, load_audio, normalize_waveform
+from .pretrain_dataset import crop_waveform, load_audio, normalize_waveform
 
 
 class AudioCSVDataset(Dataset):
@@ -117,4 +117,3 @@ def make_audiodataset_finetune_a(csv_paths, *, root_paths, label_column, task,
         AudioCSVDataset(csv_paths, 0, training=True, **common),
         AudioCSVDataset(csv_paths, 1, training=False, **common),
     )
-

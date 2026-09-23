@@ -13,7 +13,7 @@ import torch
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel
 
-from datasets.audio_pretrain_dataset import make_audio_pretrain_loader
+from datasets.audio_jepa.pretrain_dataset import make_audio_pretrain_loader
 from models.pretrain_a_model import build_audio_jepa
 from utils.audio_checkpoint import (
     init_from_emotion2vec,

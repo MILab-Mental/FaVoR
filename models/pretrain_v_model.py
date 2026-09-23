@@ -8,8 +8,8 @@ import sys
 
 import torch
 
-import models.predictor as vit_pred
-import models.vision_transformer as video_vit
+from models.video_jepa import predictor as vit_pred
+from models.video_jepa import vision_transformer as video_vit
 
 
 from utils.checkpoint_loader import robust_checkpoint_loader
@@ -165,4 +165,3 @@ def init_video_model(
     logger.info(f"Predictor number of parameters: {count_parameters(predictor)}")
 
     return encoder, predictor
-

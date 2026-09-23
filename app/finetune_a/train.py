@@ -17,7 +17,7 @@ from torch.utils.data import DataLoader, Sampler
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
 
-from datasets.audio_finetune_dataset import make_audiodataset_finetune_a
+from datasets.audio_jepa.finetune_dataset import make_audiodataset_finetune_a
 from models.finetune_a_model import AudioFineTuneModel
 from optimization.grokfast import gradfilter_ema
 from utils.audio_checkpoint import load_audio_backbone

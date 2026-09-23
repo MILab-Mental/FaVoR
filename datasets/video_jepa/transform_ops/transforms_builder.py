@@ -8,8 +8,8 @@ from typing import Optional
 import torch
 import torchvision.transforms as transforms
 
-import datasets.utils.video.transforms as video_transforms
-from datasets.utils.video.randerase import RandomErasing
+from . import transforms as video_transforms
+from .randerase import RandomErasing
 
 
 def make_transforms(

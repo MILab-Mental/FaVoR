@@ -9,7 +9,7 @@ import math
 import torch
 import torch.nn as nn
 
-from models.utils.modules import Block, CrossAttention, CrossAttentionBlock
+from .utils.modules import Block, CrossAttention, CrossAttentionBlock
 from utils.tensors import trunc_normal_
 
 

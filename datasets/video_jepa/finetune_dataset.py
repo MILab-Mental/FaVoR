@@ -5,7 +5,7 @@ from pathlib import Path
 
 import numpy as np
 
-from datasets.video_pretrain_dataset import VideoDataset
+from .pretrain_dataset import VideoDataset
 
 
 class VideoCSVDataset(VideoDataset):

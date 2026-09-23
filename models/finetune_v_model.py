@@ -5,8 +5,8 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 
-from models.attentive_pooler import AttentiveClassifier
-from models import vision_transformer as vit
+from models.video_jepa.attentive_pooler import AttentiveClassifier
+from models.video_jepa import vision_transformer as vit
 
 LOGGER = logging.getLogger(__name__)
 

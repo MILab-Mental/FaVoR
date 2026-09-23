@@ -6,9 +6,9 @@
 import torch
 import torchvision.transforms as transforms
 
-import datasets.utils.video.transforms as video_transforms
-from datasets.utils.video.randerase import RandomErasing
-from datasets.utils.video import volume_transforms
+from .transform_ops import transforms as video_transforms
+from .transform_ops.randerase import RandomErasing
+from .transform_ops import volume_transforms
 
 
 def make_pretrain_transforms(
