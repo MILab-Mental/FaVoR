@@ -6,6 +6,8 @@ optimization:
   weight_decay: 1.0e-4
   betas: [0.9, 0.999]
   grokfast: false
+  # Audio defaults to filtering only pretrained parameters; valid alternatives: head, all.
+  grokfast_scope: backbone
   grokfast_alpha: 0.98
   grokfast_lambda: 2.0
   loss:

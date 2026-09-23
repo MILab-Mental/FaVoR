@@ -58,6 +58,43 @@ def _raw(model):
     return model.module if isinstance(model, DistributedDataParallel) else model
 
 
+def _grokfast_modules(model, scope):
+    """Return the Audio modules selected for Grokfast gradient filtering."""
+    raw_model = _raw(model)
+    if scope == "backbone":
+        return {"backbone": raw_model.backbone}
+    if scope == "head":
+        return {"head": raw_model.head}
+    if scope == "all":
+        # Preserve the original key namespace for all-model checkpoints.
+        return {"model": raw_model}
+    raise ValueError("optimization.grokfast_scope must be backbone, head, or all")
+
+
+def _grokfast_state_for_scope(grads, scope):
+    """Adapt saved Grokfast EMA keys when resuming with a selected scope."""
+    if not grads:
+        return None
+    selected = {}
+    if scope in {"backbone", "head"}:
+        prefix = f"{scope}."
+        legacy_prefix = f"model.{prefix}"
+        for name, value in grads.items():
+            if name.startswith(legacy_prefix):
+                selected[name.removeprefix("model.")] = value
+            elif name.startswith(prefix):
+                selected[name] = value
+    elif scope == "all":
+        for name, value in grads.items():
+            if name.startswith("model."):
+                selected[name] = value
+            elif name.startswith("backbone.") or name.startswith("head."):
+                selected[f"model.{name}"] = value
+    else:
+        raise ValueError("optimization.grokfast_scope must be backbone, head, or all")
+    return selected or None
+
+
 def _gather(value, distributed, world_size):
     if not distributed:
         return [value]
@@ -200,7 +237,7 @@ def _restore(path, model, optimizer, scheduler):
 
 def _run_epoch(model, loader, criterion, optimizer, scaler, device, task, training, mixed, amp_dtype,
                *, epoch, epochs, is_main, grokfast_enabled=False, grokfast_alpha=0.98,
-               grokfast_lambda=2.0, grokfast_grads=None):
+               grokfast_lambda=2.0, grokfast_scope="backbone", grokfast_grads=None):
     model.train(training)
     if not any(parameter.requires_grad for parameter in _raw(model).backbone.parameters()):
         _raw(model).backbone.eval()
@@ -214,6 +251,8 @@ def _run_epoch(model, loader, criterion, optimizer, scaler, device, task, traini
         desc=f"{phase} {epoch + 1}/{epochs}",
         ncols=progress_ncols(),
     )
+    grokfast_modules = _grokfast_modules(model, grokfast_scope) \
+        if training and grokfast_enabled else None
     with context():
         for clips, labels, batch_paths in progress:
             clips = clips.to(device, non_blocking=True)
@@ -232,7 +271,7 @@ def _run_epoch(model, loader, criterion, optimizer, scaler, device, task, traini
                 scaler.unscale_(optimizer)
                 if grokfast_enabled:
                     grokfast_grads = gradfilter_ema(
-                        {"model": _raw(model)}, grads=grokfast_grads,
+                        grokfast_modules, grads=grokfast_grads,
                         alpha=grokfast_alpha, lamb=grokfast_lambda,
                     )
                 scaler.step(optimizer)
@@ -260,10 +299,13 @@ def main(args):
     grokfast_enabled = bool(opt_cfg.get("grokfast", False))
     grokfast_alpha = float(opt_cfg.get("grokfast_alpha", 0.98))
     grokfast_lambda = float(opt_cfg.get("grokfast_lambda", 2.0))
+    grokfast_scope = str(opt_cfg.get("grokfast_scope", "backbone")).strip().lower()
     if not 0.0 <= grokfast_alpha < 1.0:
         raise ValueError("optimization.grokfast_alpha must be in [0, 1)")
     if grokfast_lambda < 0.0:
         raise ValueError("optimization.grokfast_lambda must be non-negative")
+    if grokfast_scope not in {"backbone", "head", "all"}:
+        raise ValueError("optimization.grokfast_scope must be backbone, head, or all")
     seed = int(meta.get("seed", 0))
     random.seed(seed + rank); np.random.seed(seed + rank); torch.manual_seed(seed + rank)
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -320,6 +362,11 @@ def main(args):
     if frozen:
         for parameter in model.backbone.parameters():
             parameter.requires_grad_(False)
+    if grokfast_enabled and frozen and grokfast_scope == "backbone":
+        raise ValueError(
+            "optimization.grokfast_scope=backbone selects no trainable parameters when "
+            "meta.frozen_encoder=true; use scope=head/all or disable Grokfast"
+        )
     model.to(device)
     optimizer = _optimizer(model, opt_cfg, frozen)
     epochs = int(opt_cfg["epochs"])
@@ -337,7 +384,9 @@ def main(args):
         best_score = float(checkpoint.get("best_score", best_score))
         history = checkpoint.get("history", [])
         if grokfast_enabled:
-            grokfast_grads = checkpoint.get("grokfast_grads")
+            grokfast_grads = _grokfast_state_for_scope(
+                checkpoint.get("grokfast_grads"), grokfast_scope,
+            )
         if is_main:
             LOGGER.info("Resumed audio fine-tuning checkpoint %s at epoch %d", latest_path, start_epoch)
     elif (logs_dir / "history.csv").is_file():
@@ -373,8 +422,8 @@ def main(args):
             float(model_cfg.get("head", {}).get("dropout", 0.1)),
         )
         LOGGER.info(
-            "Grokfast: enabled=%s alpha=%.4f lambda=%.4f",
-            grokfast_enabled, grokfast_alpha, grokfast_lambda,
+            "Grokfast: enabled=%s scope=%s alpha=%.4f lambda=%.4f",
+            grokfast_enabled, grokfast_scope, grokfast_alpha, grokfast_lambda,
         )
 
     for epoch in range(start_epoch, epochs):
@@ -384,7 +433,8 @@ def main(args):
             model, train_loader, criterion, optimizer, scaler, device,
             task, True, mixed, amp_dtype, epoch=epoch, epochs=epochs, is_main=is_main,
             grokfast_enabled=grokfast_enabled, grokfast_alpha=grokfast_alpha,
-            grokfast_lambda=grokfast_lambda, grokfast_grads=grokfast_grads,
+            grokfast_lambda=grokfast_lambda, grokfast_scope=grokfast_scope,
+            grokfast_grads=grokfast_grads,
         )
         val_result, _ = _run_epoch(
             model, val_loader, criterion, optimizer, scaler, device,

@@ -10,6 +10,7 @@
 PLOT/
 ├── ana.py             # 单任务内多配置的 bootstrap 分布、显著性检验和 ROC
 ├── ana_bench.py       # FaVoR 与 V-JEPA 2.1 的跨任务比较图和统计表
+├── 增加radar.py       # 按任务主指标归一化的多配置平滑雷达图（SVG）
 ├── stat.py            # 从 logs/history.csv 汇总每个实验的最佳指标
 ├── latex_table.py     # 生成分类、多标签和回归 LaTeX 表格
 ├── pca.py             # 将视频 patch-token 的前三个 PCA 分量渲染为 RGB 视频
@@ -85,10 +86,34 @@ python PLOT/ana_bench.py --n-bootstrap 1000 --per-task
 
 # 只处理指定任务
 python PLOT/ana_bench.py --tasks RAVDESS-emotion MER2023-emotion
+
+# 只从已有缓存重画，不重算指标、bootstrap、显著性或 ROC
+python PLOT/ana_bench.py --redraw-only --per-task
 ```
 
 主要产物包括柱状图、箱线图、小提琴图、逐任务分面图、ROC、`significance.csv` 和
-`metrics_bootstrap.csv`。可用 `--out` 改变输出目录。
+`metrics_bootstrap.csv`。可用 `--out` 改变输出目录。完整运行还会写入
+`bootstrap_samples.npz`，之后 `--redraw-only` 可从该缓存精确重画三种图。如果是旧结果、
+尚无 NPZ 缓存，则会利用 CSV 中的均值和标准差精确重画柱状图，并保留现有的箱线图、
+小提琴图和 ROC。`--plot-only` 是 `--redraw-only` 的别名。
+
+## 跨任务雷达图
+
+`增加radar.py` 以任务为轴，默认选取分类/多标签分类的 `val_f1_macro` 和回归的
+`val_rmse`。每根轴在给定配置内单独归一化，最优配置落在 100% 外圈；图中数字仍是原始
+指标值。配色严格按 `color.md` 的 Primary palette 顺序对应 `--configs` 顺序。
+输出 SVG 无图内标题、使用 Arial 字体，并按所有可见元素的实际包围盒自动裁切，四周不额外留白；
+100% 最佳效果圆同时是雷达图的唯一外边界，图例位于右上角，可直接用于论文排版。
+
+```bash
+python PLOT/增加radar.py \
+  --task OUTPUT/finetune_v/vitl16 \
+  --configs FaVoR-112px-48f-8fps-e5 FaVoR-112px-48f-8fps-vjepaori \
+  --labels FaVoR "V-JEPA 2.1"
+```
+
+默认输出 `PLOT/output/radar/radar.svg`。可用 `--tasks` 限定任务并指定雷达轴顺序，用
+`--classification-metric`、`--multilabel-metric` 和 `--regression-metric` 替换三类主指标。
 
 ## PCA 视频可视化
 

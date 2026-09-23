@@ -151,7 +151,16 @@ torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/afinetune/cls/IEMO
 torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/afinetune/cls/IEMOCAP-emotion.yaml --set  meta.read_checkpoint=OUTPUT/pretrain_a/emotion_jepa_full_dataset/checkpoint_final.pt folder=OUTPUT/finetune_a/IEMOCAP-emotion/favor-a-lxc-final
 
 
+torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/afinetune/cls/IEMOCAP-emotion-newdrop.yaml --set  meta.read_checkpoint=CKPT/emotion2vec_plus_large/model.pt    folder=OUTPUT/finetune_a/IEMOCAP-emotion/emotion2vec-plus-large-newdrop-grokfast
 
+  torchrun \
+    --nproc_per_node=2 \
+    -m app.main \
+    --fname CONFIGS/tasks/afinetune/cls/IEMOCAP-emotion-newdropgrokfast.yaml \
+    --set \
+      folder=OUTPUT/finetune_a/IEMOCAP-emotion/emotion2vec-plus-large-newdrop0011-grokfast-backbone \
+      meta.read_checkpoint=CKPT/emotion2vec_plus_large/model.pt \
+      optimization.grokfast_scope=backbone
 
 #VIDEO#VIDEO#VIDEO#VIDEO#VIDEO#VIDEO#VIDEO#VIDEO#VIDEO#VIDEO#VIDEO#VIDEO#VIDEO#VIDEO#VIDEO#VIDEO#VIDEO#VIDEO#VIDEO#VIDEO#VIDEO#VIDEO#VIDEO#VIDEO#VIDEO#VIDEO#VIDEO#VIDEO#VIDEO#VIDEO
 

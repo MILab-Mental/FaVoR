@@ -9,6 +9,7 @@
     python PLOT/ana_bench.py                                   # 全部任务，默认 1000 次 bootstrap
     python PLOT/ana_bench.py --n-bootstrap 2000 --per-task      # 多跑一点，并额外出每任务分面图
     python PLOT/ana_bench.py --tasks RAVDESS-emotion MER2023-emotion
+    python PLOT/ana_bench.py --redraw-only --per-task           # 只读缓存重画，不重算指标/显著性/ROC
 
 产出（默认 ``PLOT/output/bench/``）::
 
@@ -21,6 +22,7 @@
     roc/overview.png              # 上面所有任务的缩略网格
     significance.csv              # 逐任务、逐指标的配对 bootstrap 显著性
     metrics_bootstrap.csv         # 逐任务、逐方法、逐指标的 bootstrap 均值/标准差/95% CI
+    bootstrap_samples.npz         # 原始 bootstrap 分布，供 --redraw-only 快速精确重画
     README.txt                    # 口径说明
 
 取数是**每个任务各自的评测集预测文件**（``logs/eval_best_predict.csv``），
@@ -56,6 +58,8 @@ from sklearn.metrics import (
 PLOT_ROOT = Path(__file__).resolve().parent
 PROJECT_ROOT = PLOT_ROOT.parent
 DEFAULT_OUTPUT = PLOT_ROOT / "output" / "bench"
+BOOTSTRAP_CACHE = "bootstrap_samples.npz"
+CACHE_SEPARATOR = "::"
 
 
 # --------------------------------------------------------------------------------------
@@ -755,6 +759,7 @@ def analyse(tasks: dict[str, Task], output_root: Path, count: int, rng, per_task
         names.sort()
 
     significance_rows, bootstrap_rows = [], []
+    raw_samples: dict[str, np.ndarray] = {}
     for task_type, names in groups.items():
         specs = specs_by_type[task_type]
         keys = [key for key, _label, _direction in specs]
@@ -777,6 +782,7 @@ def analyse(tasks: dict[str, Task], output_root: Path, count: int, rng, per_task
                 samples = bootstrap(task_type, run.truth, run.scores, count, rng)
                 for key in keys:
                     distributions[name][method][key] = samples[key]
+                    raw_samples[_cache_key(name, method, key)] = samples[key]
                     finite = _finite(samples[key])
                     bootstrap_rows.append({
                         "task": name, "task_type": task_type, "metric": key, "method": method,
@@ -841,7 +847,112 @@ def analyse(tasks: dict[str, Task], output_root: Path, count: int, rng, per_task
         print(f"{TASK_TYPE_DIR[task_type]}: {len(names)} 个任务 × {len(specs)} 个指标 × 3 种图"
               f" -> {directory}")
 
-    return significance_rows, bootstrap_rows
+    return significance_rows, bootstrap_rows, raw_samples
+
+
+def _cache_key(task: str, method: str, metric: str) -> str:
+    """NPZ 里的稳定键；任务名和指标名都不使用 ``::``。"""
+    return CACHE_SEPARATOR.join((task, method, metric))
+
+
+def _summary_values(mean, std) -> np.ndarray:
+    """用 CSV 摘要构造仅供柱状图使用的最小数组。
+
+    ``[mean-std, mean, mean+std]`` 的样本标准差（ddof=1）恰好等于 ``std``，
+    因此能无损复现现有柱状图的均值和误差棒。这些点不用于箱线图或小提琴图。
+    """
+    if pd.isna(mean):
+        return np.array([], dtype=float)
+    mean = float(mean)
+    if pd.isna(std) or float(std) <= 0:
+        return np.asarray([mean], dtype=float)
+    std = float(std)
+    return np.asarray([mean - std, mean, mean + std], dtype=float)
+
+
+def redraw_cached(output_root: Path, selected_tasks: list[str] | None,
+                  per_task: bool, dots: bool) -> int:
+    """仅从已保存的 CSV/NPZ 重画，完全不读预测文件、不做 bootstrap。"""
+    significance_path = output_root / "significance.csv"
+    summary_path = output_root / "metrics_bootstrap.csv"
+    raw_path = output_root / BOOTSTRAP_CACHE
+    missing = [str(path) for path in (significance_path, summary_path) if not path.is_file()]
+    if missing:
+        print("--redraw-only 缺少缓存文件: " + ", ".join(missing), file=sys.stderr)
+        print("请先不带 --redraw-only 完整运行一次。", file=sys.stderr)
+        return 2
+
+    significance_frame = pd.read_csv(significance_path)
+    summary_frame = pd.read_csv(summary_path)
+    if selected_tasks:
+        wanted = set(selected_tasks)
+        significance_frame = significance_frame[significance_frame["task"].isin(wanted)]
+        summary_frame = summary_frame[summary_frame["task"].isin(wanted)]
+        found = set(summary_frame["task"].dropna().astype(str))
+        unknown = sorted(wanted - found)
+        if unknown:
+            print("缓存里找不到任务: " + ", ".join(unknown), file=sys.stderr)
+            return 2
+    if summary_frame.empty:
+        print("缓存中没有可重画的任务。", file=sys.stderr)
+        return 2
+
+    significance: dict[str, dict] = {}
+    for row in significance_frame.to_dict("records"):
+        significance.setdefault(str(row["task"]), {})[str(row["metric"])] = {
+            "p_value": float(row["p_value"]) if pd.notna(row.get("p_value")) else float("nan")
+        }
+
+    raw = np.load(raw_path, allow_pickle=False) if raw_path.is_file() else None
+    kinds = ("bar", "box", "violin") if raw is not None else ("bar",)
+    if raw is None:
+        print(f"未找到 {raw_path.name}：使用 CSV 摘要精确重画柱状图；"
+              "保留现有箱线图、小提琴图和 ROC。")
+    else:
+        print(f"已加载原始 bootstrap 缓存: {raw_path}")
+
+    groups = (summary_frame[["task_type", "task"]].drop_duplicates()
+              .groupby("task_type", sort=False)["task"].apply(list).to_dict())
+    for task_type, task_names in groups.items():
+        if task_type not in METRICS:
+            print(f"跳过未知任务类型: {task_type}", file=sys.stderr)
+            continue
+        task_names = sorted(str(name) for name in task_names)
+        specs = METRICS[task_type]
+        directory = output_root / TASK_TYPE_DIR[task_type]
+        distributions = {name: {method: {} for method, _label in METHODS} for name in task_names}
+        for name in task_names:
+            for method, _label in METHODS:
+                for key, _metric_label, _direction in specs:
+                    cache_key = _cache_key(name, method, key)
+                    if raw is not None and cache_key in raw:
+                        values = np.asarray(raw[cache_key], dtype=float)
+                    else:
+                        rows = summary_frame[
+                            (summary_frame["task"] == name)
+                            & (summary_frame["method"] == method)
+                            & (summary_frame["metric"] == key)
+                        ]
+                        values = (np.array([], dtype=float) if rows.empty
+                                  else _summary_values(rows.iloc[0].get("mean"), rows.iloc[0].get("std")))
+                    distributions[name][method][key] = values
+
+        for kind in kinds:
+            for spec in specs:
+                key = spec[0]
+                plot_metric(kind, spec, task_names, distributions, significance,
+                            directory / kind / f"{key}.png", dots)
+        if per_task:
+            for name in task_names:
+                for kind in kinds:
+                    plot_task_grid(kind, name, specs, distributions, significance,
+                                   directory / "task" / kind / f"{name}.png")
+        print(f"{TASK_TYPE_DIR[task_type]}: {len(task_names)} 个任务 × {len(specs)} 个指标"
+              f" × {len(kinds)} 种图（仅重画） -> {directory}")
+    if raw is not None:
+        raw.close()
+    print("仅重画完成：未重算指标、bootstrap、显著性或 ROC。")
+    return 0
 
 
 def _winner(favor_mean, other_mean, direction: str) -> str:
@@ -862,6 +973,7 @@ def main() -> int:
             "  python PLOT/ana_bench.py\n"
             "  python PLOT/ana_bench.py --n-bootstrap 2000 --per-task\n"
             "  python PLOT/ana_bench.py --tasks RAVDESS-emotion MER2023-emotion\n"
+            "  python PLOT/ana_bench.py --redraw-only --per-task\n"
         ),
     )
     parser.add_argument("--favor", default=str(PROJECT_ROOT / "OUTPUT/finetune_v/vitl16/*/FaVoR-112px-48f-8fps-e5"),
@@ -877,9 +989,14 @@ def main() -> int:
     parser.add_argument("--per-task", action="store_true",
                         help="额外为每个任务出一张「一指标一个面板」的分面图")
     parser.add_argument("--no-dots", action="store_true", help="不叠加 bootstrap 散点")
+    parser.add_argument("--redraw-only", "--plot-only", action="store_true",
+                        help="只读取 --out 中的缓存重画；不重算指标、bootstrap、显著性或 ROC")
     args = parser.parse_args()
-    if args.n_bootstrap < 20:
+    if not args.redraw_only and args.n_bootstrap < 20:
         parser.error("--n-bootstrap 至少要 20")
+
+    if args.redraw_only:
+        return redraw_cached(args.out, args.tasks, args.per_task, not args.no_dots)
 
     tasks = collect_tasks(args.favor, args.vjepaori, args.tasks)
     if not tasks:
@@ -888,12 +1005,13 @@ def main() -> int:
 
     rng = np.random.default_rng(ana.RNG_SEED)
     print(f"共 {len(tasks)} 个任务，bootstrap {args.n_bootstrap} 次")
-    significance_rows, bootstrap_rows = analyse(
+    significance_rows, bootstrap_rows, raw_samples = analyse(
         tasks, args.out, args.n_bootstrap, rng, args.per_task, not args.no_dots)
 
     args.out.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(significance_rows).to_csv(args.out / "significance.csv", index=False)
     pd.DataFrame(bootstrap_rows).to_csv(args.out / "metrics_bootstrap.csv", index=False)
+    np.savez_compressed(args.out / BOOTSTRAP_CACHE, **raw_samples)
 
     # ROC：只有分类/多标签有，回归没有 ROC 这一步
     roc_drawn = []
@@ -909,6 +1027,7 @@ def main() -> int:
     (args.out / "README.txt").write_text(_readme(tasks, args.n_bootstrap, roc_drawn), encoding="utf-8")
     print(f"\n显著性 -> {args.out / 'significance.csv'}")
     print(f"bootstrap 分布 -> {args.out / 'metrics_bootstrap.csv'}")
+    print(f"bootstrap 原始缓存 -> {args.out / BOOTSTRAP_CACHE}")
     if roc_drawn:
         print(f"ROC -> {args.out / 'roc'}（{len(roc_drawn)} 个分类任务 + overview.png）")
     missing = [name for name, task in tasks.items() if not task.runs["vjepaori"].available]
