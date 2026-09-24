@@ -11,7 +11,7 @@ CONFIGS/
 ├── tasks/
 │   ├── vfinetune/{cls,reg,mlcls}/<任务名>.yaml            # 视频微调入口（app: finetune_v）
 │   │   └── <任务名>/*.yaml                     # 只有多入口任务才保留目录（当前 2 个）
-│   ├── apretrain/pretrain_a_FaVoR.yaml                   # AEmo-JEPA 音频预训练入口
+│   ├── apretrain/pretrain_a_FaVoR.yaml                   # AudioJEPA 音频预训练入口
 │   ├── afinetune/{cls,reg,mlcls}/<任务名>.yaml            # 全部 33 条任务的音频微调入口
 │   └── vpretrain/pretrain_v_*.yaml                        # 预训练入口
 ├── datas/
@@ -388,7 +388,7 @@ flash / memory-efficient attention **没有二阶导**，故该 pass 会临时�
 
 入口为 `tasks/afinetune/{cls,reg}/<下表中的名字>.yaml`（`app: finetune_a`）。
 这些入口均由 `app/finetune_a` 使用 `audio_path` 运行，并共用确定性的验证集多裁剪和
-AEmo-JEPA audio backbone。分类标签按 CSV 的 1-based 编码转为训练时的 0-based 编码。
+AudioJEPA audio backbone。分类标签按 CSV 的 1-based 编码转为训练时的 0-based 编码。
 
 | # | 任务入口 | 数据集 CSV | task | 输出 | `label_column` | 备注 |
 |---|---|---|---|---|---|---|
@@ -592,12 +592,10 @@ torchrun --nproc_per_node=2 -m app.main \
 
 ## 12. 已知问题与注意事项
 
-1. **音频 backbone 模式与 checkpoint 来源** —— `model.backbone.mode: aemojepa` 保留旧版
-   简化结构（CNN + projection + 固定位置编码 + 8 层 global blocks），用于兼容已有
-   AEmo-JEPA checkpoint；`model.backbone.mode: emotion2vec` 是完整官方路径，包含相对位置
-   卷积、extra tokens、4 层 modality context encoder、ALiBi 和 8 层 global blocks。
-   `IEMOCAP-emotion.yaml` 已默认采用后者和官方 `model.pt`；新的 `pretrain_a` 也采用完整路径。
-   两种结构的 FAVOR checkpoint 不能互相 strict resume。
+1. **音频 backbone 与 checkpoint 来源** —— 仅支持
+   `model.backbone.mode: emotion2vec`，它包含相对位置卷积、extra tokens、4 层 modality
+   context encoder、ALiBi 和 8 层 global blocks。`IEMOCAP-emotion.yaml` 与新的
+   `pretrain_a` 均采用此路径；旧简化 AudioJEPA backbone checkpoint 已不再兼容。
 
 2. **音频解码依赖** —— 优先使用 `torchaudio`，当当前 PyTorch/Torchaudio 组合要求但未安装
    TorchCodec 时会回退到 `soundfile`；对本地 libsndfile 不支持的 WebM / MP3 等格式，最后回退到 `ffmpeg`。

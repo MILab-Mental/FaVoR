@@ -1,5 +1,5 @@
 app: pretrain_a
-folder: OUTPUT/pretrain_a/aemojepa-plus-large/FaVoR-2to4s
+folder: OUTPUT/pretrain_a/emotion2vec-plus-large/FaVoR-2to4s
 meta:
   dtype: bfloat16
   seed: 42
@@ -11,5 +11,5 @@ meta:
 yamls:
   data: CONFIGS/datas/apretrain/apretrain-data.yaml
   opt: CONFIGS/opt/apretrain-opt-100k.yaml
-  model: CONFIGS/models/apretrain-aemojepa-plus-large.yaml
+  model: CONFIGS/models/apretrain-emotion2vec-plus-large.yaml
   mask: CONFIGS/mask_loss/ajepa-pretrain.yaml

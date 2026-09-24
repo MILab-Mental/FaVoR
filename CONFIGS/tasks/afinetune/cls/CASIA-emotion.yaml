@@ -1,5 +1,5 @@
 app: finetune_a
-folder: OUTPUT/finetune_a/aemojepa-plus-large/CASIA-emotion/jepa-280k
+folder: OUTPUT/finetune_a/emotion2vec-plus-large/CASIA-emotion/jepa-280k
 meta:
   dtype: bfloat16
   load_checkpoint: true
@@ -12,4 +12,4 @@ yamls:
   data: CONFIGS/datas/afinetune/cls/CASIA-emotion-cls6.yaml
   sampling: CONFIGS/datas/afinetune/audio-4s-4clips.yaml
   opt: CONFIGS/opt/afinetune-opt-30.yaml
-  model: CONFIGS/models/afinetune-aemojepa-plus-large.yaml
+  model: CONFIGS/models/afinetune-emotion2vec-plus-large.yaml

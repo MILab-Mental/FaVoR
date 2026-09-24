@@ -1,5 +1,5 @@
 model:
-  name: aemojepa_plus_large_50hz
+  name: emotion2vec_plus_large_50hz
   backbone:
     mode: emotion2vec
     conv_pos_depth: 5

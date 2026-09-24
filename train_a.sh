@@ -18,9 +18,9 @@ usage() {
   bash train_a.sh --dry-run  只校验配置并打印生成的 33 条命令
   bash train_a.sh [并发数]  执行全部任务；并发数默认为 1
 
-切换为新的 AEmo-JEPA 预训练 checkpoint 时，修改脚本顶部 EXPERIMENT_META：
-  checkpoint=OUTPUT/pretrain_a/aemojepa-plus-large/FaVoR-2to4s-full-e2v/latest.pt
-  run_name=aemojepa-plus-large-full-e2v
+切换为新的 AudioJEPA 预训练 checkpoint 时，修改脚本顶部 EXPERIMENT_META：
+  checkpoint=OUTPUT/pretrain_a/emotion2vec-plus-large/FaVoR-2to4s/latest.pt
+  run_name=emotion2vec-plus-large
   feature_mode=topk_average
 EOF
 }
@@ -32,8 +32,7 @@ die() {
 
 # ==================== 实验元数据（通常只改这里）====================
 # 当前默认跑官方 emotion2vec+ large 基线。
-# 新版 pretrain_a 输出同样使用完整 emotion2vec 结构，因此只需换 checkpoint；
-# 对 AEmo-JEPA checkpoint，建议同时把 feature_mode 改成 topk_average。
+# AudioJEPA 使用完整 emotion2vec 结构；切换预训练 checkpoint 时保持该 backbone 设置。
 declare -A EXPERIMENT_META=(
   [nproc_per_node]="2"
   [master_port_base]="12400"
@@ -102,8 +101,8 @@ validate_metadata() {
     || die "nproc_per_node 必须是正整数"
   [[ "${EXPERIMENT_META[master_port_base]}" =~ ^[1-9][0-9]*$ ]] \
     || die "master_port_base 必须是正整数"
-  [[ "${EXPERIMENT_META[backbone_mode]}" =~ ^(emotion2vec|aemojepa)$ ]] \
-    || die "backbone_mode 只能是 emotion2vec 或 aemojepa"
+  [[ "${EXPERIMENT_META[backbone_mode]}" == "emotion2vec" ]] \
+    || die "backbone_mode 只能是 emotion2vec"
   [[ "${EXPERIMENT_META[feature_mode]}" =~ ^(last|topk_average)$ ]] \
     || die "feature_mode 只能是 last 或 topk_average"
   [[ -n "${EXPERIMENT_META[output_root]}" ]] || die "output_root 不能为空"

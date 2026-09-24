@@ -798,7 +798,7 @@ def _strip_prefix(key, prefixes):
 
 
 def audio_backbone_state(checkpoint):
-    """Extract a backbone from FAVOR, legacy AEmo-JEPA, or raw state dicts."""
+    """Extract an AudioJEPA/emotion2vec backbone from a checkpoint or raw state dict."""
     if isinstance(checkpoint, dict) and isinstance(checkpoint.get("encoder"), dict):
         return checkpoint["encoder"]
     state = checkpoint.get("model", checkpoint) if isinstance(checkpoint, dict) else checkpoint
@@ -830,26 +830,9 @@ def load_audio_backbone(backbone, checkpoint_path, min_parameter_ratio=0.95):
         # Raw emotion2vec/data2vec checkpoints use fairseq-style names rather
         # than FAVOR's AudioBackbone names. Reuse the same explicit mapping as
         # pretrain_a initialization so finetune_a can start directly from an
-        # emotion2vec checkpoint without first producing an AEmo-JEPA file.
-        if getattr(backbone, "mode", None) == "emotion2vec":
-            load_official_emotion2vec_backbone(backbone, raw_state, min_parameter_ratio)
-        else:
-            LOGGER.warning(
-                "Loading only CNN/projection/global blocks because backbone.mode=%s. "
-                "Use backbone.mode=emotion2vec for the complete official encoder.",
-                getattr(backbone, "mode", None),
-            )
-            load_extractor_weights(
-                backbone.feature_extractor,
-                raw_state,
-                min_load_ratio=min_parameter_ratio,
-            )
-            load_feature_projection_weights(backbone, raw_state)
-            load_encoder_weights(
-                backbone.context_encoder,
-                raw_state,
-                min_load_ratio=min_parameter_ratio,
-            )
+        # Official emotion2vec/data2vec weights are mapped directly into the
+        # sole supported emotion2vec backbone implementation.
+        load_official_emotion2vec_backbone(backbone, raw_state, min_parameter_ratio)
         LOGGER.info("Initialized audio backbone directly from emotion2vec checkpoint %s", checkpoint_path)
         return checkpoint
     source = audio_backbone_state(checkpoint)

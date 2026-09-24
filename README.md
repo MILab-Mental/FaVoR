@@ -1,10 +1,10 @@
 # FAVOR
 
-**多模态语音 / 视频情感与心理数据集** —— 视频 V-JEPA 与音频 AEmo-JEPA 预训练 + 下游微调。
+**多模态语音 / 视频情感与心理数据集** —— 视频 V-JEPA 与音频 AudioJEPA 预训练 + 下游微调。
 
 FAVOR（Facial / Audio / Video emotion & mental-health understanding）是一套面向
 **语音、视频、音视频联合**的情感与心理健康理解训练框架。视频侧以 V-JEPA 对无标注
-人脸视频做自监督预训练；音频侧以 emotion2vec_plus_large 初始化 AEmo-JEPA 并继续
+人脸视频做自监督预训练；音频侧以 emotion2vec_plus_large 初始化 AudioJEPA 并继续
 预训练。两种模态都通过统一配置入口完成分类、回归和多标签下游微调。
 
 > 本仓库 fork 自 [facebookresearch/vjepa2](https://github.com/facebookresearch/vjepa2)
@@ -19,11 +19,11 @@ FAVOR/
 │   ├── main.py            # 统一启动器：读 YAML → 每 GPU 一个进程 → 按 app 字段分发
 │   ├── pretrain_v/        # 视频 V-JEPA 自监督预训练
 │   ├── finetune_v/        # 视频下游微调
-│   ├── pretrain_a/        # 音频 AEmo-JEPA 自监督预训练
+│   ├── pretrain_a/        # 音频 AudioJEPA 自监督预训练
 │   └── finetune_a/        # 音频分类 / 回归 / 多标签微调
 ├── CONFIGS/               # 全部训练配置（任务入口 + 片段），详见 CONFIGS/README.md
 ├── datasets/              # 视频与音频 dataset / dataloader / transforms
-├── models/                # V-JEPA、AEmo-JEPA 骨干与任务头
+├── models/                # V-JEPA、AudioJEPA 骨干与任务头
 ├── optimization/          # optimizer / 调度器（warmup-cosine / wd-schedule / anneal）
 ├── utils/                 # 分布式 / 日志 / 指标 / checkpoint 加载
 ├── DATASET/               # 数据清单、split、合并与统计脚本（不纳入版本控制）
@@ -52,7 +52,7 @@ python -m app.main --fname CONFIGS/test-finetune.yaml --devices cuda:0 --debugmo
 # 预训练（48 帧 / 112px，vit_large）
 torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vpretrain/pretrain_v_FaVoR-112px-48f.yaml --devices cuda:0 cuda:1
 
-# 音频 AEmo-JEPA 预训练（emotion2vec_plus_large 初始化，2～4 秒变长 crop）
+# 音频 AudioJEPA 预训练（emotion2vec_plus_large 初始化，2～4 秒变长 crop）
 torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/apretrain/pretrain_a_FaVoR.yaml
 
 # 音频微调（例：CASIA emotion 6 类；33 个任务均使用同一入口模式）
@@ -213,7 +213,7 @@ GPU；rank 崩溃会立即报错并终止整组，不用再干等 NCCL 默认 60
 
 ## 音频训练状态
 
-- `app/pretrain_a` 已接入 AEmo-JEPA：以 emotion2vec_plus_large 初始化 CNN 与 context
+- `app/pretrain_a` 已接入 AudioJEPA：以 emotion2vec_plus_large 初始化 CNN 与 context
   encoder，使用独立 predictor 和 EMA target encoder 做音频 JEPA 继续预训练。默认入口为
   `CONFIGS/tasks/apretrain/pretrain_a_FaVoR.yaml`。rank 0 会输出 `init.pt`、可恢复的
   `latest.pt`、`train.log`，并在 `logs/history.csv` 按日志周期记录 loss、掩码比例、
@@ -221,8 +221,8 @@ GPU；rank 崩溃会立即报错并终止整组，不用再干等 NCCL 默认 60
   和训练结束更新。
 - `app/finetune_a` 已支持 `classification`、`regression` 和
   `multi_label_classification`；tasks.json 中全部 33 条任务的音频版本位于
-  `CONFIGS/tasks/afinetune/{cls,reg,mlcls}/`。默认兼容读取原 AEmo-JEPA 的
-  `checkpoint["model"]`，新 `pretrain_a` checkpoint 则直接读取显式的 `encoder`。
+  `CONFIGS/tasks/afinetune/{cls,reg,mlcls}/`。微调可读取 emotion2vec 原始 checkpoint
+  的 `checkpoint["model"]`，或新 `pretrain_a` checkpoint 的显式 `encoder`。
 - 音视频联合（VA）训练仍未实现。
 
 ## 许可

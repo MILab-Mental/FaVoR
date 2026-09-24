@@ -7,9 +7,8 @@ import torch.nn as nn
 
 from .emotion2vec import RelativePositionEncoder, alibi_bias
 from .extractor import ConvFeatureExtractor
-from .positional import FixedPositionalEmbedding
 from .target import topk_average
-from .transformer import Emotion2VecTransformerEncoder, PreNormTransformerEncoder
+from .transformer import Emotion2VecTransformerEncoder
 
 
 class AudioBackbone(nn.Module):
@@ -22,9 +21,9 @@ class AudioBackbone(nn.Module):
         backbone_cfg = cfg.get("backbone", {})
         extractor_cfg = cfg["extractor"]
         encoder_cfg = cfg["encoder"]
-        self.mode = str(backbone_cfg.get("mode", "aemojepa")).lower()
-        if self.mode not in {"aemojepa", "emotion2vec"}:
-            raise ValueError(f"Unsupported audio backbone mode: {self.mode}")
+        self.mode = str(backbone_cfg.get("mode", "emotion2vec")).lower()
+        if self.mode != "emotion2vec":
+            raise ValueError("AudioBackbone supports only backbone.mode='emotion2vec'")
 
         self.feature_extractor = ConvFeatureExtractor(
             conv_layers=extractor_cfg["conv_layers"],
@@ -40,25 +39,13 @@ class AudioBackbone(nn.Module):
         sample_rate = int(audio_cfg["sample_rate"])
         max_seconds = float(audio_cfg.get("max_process_seconds", audio_cfg["process_seconds"]))
         self.max_tokens = self.feature_extractor.output_length(int(sample_rate * max_seconds))
-        if self.mode == "emotion2vec":
-            self._build_emotion2vec(backbone_cfg, encoder_cfg)
-        else:
-            self.num_extra_tokens = 0
-            self.pos_embed_encoder = FixedPositionalEmbedding(self.max_tokens, self.embed_dim)
-            self.context_encoder = PreNormTransformerEncoder(
-                depth=int(encoder_cfg["depth"]),
-                d_model=self.embed_dim,
-                nhead=int(encoder_cfg["nhead"]),
-                dim_feedforward=int(encoder_cfg["dim_feedforward"]),
-                dropout=float(encoder_cfg.get("dropout", 0.0)),
-                qkv_bias=bool(encoder_cfg.get("qkv_bias", True)),
-            )
+        self._build_emotion2vec(backbone_cfg, encoder_cfg)
         self.topk_layers = min(
             int(cfg.get("target", {}).get("topk_layers", encoder_cfg["depth"])),
             int(encoder_cfg["depth"]),
         )
         features_cfg = cfg.get("features", {})
-        default_feature_mode = "last" if self.mode == "emotion2vec" else "topk_average"
+        default_feature_mode = "last"
         self.feature_mode = str(features_cfg.get("mode", default_feature_mode)).lower()
         self.feature_topk_layers = int(features_cfg.get("topk_layers", self.topk_layers))
         if self.feature_mode not in {"last", "topk_average"}:
@@ -132,9 +119,6 @@ class AudioBackbone(nn.Module):
         if token_lens is not None:
             positions = torch.arange(tokens.shape[1], device=tokens.device)[None]
             padding_mask = positions >= token_lens[:, None]
-        if self.mode != "emotion2vec":
-            return self.pos_embed_encoder(tokens), padding_mask, None, None
-
         tokens = tokens + self.relative_positional_encoder(tokens)
         bias = alibi_bias(
             tokens.shape[0], tokens.shape[1], self.num_heads,
@@ -164,21 +148,16 @@ class AudioBackbone(nn.Module):
     def encode_transformer(self, tokens, padding_mask=None, alibi_bias_value=None,
                            alibi_scale=None, return_all_layers=False,
                            remove_extra_tokens=True):
-        if self.mode == "emotion2vec":
-            encoded = self.context_encoder(
-                tokens, key_padding_mask=padding_mask,
-                alibi_bias=alibi_bias_value, alibi_scale=alibi_scale,
-                return_all_layers=return_all_layers,
-            )
-        else:
-            encoded = self.context_encoder(
-                tokens, key_padding_mask=padding_mask, return_all_layers=return_all_layers,
-            )
+        encoded = self.context_encoder(
+            tokens, key_padding_mask=padding_mask,
+            alibi_bias=alibi_bias_value, alibi_scale=alibi_scale,
+            return_all_layers=return_all_layers,
+        )
         if return_all_layers:
             output, layers = encoded
         else:
             output, layers = encoded, None
-        if self.mode == "emotion2vec" and remove_extra_tokens and self.num_extra_tokens:
+        if remove_extra_tokens and self.num_extra_tokens:
             output = output[:, self.num_extra_tokens:]
             if layers is not None:
                 layers = [layer[:, self.num_extra_tokens:] for layer in layers]
@@ -210,7 +189,7 @@ class AudioBackbone(nn.Module):
                 tokens, padding_mask, bias, scale,
                 return_all_layers=False, remove_extra_tokens=True,
             )
-            if self.mode == "emotion2vec" and padding_mask is not None and self.num_extra_tokens:
+            if padding_mask is not None and self.num_extra_tokens:
                 padding_mask = padding_mask[:, self.num_extra_tokens:]
         else:
             _, layers, padding_mask = self.forward(
