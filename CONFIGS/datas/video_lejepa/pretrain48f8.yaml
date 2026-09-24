@@ -1,0 +1,26 @@
+data:
+  datasets:
+    - DATASET/merged/pretrain_videos_0901.csv
+  datasets_weights:
+    - 1
+
+  num_frames: 48
+  fps: 8
+  frame_stride: null
+
+  batch_size: 8
+  global_size: 112
+  local_size: 48
+  local_views: 10
+
+  global_scale: [0.8, 1.0]
+  local_scale: [0.02, 0.4]
+  horizontal_flip: true
+  color_jitter_prob: 0.8
+  grayscale_prob: 0.2
+  gaussian_blur_prob: 0.0
+  color_jitter_hue: 0.1
+  num_workers: 8
+  persistent_workers: true
+  pin_mem: true
+  drop_last: true

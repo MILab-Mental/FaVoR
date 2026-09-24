@@ -1,0 +1,15 @@
+app: pretrain_video_lejepa
+folder: OUTPUT/pretrain_video_lejepa/vitl16/FaVoR-112px-48f8
+meta:
+  dtype: bfloat16
+  load_checkpoint: true
+  read_checkpoint: null
+  reset_epoch: false
+  save_every_freq: 5
+  log_freq: 10
+  seed: 239
+yamls:
+  data: CONFIGS/datas/video_lejepa/pretrain48f8.yaml
+  opt: CONFIGS/opt/video_lejepa.yaml
+  model: CONFIGS/models/video_lejepa-vit-l.yaml
+  loss: CONFIGS/mask_loss/video_lejepa.yaml
