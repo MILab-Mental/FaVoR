@@ -14,6 +14,14 @@ import sys
 import warnings
 from pathlib import Path
 
+# When launched as ``torchrun app/main.py``, Python places ``app/`` rather
+# than the repository root on sys.path.  Add the root before importing local
+# top-level packages such as ``utils`` and ``models``.  Module-style launches
+# already contain it, so this is a no-op there.
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 # 过滤所有 warning：Python warnings + PyTorch C++ 日志（如 NCCL destroy_process_group）。
 # C++ 日志级别必须在导入 torch 之前设置（utils.distributed 会导入 torch）才生效。
 warnings.filterwarnings("ignore")
@@ -26,7 +34,6 @@ from utils.distributed import init_distributed
 
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 logger = logging.getLogger()
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--fname", type=str, help="name of config file to load", default="configs.yaml")

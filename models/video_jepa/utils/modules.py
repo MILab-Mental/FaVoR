@@ -26,8 +26,19 @@ def rotate_queries_or_keys(x, pos):
     # -- Fixing the bug would break compatibility with the pretrained model, but the fix can be applied by commenting
     # -- out the two lines below, and uncommenting the following two lines.
     # -- Thanks to @echosprint, original PR: https://github.com/facebookresearch/vjepa2/pull/15
-    emb_sin = emb_sin.squeeze(-1).repeat(1, 1, 1, 2)
-    emb_cos = emb_cos.squeeze(-1).repeat(1, 1, 1, 2)
+    # Preserve the pretrained-compatible duplicated-frequency convention while
+    # supporting dense shared ids [N], per-sample ids [B,N], and legacy
+    # per-head masked ids [B,H,N].
+    if pos.dim() == 1:
+        emb_sin = emb_sin.unsqueeze(0).unsqueeze(0)
+        emb_cos = emb_cos.unsqueeze(0).unsqueeze(0)
+    elif pos.dim() == 2:
+        emb_sin = emb_sin.unsqueeze(1)
+        emb_cos = emb_cos.unsqueeze(1)
+    repeats = [1] * emb_sin.dim()
+    repeats[-1] = 2
+    emb_sin = emb_sin.repeat(*repeats)
+    emb_cos = emb_cos.repeat(*repeats)
     # emb_sin = emb_sin.repeat_interleave(2, dim=-1)  # (..., N, D)
     # emb_cos = emb_cos.repeat_interleave(2, dim=-1)  # (..., N, D)
 
@@ -111,6 +122,7 @@ class RoPEAttention(nn.Module):
         use_sdpa=True,
         grid_size=14,
         is_causal=False,
+        num_prefix_tokens=0,
     ):
         super().__init__()
         self.num_heads = num_heads
@@ -128,6 +140,7 @@ class RoPEAttention(nn.Module):
         self.w_dim = int(2 * ((head_dim // 3) // 2))
         self.grid_size = grid_size
         self.is_causal = is_causal
+        self.num_prefix_tokens = int(num_prefix_tokens)
 
     def _get_frame_pos(self, ids, H_patches=None, W_patches=None):
         if H_patches is None or W_patches is None:
@@ -166,7 +179,8 @@ class RoPEAttention(nn.Module):
 
     def forward(self, x, mask=None, attn_mask=None, T=None, H_patches=None, W_patches=None):
         B, N, C = x.size()
-        grid_depth = int(N // (self.grid_size * self.grid_size))
+        patch_n = N - self.num_prefix_tokens
+        grid_depth = int(patch_n // (self.grid_size * self.grid_size))
 
         qkv = self.qkv(x).unflatten(-1, (3, self.num_heads, -1)).permute(2, 0, 3, 1, 4)
         q, k, v = qkv[0], qkv[1], qkv[2]  # [B, num_heads, N, D]
@@ -181,29 +195,42 @@ class RoPEAttention(nn.Module):
                 mask = torch.arange(int(T * H_patches * W_patches), device=x.device)
             d_mask, h_mask, w_mask = self.separate_positions(mask, H_patches, W_patches)
 
+        # Prefix/readout tokens (CLS in LeJEPA) intentionally have no spatial
+        # or temporal RoPE coordinate.  Patch ids still refer to the original
+        # dense grid after random token dropping.
+        q_prefix = q[..., : self.num_prefix_tokens, :] if self.num_prefix_tokens else None
+        k_prefix = k[..., : self.num_prefix_tokens, :] if self.num_prefix_tokens else None
+        q_patch = q[..., self.num_prefix_tokens :, :]
+        k_patch = k[..., self.num_prefix_tokens :, :]
+
         s = 0
         # Rotate depth
-        qd = rotate_queries_or_keys(q[..., s : s + self.d_dim], pos=d_mask)
-        kd = rotate_queries_or_keys(k[..., s : s + self.d_dim], pos=d_mask)
+        qd = rotate_queries_or_keys(q_patch[..., s : s + self.d_dim], pos=d_mask)
+        kd = rotate_queries_or_keys(k_patch[..., s : s + self.d_dim], pos=d_mask)
         s += self.d_dim
         # Rotate height dim
-        qh = rotate_queries_or_keys(q[..., s : s + self.h_dim], pos=h_mask)
-        kh = rotate_queries_or_keys(k[..., s : s + self.h_dim], pos=h_mask)
+        qh = rotate_queries_or_keys(q_patch[..., s : s + self.h_dim], pos=h_mask)
+        kh = rotate_queries_or_keys(k_patch[..., s : s + self.h_dim], pos=h_mask)
         s += self.h_dim
         # Rotate width dim
-        qw = rotate_queries_or_keys(q[..., s : s + self.w_dim], pos=w_mask)
-        kw = rotate_queries_or_keys(k[..., s : s + self.w_dim], pos=w_mask)
+        qw = rotate_queries_or_keys(q_patch[..., s : s + self.w_dim], pos=w_mask)
+        kw = rotate_queries_or_keys(k_patch[..., s : s + self.w_dim], pos=w_mask)
         s += self.w_dim
 
         # Combine rotated dimension
         if s < self.head_dim:
-            qr = q[..., s:]
-            kr = k[..., s:]
-            q = torch.cat([qd, qh, qw, qr], dim=-1)
-            k = torch.cat([kd, kh, kw, kr], dim=-1)
+            qr = q_patch[..., s:]
+            kr = k_patch[..., s:]
+            q_patch = torch.cat([qd, qh, qw, qr], dim=-1)
+            k_patch = torch.cat([kd, kh, kw, kr], dim=-1)
         else:
-            q = torch.cat([qd, qh, qw], dim=-1)
-            k = torch.cat([kd, kh, kw], dim=-1)
+            q_patch = torch.cat([qd, qh, qw], dim=-1)
+            k_patch = torch.cat([kd, kh, kw], dim=-1)
+        if self.num_prefix_tokens:
+            q = torch.cat([q_prefix, q_patch], dim=-2)
+            k = torch.cat([k_prefix, k_patch], dim=-2)
+        else:
+            q, k = q_patch, k_patch
 
         if attn_mask is not None or self.use_sdpa:
             with torch.backends.cuda.sdp_kernel():
@@ -294,6 +321,7 @@ class Block(nn.Module):
         is_causal=False,
         grid_size=16,
         use_rope=False,
+        num_prefix_tokens=0,
         **kwargs,
     ):
         super().__init__()
@@ -309,6 +337,7 @@ class Block(nn.Module):
                 is_causal=is_causal,
                 grid_size=grid_size,
                 proj_drop=drop,
+                num_prefix_tokens=num_prefix_tokens,
             )
         else:
             self.attn = Attention(

@@ -1,0 +1,18 @@
+model:
+  name: vit_large
+  patch_size: 16
+  tubelet_size: 1
+  use_rope: true
+  use_sdpa: true
+  use_silu: false
+  wide_silu: true
+  use_activation_checkpointing: true
+  token_drop_rate: 0.95
+  attn_mode: block_causal
+  projector:
+    hidden_dim: 2048
+    output_dim: 256
+  init:
+    mode: vjepa_checkpoint
+    checkpoint: CKPT/vjepa2/vitl.pt
+    min_load_ratio: 0.90

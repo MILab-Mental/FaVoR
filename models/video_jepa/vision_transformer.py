@@ -45,6 +45,9 @@ class VisionTransformer(nn.Module):
         use_activation_checkpointing=False,
         use_rope=False,
         handle_nonsquare_inputs=True,
+        use_cls_token=False,
+        token_drop_rate=0.0,
+        attn_mode="full",
         **kwargs
     ):
         super().__init__()
@@ -52,6 +55,13 @@ class VisionTransformer(nn.Module):
         self.num_heads = num_heads
         self.out_layers = out_layers
         self.handle_nonsquare_inputs = handle_nonsquare_inputs
+        self.use_cls_token = bool(use_cls_token)
+        if not 0.0 <= float(token_drop_rate) < 1.0:
+            raise ValueError(f"token_drop_rate must be in [0, 1), got {token_drop_rate}")
+        self.token_drop_rate = float(token_drop_rate)
+        if attn_mode not in ("full", "block_causal"):
+            raise ValueError(f"attn_mode must be 'full' or 'block_causal', got {attn_mode!r}")
+        self.attn_mode = attn_mode
 
         if type(img_size) is int:
             img_size = (img_size, img_size)
@@ -78,16 +88,22 @@ class VisionTransformer(nn.Module):
         # Position embedding
         self.uniform_power = uniform_power
         self.use_rope = use_rope
+        if self.use_cls_token:
+            self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
         if self.use_rope:
             self.pos_embed = None
         else:
-            self.pos_embed = nn.Parameter(torch.zeros(1, self.num_patches, embed_dim), requires_grad=False)
+            self.pos_embed = nn.Parameter(
+                torch.zeros(1, self.num_patches + int(self.use_cls_token), embed_dim),
+                requires_grad=False,
+            )
 
         # Attention Blocks
         self.blocks = nn.ModuleList(
             [
                 Block(
                     use_rope=use_rope,
+                    num_prefix_tokens=int(self.use_cls_token),
                     grid_size=img_size[0] // patch_size,
                     grid_depth=num_frames // tubelet_size,
                     dim=embed_dim,
@@ -113,6 +129,8 @@ class VisionTransformer(nn.Module):
             self._init_pos_embed(self.pos_embed.data)  # sincos pos-embed
         self.init_std = init_std
         self.apply(self._init_weights)
+        if self.use_cls_token:
+            trunc_normal_(self.cls_token, std=self.init_std)
         self._rescale_blocks()
 
     def _init_pos_embed(self, pos_embed):
@@ -121,10 +139,10 @@ class VisionTransformer(nn.Module):
         if self.is_video:
             grid_depth = self.num_frames // self.tubelet_size
             sincos = get_3d_sincos_pos_embed(
-                embed_dim, grid_size, grid_depth, cls_token=False, uniform_power=self.uniform_power
+                embed_dim, grid_size, grid_depth, cls_token=self.use_cls_token, uniform_power=self.uniform_power
             )
         else:
-            sincos = get_2d_sincos_pos_embed(embed_dim, grid_size, cls_token=False)
+            sincos = get_2d_sincos_pos_embed(embed_dim, grid_size, cls_token=self.use_cls_token)
         pos_embed.copy_(torch.from_numpy(sincos).float().unsqueeze(0))
 
     def _init_weights(self, m):
@@ -158,7 +176,7 @@ class VisionTransformer(nn.Module):
     def no_weight_decay(self):
         return {}
 
-    def forward(self, x, masks=None):
+    def forward(self, x, masks=None, return_tokens=None):
         """
         :param x: input image/video
         :param masks: indices of patch tokens to mask (remove)
@@ -180,27 +198,55 @@ class VisionTransformer(nn.Module):
         if not self.handle_nonsquare_inputs:
             T = H_patches = W_patches = None
 
+        pos_embed = None
         if not self.use_rope:
             pos_embed = self.interpolate_pos_encoding(x, self.pos_embed)
-            x = self.patch_embed(x)
-            x += pos_embed
-        else:
-            x = self.patch_embed(x)
+        x = self.patch_embed(x)
+        if pos_embed is not None:
+            x += pos_embed[:, int(self.use_cls_token) :]
 
         # Mask away unwanted tokens (if masks provided)
         if masks is not None:
             x = apply_masks(x, masks)
             masks = torch.cat(masks, dim=0)
 
+        # LeJEPA's random encoder-side token drop is independent per sample
+        # and is active only during training.  Evaluation always sees the
+        # complete dense patch grid.
+        token_ids = masks
+        if masks is None and self.training and self.token_drop_rate > 0:
+            batch, num_patches, channels = x.shape
+            keep = max(1, int(round(num_patches * (1.0 - self.token_drop_rate))))
+            token_ids = torch.rand(batch, num_patches, device=x.device).argsort(dim=1)[:, :keep]
+            x = torch.gather(x, 1, token_ids.unsqueeze(-1).expand(-1, -1, channels))
+
+        if self.use_cls_token:
+            cls = self.cls_token.expand(x.shape[0], -1, -1)
+            if pos_embed is not None:
+                cls = cls + pos_embed[:, :1]
+            x = torch.cat([cls, x], dim=1)
+
+        attn_mask = None
+        if self.attn_mode == "block_causal":
+            attn_mask = build_block_causal_mask(
+                T=T,
+                H_patches=H_patches,
+                W_patches=W_patches,
+                token_ids=token_ids,
+                num_prefix_tokens=int(self.use_cls_token),
+                device=x.device,
+            )
+
         # Fwd prop
         outs = []
         for i, blk in enumerate(self.blocks):
             if self.use_activation_checkpointing:
                 x = torch.utils.checkpoint.checkpoint(
-                    blk, x, masks, None, T=T, H_patches=H_patches, W_patches=W_patches, use_reentrant=False
+                    blk, x, token_ids, attn_mask, T=T, H_patches=H_patches, W_patches=W_patches,
+                    use_reentrant=False
                 )
             else:
-                x = blk(x, mask=masks, attn_mask=None, T=T, H_patches=H_patches, W_patches=W_patches)
+                x = blk(x, mask=token_ids, attn_mask=attn_mask, T=T, H_patches=H_patches, W_patches=W_patches)
             if self.out_layers is not None and i in self.out_layers:
                 outs.append(self.norm(x))
 
@@ -210,23 +256,29 @@ class VisionTransformer(nn.Module):
         if self.norm is not None:
             x = self.norm(x)
 
+        if return_tokens is False and self.use_cls_token:
+            return x[:, 0]
         return x
 
     def interpolate_pos_encoding(self, x, pos_embed):
 
-        _, N, dim = pos_embed.shape
+        _, N_total, dim = pos_embed.shape
+        prefix = int(self.use_cls_token)
+        cls_pos_embed = pos_embed[:, :prefix]
+        pos_embed = pos_embed[:, prefix:]
+        N = pos_embed.shape[1]
 
         if self.is_video:
 
             # If pos_embed already correct size, just return
             _, _, T, H, W = x.shape
             if H == self.img_height and W == self.img_width and T == self.num_frames:
-                return pos_embed
+                return torch.cat([cls_pos_embed, pos_embed], dim=1)
 
             # Just chop off last N tokens of positional embedding
             elif H == self.img_height and W == self.img_width and T < self.num_frames:
                 new_N = int((T // self.tubelet_size) * (H // self.patch_size) * (W // self.patch_size))
-                return pos_embed[:, :new_N, :]
+                return torch.cat([cls_pos_embed, pos_embed[:, :new_N, :]], dim=1)
 
             # Convert depth, height, width of input to be measured in patches
             # instead of pixels/frames
@@ -250,14 +302,14 @@ class VisionTransformer(nn.Module):
                 mode="trilinear",
             )
             pos_embed = pos_embed.permute(0, 2, 3, 4, 1).view(1, -1, dim)
-            return pos_embed
+            return torch.cat([cls_pos_embed, pos_embed], dim=1)
 
         else:
 
             # If pos_embed already correct size, just return
             _, _, H, W = x.shape
             if H == self.img_height and W == self.img_width:
-                return pos_embed
+                return torch.cat([cls_pos_embed, pos_embed], dim=1)
 
             # Compute scale factor for spatial interpolation
             npatch = (H // self.patch_size) * (W // self.patch_size)
@@ -269,7 +321,34 @@ class VisionTransformer(nn.Module):
                 mode="bicubic",
             )
             pos_embed = pos_embed.permute(0, 2, 3, 1).view(1, -1, dim)
-            return pos_embed
+            return torch.cat([cls_pos_embed, pos_embed], dim=1)
+
+
+def build_block_causal_mask(
+    T, H_patches, W_patches, token_ids=None, num_prefix_tokens=1, device=None
+):
+    """Build LeVJEPA block-causal attention (True means attention allowed).
+
+    Patches attend bidirectionally within a frame and causally across frames.
+    CLS is a readout register: it attends to the entire clip, while patches do
+    not attend to CLS, preventing future information leaking backward through
+    the prefix token in deeper layers.
+    """
+    tokens_per_frame = int(H_patches * W_patches)
+    if token_ids is None:
+        ids = torch.arange(int(T * tokens_per_frame), device=device).unsqueeze(0)
+    else:
+        ids = token_ids
+    frame_ids = ids // tokens_per_frame
+    mask = frame_ids.unsqueeze(-1) >= frame_ids.unsqueeze(-2)
+    if num_prefix_tokens:
+        batch, patches, _ = mask.shape
+        prefix = int(num_prefix_tokens)
+        full = mask.new_zeros((batch, patches + prefix, patches + prefix))
+        full[:, :prefix, :] = True
+        full[:, prefix:, prefix:] = mask
+        mask = full
+    return mask.unsqueeze(1)
 
 
 def vit_large(patch_size=16, **kwargs):

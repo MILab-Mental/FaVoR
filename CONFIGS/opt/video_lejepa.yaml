@@ -1,0 +1,14 @@
+optimization:
+  epochs: 150
+  ipe: 5000
+  ipe_scale: 1.0
+  accumulate_grad_batches: 1
+  lr: 0.0004
+  start_lr: 0.0001
+  final_lr: 0.0004
+  warmup: 12
+  weight_decay: 0.04
+  final_weight_decay: 0.04
+  betas: [0.9, 0.95]
+  eps: 1.0e-8
+  clip_grad_norm: 1.0
