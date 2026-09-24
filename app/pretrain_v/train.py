@@ -27,7 +27,7 @@ import torch.multiprocessing as mp
 import torch.nn.functional as F
 from torch.nn.parallel import DistributedDataParallel
 
-from models.pretrain_v_model import init_video_model, load_checkpoint
+from models.video_jepa import init_video_model, load_checkpoint
 
 from optimization.optimizer import init_opt
 
