@@ -1,0 +1,5 @@
+data:
+  global_seconds: 6.0
+  local_seconds: 2.0
+  view_mode: crop_augment
+

@@ -1,3 +1,4 @@
+import csv
 import tempfile
 import importlib.util
 from pathlib import Path
@@ -6,7 +7,7 @@ import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
 
-from app.pretrain_video_lejepa.train import load_training_checkpoint, save_checkpoint
+from app.pretrain_video_lejepa.train import _trim_history, load_training_checkpoint, save_checkpoint
 from datasets.video_lejepa import VideoLeJEPAMultiCrop, collate_video_lejepa
 from models.video_lejepa import LeJEPALoss, ModelEMA, Projector, VideoLeJEPA, load_vjepa_encoder
 from models.video_jepa.vision_transformer import VisionTransformer, build_block_causal_mask
@@ -27,6 +28,25 @@ def tiny_model(token_drop_rate=0.5, attn_mode="block_causal"):
         attn_mode=attn_mode,
     )
     return VideoLeJEPA(encoder, Projector(24, hidden_dim=16, output_dim=8))
+
+
+def test_trim_history_removes_unsaved_epoch_and_reused_accumulation_step(tmp_path):
+    history = tmp_path / "history.csv"
+    with history.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["epoch", "iteration", "global_step"])
+        writer.writeheader()
+        writer.writerows([
+            {"epoch": 1, "iteration": 0, "global_step": 1},
+            {"epoch": 1, "iteration": 1, "global_step": 2},
+            {"epoch": 2, "iteration": 0, "global_step": 2},
+            {"epoch": 2, "iteration": 1, "global_step": 3},
+        ])
+
+    _trim_history(history, checkpoint_epoch=1, checkpoint_step=2)
+
+    with history.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    assert [(int(row["epoch"]), int(row["global_step"])) for row in rows] == [(1, 1), (1, 2)]
 
 
 def test_multicrop_shapes_and_temporal_contract():

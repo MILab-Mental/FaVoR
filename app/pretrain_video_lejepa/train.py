@@ -5,6 +5,7 @@ import logging
 import math
 import os
 import random
+import tempfile
 import time
 from contextlib import nullcontext
 from pathlib import Path
@@ -86,6 +87,29 @@ def _append_csv(path, row):
         if not exists:
             writer.writeheader()
         writer.writerow(row)
+
+
+def _trim_history(path, checkpoint_epoch, checkpoint_step):
+    path = Path(path)
+    if not path.exists():
+        return
+    with path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        fieldnames = reader.fieldnames
+        rows = [
+            row for row in reader
+            if int(row["epoch"]) <= checkpoint_epoch
+            and int(row["global_step"]) <= checkpoint_step
+        ]
+    with tempfile.NamedTemporaryFile(
+        mode="w", newline="", encoding="utf-8", dir=path.parent,
+        prefix=f".{path.name}.", suffix=".tmp", delete=False,
+    ) as handle:
+        temporary = Path(handle.name)
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+    os.replace(temporary, path)
 
 
 def _write_training_curve(history_path, output_path):
@@ -212,20 +236,23 @@ def main(args):
     warmup_steps = int(float(opt_cfg.get("warmup", 0)) * optimizer_steps_per_epoch)
 
     start_epoch = global_step = 0
+    history_path = folder / "history.csv"
     latest = folder / "latest.pt"
     resume_path = meta.get("read_checkpoint")
     if meta.get("load_checkpoint", True) and latest.exists():
         resume_path = latest
     if resume_path and Path(resume_path).exists() and Path(resume_path) != Path(init_cfg.get("checkpoint", "")):
+        reset_epoch = bool(meta.get("reset_epoch", False))
         start_epoch, global_step, message = load_training_checkpoint(
-            resume_path, model, optimizer, scaler, ema, weights_only=bool(meta.get("reset_epoch", False))
+            resume_path, model, optimizer, scaler, ema, weights_only=reset_epoch
         )
+        if rank == 0 and not reset_epoch:
+            _trim_history(history_path, start_epoch, global_step)
         logger.info("resumed VIDEO-LeJEPA from %s: %s", resume_path, message)
 
     if world_size > 1:
         model = DistributedDataParallel(model, device_ids=[0] if device.type == "cuda" else None)
 
-    history_path = folder / "history.csv"
     save_every = int(meta.get("save_every_freq", 1))
     log_freq = int(meta.get("log_freq", 10))
     clip_grad = float(opt_cfg.get("clip_grad_norm", 1.0))

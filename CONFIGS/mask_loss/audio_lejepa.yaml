@@ -1,0 +1,11 @@
+loss:
+  sigreg:
+    weight: 0.02
+    knots: 17
+    num_proj: 1024
+    normalize_by_n: false
+ema:
+  enabled: true
+  decay: 0.9999
+  update_every: 32
+  device: cuda

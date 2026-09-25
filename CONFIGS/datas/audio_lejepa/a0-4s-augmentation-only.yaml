@@ -1,0 +1,5 @@
+data:
+  global_seconds: 4.0
+  local_seconds: 4.0
+  view_mode: augmentation_only
+

@@ -1,0 +1,10 @@
+data:
+  global_seconds: 4.0
+  local_seconds: 2.0
+  view_mode: crop_only
+audio_augmentation:
+  gain: {enabled: false}
+  speed: {enabled: false}
+  polarity: {enabled: false}
+  time_mask: {enabled: false}
+

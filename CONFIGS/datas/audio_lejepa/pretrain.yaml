@@ -1,0 +1,36 @@
+data:
+  datasets:
+    - DATASET/merged/pretrain_audios_0901.csv
+  sample_rate: 16000
+  global_seconds: 4.0
+  local_seconds: 2.0
+  local_views: 4
+  view_mode: crop_augment
+  short_audio_policy: repeat
+  normalize_waveform: true
+  batch_size: 16
+  num_workers: 8
+  persistent_workers: true
+  pin_mem: false
+  drop_last: true
+  max_retries: 10
+
+audio_augmentation:
+  gain:
+    enabled: true
+    probability: 0.5
+    min_db: -6.0
+    max_db: 6.0
+  speed:
+    enabled: true
+    probability: 0.3
+    min_rate: 0.95
+    max_rate: 1.05
+  polarity:
+    enabled: true
+    probability: 0.1
+  time_mask:
+    enabled: true
+    probability: 0.3
+    max_ratio: 0.10
+

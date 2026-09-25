@@ -692,6 +692,7 @@ def load_official_emotion2vec_backbone(backbone, state, min_parameter_ratio=0.95
         )
     skipped_sources = [key for key in official_source if key not in consumed_sources]
     missing_targets = [key for key in target_state if key not in compatible]
+    shape_mismatches = [item for report in reports for item in report[-1]]
     LOGGER.info(
         "emotion2vec target coverage: %.2f%% (%.3fM/%.3fM parameters); missing tensors=%d",
         target_ratio * 100, loaded_target_total / 1e6, target_total / 1e6, len(missing_targets),
@@ -700,6 +701,7 @@ def load_official_emotion2vec_backbone(backbone, state, min_parameter_ratio=0.95
         "emotion2vec source coverage: %.2f%% (%.3fM/%.3fM encoder parameters); skipped tensors=%d",
         source_ratio * 100, loaded_source_total / 1e6, source_total / 1e6, len(skipped_sources),
     )
+    LOGGER.info("First loaded emotion2vec target tensors: %s", sorted(compatible)[:10])
     excluded = {
         key: value for key, value in state.items()
         if torch.is_tensor(value) and key not in official_source
@@ -714,6 +716,8 @@ def load_official_emotion2vec_backbone(backbone, state, min_parameter_ratio=0.95
         LOGGER.warning("First missing emotion2vec target tensors: %s", missing_targets[:10])
     if skipped_sources:
         LOGGER.warning("First unused official encoder tensors: %s", skipped_sources[:10])
+    if shape_mismatches:
+        LOGGER.warning("Shape-mismatched emotion2vec tensors: %s", shape_mismatches[:10])
     if target_ratio < min_parameter_ratio or source_ratio < min_parameter_ratio:
         raise RuntimeError(
             f"Incomplete emotion2vec transfer: target={target_ratio:.2%}, source={source_ratio:.2%}, "
@@ -725,6 +729,9 @@ def load_official_emotion2vec_backbone(backbone, state, min_parameter_ratio=0.95
         "source_ratio": source_ratio,
         "missing_targets": missing_targets,
         "skipped_sources": skipped_sources,
+        "unexpected_sources": skipped_sources,
+        "shape_mismatches": shape_mismatches,
+        "loaded_keys": sorted(compatible),
     }
 
 
