@@ -2,6 +2,7 @@
 import csv
 import re
 from pathlib import Path
+from .progress import progress_lines
 
 REQUIRED = {'pair_id', 'source_id', 'video_path', 'audio_path'}
 
@@ -13,6 +14,13 @@ def source_key(path, pattern=None):
         if not match:
             raise ValueError(f'cannot extract source identity from {path}')
         return match.group('source_id') if 'source_id' in match.groupdict() else match.group(1)
+    # RAVDESS's first field is modality (01=AV, 02=video, 03=audio),
+    # not recording identity. Scope this rule to the dataset directory.
+    # Official naming convention: https://zenodo.org/records/1188976
+    if any(part.casefold() == 'ravdess' for part in Path(path).parts):
+        match = re.fullmatch(r'0[123]-((?:\d{2}-){5}\d{2})', stem)
+        if match:
+            return 'ravdess:' + match.group(1)
     return stem
 
 
@@ -25,12 +33,12 @@ def validate_identity(row, pattern=None):
         raise ValueError('empty pair_id')
 
 
-def read_manifest(path, *, root=None, source_pattern=None):
+def read_manifest(path, *, root=None, source_pattern=None, progress=False):
     path = Path(path)
-    with path.open(encoding='utf-8-sig', newline='') as handle:
+    with path.open(encoding='utf-8-sig', newline='') as handle, progress_lines(handle, path, 'Read manifest', progress) as lines:
         first = handle.readline()
         handle.seek(0)
-        reader = csv.DictReader(handle, delimiter='\t' if '\t' in first else ',')
+        reader = csv.DictReader(lines, delimiter='\t' if '\t' in first else ',')
         if not reader.fieldnames or not REQUIRED.issubset(reader.fieldnames):
             raise ValueError(f'{path}: expected canonical columns {sorted(REQUIRED)}; run manifest_tools convert')
         rows, seen = [], set()

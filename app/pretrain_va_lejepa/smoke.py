@@ -18,7 +18,7 @@ from models.va_lejepa import build_va_lejepa, VABranchLoss, save_checkpoint, loa
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--config', default='CONFIGS/tasks/va_lejepa/pretrain_va_lejepa_I0.yaml')
+    parser.add_argument('--config', default='CONFIGS/tasks/pretrain/audio-video/lejepa/i0.yaml')
     parser.add_argument('--manifest', required=True)
     parser.add_argument('--video-checkpoint', required=True)
     parser.add_argument('--audio-checkpoint', required=True)

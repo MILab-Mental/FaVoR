@@ -302,7 +302,7 @@ def test_equal_backbone_dimensions_still_use_independent_adapters():
 def test_actual_default_audio_cnn_geometry_and_branch_loss_weights():
     from app.main import load_config
     from models.audio_jepa.extractor import ConvFeatureExtractor
-    cfg=load_config('CONFIGS/models/va_lejepa-vitl-emotion2vec.yaml')['model']['audio']['extractor']
+    cfg=load_config('CONFIGS/models/pretrain/audio-video/lejepa/vitl-emotion2vec.yaml')['model']['audio']['extractor']
     extractor=ConvFeatureExtractor(cfg['conv_layers'])
     assert cnn_geometry(extractor)==(320,400,199.5)
     assert extractor.output_length(6*16000)==299

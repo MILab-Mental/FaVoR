@@ -1,7 +1,0 @@
-data:
-  task: classification
-  label_column: label
-  num_class: 2
-  manifests:
-  - DATASET/merged/finetune_va_canonical.csv
-  local_views: 0

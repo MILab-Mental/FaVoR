@@ -150,6 +150,6 @@ def test_checkpoint_resume_and_config_ablation_merge():
     for left, right in zip(model.parameters(), restored.parameters()):
         assert torch.equal(left, right)
 
-    cfg = load_config("CONFIGS/tasks/audio_lejepa/pretrain_audio_lejepa_A1.yaml")
+    cfg = load_config("CONFIGS/tasks/pretrain/audio/lejepa/a1-4s-local2s-crop-only.yaml")
     assert cfg["data"]["view_mode"] == "crop_only"
     assert cfg["data"]["sample_rate"] == 16000

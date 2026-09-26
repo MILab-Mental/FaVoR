@@ -1,0 +1,27 @@
+app: finetune_va
+folder: OUTPUT/finetune_va/mental/DSM-Dissociation
+meta:
+  seed: 0
+  auto_resume: true
+  read_checkpoint: null
+data:
+  local_views: 0
+finetune:
+  pretrained_checkpoint: OUTPUT/pretrain_va_lejepa/I3-C1/latest.pt
+  branch_aggregation: separate_logits
+  freeze_video_encoder: false
+  freeze_audio_encoder: false
+  freeze_fusion_adapter: false
+  video_lr_scale: 0.05
+  audio_lr_scale: 0.05
+  fusion_lr_scale: 0.2
+  head_lr_scale: 1.0
+  early_stopping_patience: 10
+  best_metric: f1_macro
+  best_metric_mode: max
+  branch_loss_weight: 0.0
+yamls:
+  sampling: CONFIGS/data/finetune/audio-video/sampling/va-6s.yaml
+  model: CONFIGS/models/finetune/audio-video/vitl-emotion2vec.yaml
+  opt: CONFIGS/optimization/finetune/audio-video/epochs20-warmup0-lr0.001.yaml
+  data: CONFIGS/data/finetune/audio-video/mental/DSM-Dissociation.yaml

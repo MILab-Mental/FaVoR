@@ -1,0 +1,6 @@
+data:
+  task: regression
+  label_column: pos_intensity
+  num_class: 1
+  manifests:
+  - DATASET/merged/finetune_va/2_MER2023_SV.csv

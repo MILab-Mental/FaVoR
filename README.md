@@ -40,8 +40,8 @@ FAVOR/
 
 ```bash
 # 调试（单进程，便于打断点）
-python -m app.main --fname CONFIGS/test.yaml          --devices cuda:0 --debugmode True
-python -m app.main --fname CONFIGS/test-finetune.yaml --devices cuda:0 --debugmode True
+python -m app.main --fname CONFIGS/archive/test.yaml          --devices cuda:0 --debugmode True
+python -m app.main --fname CONFIGS/archive/test-finetune.yaml --devices cuda:0 --debugmode True
 
 # 多卡训练统一用 torchrun 启动。`app/main.py` 检测到 torchrun 注入的 RANK/WORLD_SIZE
 # 后以单进程身份直接运行（不再自行 fork）。等价写法二选一：
@@ -50,30 +50,30 @@ python -m app.main --fname CONFIGS/test-finetune.yaml --devices cuda:0 --debugmo
 # 旧的 `python -m app.main ... --devices` 多卡写法仍兼容，但新任务请用 torchrun。
 
 # 预训练（48 帧 / 112px，vit_large）
-torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vpretrain/pretrain_v_FaVoR-112px-48f.yaml --devices cuda:0 cuda:1
+torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/pretrain/video/jepa/favor-112px-48frames-4fps.yaml --devices cuda:0 cuda:1
 
 # 音频 AudioJEPA 预训练（emotion2vec_plus_large 初始化，2～4 秒变长 crop）
-torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/apretrain/pretrain_a_FaVoR.yaml
+torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/pretrain/audio/jepa/favor.yaml
 
 # 音频微调（例：CASIA emotion 6 类；33 个任务均使用同一入口模式）
-torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/afinetune/cls/CASIA-emotion.yaml
+torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/finetune/audio/classification/CASIA-emotion.yaml
 
 # 退火 / cooldown（长片段 64f，LR 退到 ~0）
-torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vpretrain/pretrain_v_FaVoR-cooldown.yaml
+torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/pretrain/video/jepa/favor-cooldown.yaml
 
 # 微调（例：RAVDESS emotion 8 类）
-torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/cls/RAVDESS-emotion.yaml
+torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/finetune/video/classification/RAVDESS-emotion.yaml
 
 # 不改 YAML，用 --set 覆盖任意配置项（点号表示嵌套键，值按 YAML 标量解析）
 # 覆盖在 YAML 合并之后生效，优先级最高；会一并写进 {folder}/params-{app}.yaml 快照。
-torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/vfinetune/cls/RAVDESS-emotion.yaml \
+torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/finetune/video/classification/RAVDESS-emotion.yaml \
   --set folder=OUTPUT/finetune_v/vitl16/RAVDESS-emotion/e5-vs-e11 \
         meta.read_checkpoint=OUTPUT/pretrain_v/vitl16/FaVoR-112px-48f/e11.pt \
         meta.seed=7
 
 # 一次性跑完 run.sh 里列的 15 个视频微调任务（内部已改为 torchrun）
 # 注意：tasks.json 共 33 个语义任务；run.sh 当前只编排其中 15 条视频任务，全部
-# 33 条任务的音频版本可从 CONFIGS/tasks/afinetune/ 单独启动。
+# 33 条任务的音频版本可从 CONFIGS/tasks/finetune/audio/ 单独启动。
 bash run.sh
 
 # train.sh 从实验元数据 + 15 条任务元数据自动生成 torchrun 命令；先预览再运行
@@ -204,7 +204,7 @@ GPU；rank 崩溃会立即报错并终止整组，不用再干等 NCCL 默认 60
 
 ### 7. 模态统一于「情感与心理」这一目标
 
-`root.txt` 用统一清单管理 30+ 数据集的音频 / 视频 / 音视频三种预训练用途（`v/a/va`），
+`CONFIGS/datasets.csv` 用统一清单管理 30+ 数据集的音频 / 视频 / 音视频三种预训练用途（`v/a/va`），
 视频与音频共享同一套「配置片段 + 任务入口」范式，但数据加载、采样和模型实现按
 模态分开。当前视频侧覆盖 15 条任务，音频侧已覆盖 `tasks.json` 的全部 33 条任务；
 音视频联合（VA）仍保留为后续扩展。
@@ -215,13 +215,13 @@ GPU；rank 崩溃会立即报错并终止整组，不用再干等 NCCL 默认 60
 
 - `app/pretrain_a` 已接入 AudioJEPA：以 emotion2vec_plus_large 初始化 CNN 与 context
   encoder，使用独立 predictor 和 EMA target encoder 做音频 JEPA 继续预训练。默认入口为
-  `CONFIGS/tasks/apretrain/pretrain_a_FaVoR.yaml`。rank 0 会输出 `init.pt`、可恢复的
+  `CONFIGS/tasks/pretrain/audio/jepa/favor.yaml`。rank 0 会输出 `init.pt`、可恢复的
   `latest.pt`、`train.log`，并在 `logs/history.csv` 按日志周期记录 loss、掩码比例、
   target 标准差、两组学习率、EMA、梯度范数与吞吐；`logs/metrics_curves.png` 随 checkpoint
   和训练结束更新。
 - `app/finetune_a` 已支持 `classification`、`regression` 和
   `multi_label_classification`；tasks.json 中全部 33 条任务的音频版本位于
-  `CONFIGS/tasks/afinetune/{cls,reg,mlcls}/`。微调可读取 emotion2vec 原始 checkpoint
+  `CONFIGS/tasks/finetune/audio/{classification,regression,multilabel}/`。微调可读取 emotion2vec 原始 checkpoint
   的 `checkpoint["model"]`，或新 `pretrain_a` checkpoint 的显式 `encoder`。
 - 音视频联合（VA）训练仍未实现。
 
@@ -235,9 +235,16 @@ GPU；rank 崩溃会立即报错并终止整组，不用再干等 NCCL 默认 60
 支持严格同步 paired views、真实时间 token 对齐、Early/Feature/Late Transformer 融合的单选或多选、
 四种 backbone 初始化，以及分类、回归和多标签微调。
 
-配置入口位于 `CONFIGS/tasks/va_lejepa/` 和 `CONFIGS/tasks/vafinetune/`。
+配置入口位于 `CONFIGS/tasks/pretrain/audio-video/lejepa/` 和 `CONFIGS/tasks/finetune/audio-video/`。
 训练使用带表头的 canonical paired manifest；下游分类标签沿用 FAVOR 的 one-based 约定。
 默认主配置需要已训练的 VIDEO-LeJEPA/AUDIO-LeJEPA 权重；I0 配置使用官方 V-JEPA/emotion2vec。
+
+音视频微调已提供 15 个普通下游任务（7 个分类、1 个多标签、7 个回归）和 `mental/` 下的
+38 个临床任务。运行 `python -m utils.prepare_va_finetune` 可生成全部配对清单及任务配置；
+训练入口为 `CONFIGS/tasks/finetune/audio-video/{classification,multilabel,regression,mental}/<任务名>.yaml`。
+微调需要 VA 预训练 checkpoint，默认 `OUTPUT/pretrain_va_lejepa/I3-C1/latest.pt`，可用
+`--set finetune.pretrained_checkpoint=/实际路径/va-pretrain.pt` 覆盖。配置和数据准备细节见
+[CONFIGS 配置说明](CONFIGS/README.md)。
 
 完整数据准备、启动与恢复说明见 [VA-LeJEPA 实现说明](docs/lejepa/VA-LeJEPA-implementation.md)，
 两张 RTX PRO 6000 的实际峰值、paired 时间诊断与测试结果见

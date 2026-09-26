@@ -1,0 +1,15 @@
+app: finetune_v
+folder: OUTPUT/finetune_v/vitl16/RAVDESS-emotion/reproduce-favor-e5-23out/
+meta:
+  dtype: bfloat16
+  eval_freq: 1
+  load_checkpoint: true
+  read_checkpoint: OUTPUT/pretrain_v/vitl16/FaVoR-112px-48f/e5.pt
+  reset_epoch: true
+  save_every_freq: 100
+  seed: 239
+yamls:
+  data: CONFIGS/data/finetune/video/classification/RAVDESS-emotion.yaml
+  sampling: CONFIGS/data/finetune/video/sampling/RAVDESS-128frames-step2-reproduce.yaml
+  opt: CONFIGS/optimization/finetune/video/RAVDESS-reproduce.yaml
+  model: CONFIGS/models/finetune/video/vit-l-reproduce.yaml

@@ -1,5 +1,6 @@
 """Step-based VA pretraining with shared encoders, DDP, AMP and full resume."""
 import logging
+import json
 import random
 import time
 from contextlib import nullcontext
@@ -9,11 +10,20 @@ import torch
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from app.pretrain_audio_lejepa.train import _state, _unwrap, _schedule, _reduce, _append_csv, _trim_history
-from datasets.va_lejepa import make_va_lejepa_loader, to_device
+from datasets.va_lejepa import make_va_lejepa_loader, to_device, synchronize_training_batch
 from models.va_lejepa import build_va_lejepa, VABranchLoss, save_checkpoint, load_checkpoint
 from models.video_lejepa import ModelEMA, embedding_statistics
 
 LOGGER = logging.getLogger(__name__)
+
+
+def _record_skipped(path, batch, epoch, batch_index):
+    errors = batch.get('skipped_samples', [])
+    if errors:
+        with Path(path).open('a', encoding='utf-8') as handle:
+            for error in errors:
+                handle.write(json.dumps(dict(epoch=epoch, batch_index=batch_index, **error), ensure_ascii=False) + '\n')
+    return len(errors)
 
 
 def _optimizer(model, cfg):
@@ -127,6 +137,7 @@ def main(args):
         pending_rng = checkpoint.get('rng_states', [None] * world)[rank]
         if rank == 0:
             _trim_history(history, step)
+            _trim_history(folder / 'logs/data_skips.csv', step)
     data_cfg = dict(args['data'])
     data_cfg['seed'] = int(meta.get('seed', 0))
     data_cfg.setdefault('audio_augmentation', args.get('audio_augmentation', {}))
@@ -138,16 +149,27 @@ def main(args):
     model.train()
     optimizer.zero_grad(set_to_none=True)
     micro = 0
+    skipped_pairs = discarded_pairs = skipped_batches = 0
+    skipped_report = folder / f'logs/skipped_pairs_rank{rank}.jsonl'
     started = time.perf_counter()
     while step < total:
         sampler.set_epoch(epoch)
         loader.dataset.epoch = epoch
+        attempted_batches = processed_batches = 0
         for batch_index, batch in enumerate(loader):
             if batch_index < offset:
                 continue
             if pending_rng is not None:
                 _restore_rng(pending_rng)
                 pending_rng = None
+            attempted_batches += 1
+            skipped_pairs += _record_skipped(skipped_report, batch, epoch, batch_index)
+            batch, discarded = synchronize_training_batch(batch, device)
+            discarded_pairs += discarded
+            if batch is None:
+                skipped_batches += 1
+                continue
+            processed_batches += 1
             batch = to_device(batch, device)
             should_step = (micro + 1) % accumulation == 0
             sync = model.no_sync() if distributed and not should_step else nullcontext()
@@ -182,6 +204,10 @@ def main(args):
                 ema.update(raw, step)
             log_every = max(1, int(meta.get('log_every_steps', 50)))
             if step == 1 or step % log_every == 0 or step == total:
+                skip_summary = dict(step=step, epoch=epoch,
+                    skipped_pairs=int(round(_reduce(torch.tensor(skipped_pairs, device=device)) * world)),
+                    ddp_discarded_pairs=int(round(_reduce(torch.tensor(discarded_pairs, device=device)) * world)),
+                    skipped_batches=skipped_batches)
                 row = dict(step=step, epoch=epoch, loss=_reduce(losses['loss']), grad_norm=_reduce(norm),
                            **{key: _reduce(value) for key, value in norms.items()})
                 for mode, values in losses['branches'].items():
@@ -201,7 +227,9 @@ def main(args):
                            samples_per_second=world * batch['global']['video'].shape[0] * accumulation / max(time.perf_counter() - started, 1e-9))
                 if rank == 0:
                     _append_csv(history, row)
-                    LOGGER.info('VA step %d/%d loss=%.6f branch losses=%s', step, total, row['loss'], losses['branches'])
+                    _append_csv(folder / 'logs/data_skips.csv', skip_summary)
+                    LOGGER.info('VA step %d/%d loss=%.6f skipped_pairs=%d ddp_discarded_pairs=%d skipped_batches=%d branch losses=%s',
+                                step, total, row['loss'], skip_summary['skipped_pairs'], skip_summary['ddp_discarded_pairs'], skipped_batches, losses['branches'])
             started = time.perf_counter()
             save_every = int(meta.get('save_every_steps', 5000))
             if (save_every and step % save_every == 0) or step == total:
@@ -210,6 +238,8 @@ def main(args):
                     _write_curves(history, folder / 'logs/metrics_curves.png')
             if step >= total:
                 break
+        if attempted_batches and not processed_batches:
+            raise RuntimeError(f'no usable VA training batches in epoch {epoch}; see logs/skipped_pairs_rank*.jsonl')
         epoch += 1
         offset = 0
     if distributed:

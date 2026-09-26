@@ -1,0 +1,6 @@
+data:
+  task: classification
+  num_class: 2
+  label_column: DSM-RepetitiveThoughtsBehaviors
+  manifests:
+  - DATASET/merged/mental/clinical_canonical.csv

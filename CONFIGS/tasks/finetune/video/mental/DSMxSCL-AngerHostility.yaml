@@ -1,0 +1,15 @@
+app: finetune_v
+folder: OUTPUT/finetune_v/mental/DSMxSCL-AngerHostility
+meta:
+  dtype: bfloat16
+  eval_freq: 1
+  load_checkpoint: true
+  read_checkpoint: OUTPUT/pretrain_v/vitl16/FaVoR-112px-48f/e5.pt
+  reset_epoch: true
+  save_every_freq: 100
+  seed: 239
+yamls:
+  data: CONFIGS/data/finetune/video/mental/DSMxSCL-AngerHostility.yaml
+  sampling: CONFIGS/data/finetune/video/sampling/48frames-8fps.yaml
+  opt: CONFIGS/optimization/finetune/video/epochs80-warmup5-lr5e-05.yaml
+  model: CONFIGS/models/finetune/video/vit-l-4layers.yaml

@@ -1,0 +1,15 @@
+app: pretrain_a
+folder: OUTPUT/pretrain_a/emotion2vec-plus-large/FaVoR-2to4s
+meta:
+  dtype: bfloat16
+  seed: 42
+  init_checkpoint: CKPT/emotion2vec_plus_large/model.pt
+  read_checkpoint: null
+  auto_resume: true
+  save_every_steps: 5000
+  log_every_steps: 50
+yamls:
+  data: CONFIGS/data/pretrain/audio/jepa/default.yaml
+  opt: CONFIGS/optimization/pretrain/audio/jepa/steps100000-warmup10000.yaml
+  model: CONFIGS/models/pretrain/audio/jepa/emotion2vec-plus-large.yaml
+  mask: CONFIGS/losses/audio-jepa.yaml

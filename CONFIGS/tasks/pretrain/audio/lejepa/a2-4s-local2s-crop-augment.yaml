@@ -1,0 +1,15 @@
+app: pretrain_audio_lejepa
+folder: OUTPUT/pretrain_audio_lejepa/emotion2vec-plus-large/A2-4s-local2s-crop-augment
+meta:
+  dtype: bfloat16
+  seed: 42
+  read_checkpoint: null
+  auto_resume: true
+  save_every_steps: 5000
+  log_every_steps: 50
+yamls:
+  data: CONFIGS/data/pretrain/audio/lejepa/default.yaml
+  opt: CONFIGS/optimization/pretrain/audio/lejepa/steps100000-warmup10000.yaml
+  model: CONFIGS/models/pretrain/audio/lejepa/emotion2vec-plus-large.yaml
+  loss: CONFIGS/losses/audio-lejepa.yaml
+

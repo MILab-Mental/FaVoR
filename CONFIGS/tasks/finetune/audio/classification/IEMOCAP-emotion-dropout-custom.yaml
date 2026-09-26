@@ -1,0 +1,39 @@
+app: finetune_a
+folder: OUTPUT/finetune_a/IEMOCAP-emotion/emotion2vec-plus-large-newdrop
+meta:
+  dtype: bfloat16
+  load_checkpoint: true
+  read_checkpoint: OUTPUT/pretrain_a/emotion_jepa_full_dataset/checkpoint_final.pt
+  reset_epoch: true
+  seed: 239
+  frozen_encoder: false
+  min_load_ratio: 0.95
+model:
+  # Preserve the pretrained waveform representation and avoid stacking
+  # dropout at every input boundary.
+  backbone:
+    prenet_dropout: 0.0
+  extractor:
+    dropout: 0.0
+  encoder:
+    dropout_input: 0.0
+    # Mild regularization inside the 12 pretrained Transformer blocks.
+    dropout: 0.0
+    attention_dropout: 0.0
+    activation_dropout: 0.0
+    post_mlp_dropout: 0.0
+  head:
+    # Put most regularization in the newly initialized downstream head.
+    attention_dropout: 0.1
+    dropout: 0.1
+optimization:
+  # Keep the same Grokfast settings as drop02/drop03 so this run isolates the
+  # effect of the milder, non-uniform dropout recipe above.
+  grokfast: false
+  grokfast_alpha: 0.98
+  grokfast_lambda: 2.0
+yamls:
+  data: CONFIGS/data/finetune/audio/classification/IEMOCAP-emotion.yaml
+  sampling: CONFIGS/data/finetune/audio/sampling/audio-4s-4clips.yaml
+  opt: CONFIGS/optimization/finetune/audio/epochs100-warmup0.yaml
+  model: CONFIGS/models/finetune/audio/emotion2vec-plus-large.yaml

@@ -14,8 +14,9 @@ class VALeJEPADataset(Dataset):
         self.cfg = dict(cfg)
         self.training = training
         self.epoch = 0
-        if cfg.get('on_decode_error', 'error') != 'error':
-            raise ValueError('VA v1 decode failures must raise with pair identity')
+        self.on_decode_error = cfg.get('on_decode_error', 'error')
+        if self.on_decode_error not in {'error', 'skip'}:
+            raise ValueError('on_decode_error must be error or skip')
         manifests = cfg.get('manifests', cfg.get('datasets', []))
         if isinstance(manifests, str):
             manifests = [manifests]
@@ -65,6 +66,10 @@ class VALeJEPADataset(Dataset):
             return {'global': global_view, 'local': locals_, **{k: row[k] for k in ('pair_id', 'source_id', 'video_path', 'audio_path')},
                     'sync_diagnostics': diagnostics}
         except Exception as error:
+            if self.on_decode_error == 'skip':
+                return {'decode_error': {**{key: row[key] for key in
+                    ('pair_id', 'source_id', 'video_path', 'audio_path')},
+                    'reason': f'{type(error).__name__}: {error}'}}
             raise RuntimeError(f'paired decode failed pair_id={row["pair_id"]} source_id={row["source_id"]}: {error}') from error
 
     def _decode_view(self, decoder, interval, local=False):

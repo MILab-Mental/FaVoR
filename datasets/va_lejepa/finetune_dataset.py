@@ -29,5 +29,7 @@ class AVCSVDataset(VALeJEPADataset):
 
     def __getitem__(self, index):
         item = super().__getitem__(index)
+        if 'decode_error' in item:
+            return item
         item['label'] = torch.as_tensor(self.labels[index], dtype=torch.long if self.task == 'classification' else torch.float32)
         return item

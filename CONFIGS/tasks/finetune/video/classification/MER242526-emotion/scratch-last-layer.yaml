@@ -1,0 +1,16 @@
+app: finetune_v
+folder: OUTPUT/finetune_v/vitl16/MER242526-emotion/scratch-23outlayer/
+meta:
+  dtype: bfloat16
+  eval_freq: 1
+  load_checkpoint: false
+  read_checkpoint: null
+  # read_checkpoint: OUTPUT/pretrain_v/vitl16/FaVoR-112px-48f/latest.pt
+  reset_epoch: true
+  save_every_freq: 100
+  seed: 239
+yamls:
+  data: CONFIGS/data/finetune/video/classification/MER242526-emotion.yaml
+  sampling: CONFIGS/data/finetune/video/sampling/48frames-4fps.yaml
+  opt: CONFIGS/optimization/finetune/video/epochs250-warmup40-lr0.000525.yaml
+  model: CONFIGS/models/finetune/video/vit-l.yaml

@@ -1,0 +1,8 @@
+data:
+  task: classification
+  num_class: 2
+  label_column: DSM-MemoryProblems
+  datasets:
+  - DATASET/splits-0901/3_私有临床数据_LV.csv
+  rootpaths:
+  - /home/data/sdb/基座模型数据集/3心理数据集/临床/

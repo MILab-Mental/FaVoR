@@ -1,0 +1,6 @@
+data:
+  task: classification
+  num_class: 3
+  label_column: MOAS
+  manifests:
+  - DATASET/merged/mental/clinical_canonical.csv

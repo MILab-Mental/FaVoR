@@ -1,0 +1,15 @@
+app: finetune_a
+folder: OUTPUT/finetune_a/emotion2vec-plus-large/MODMA-label/jepa-280k
+meta:
+  dtype: bfloat16
+  load_checkpoint: true
+  read_checkpoint: OUTPUT/pretrain_a/emotion_jepa_full_dataset/checkpoint_final.pt
+  reset_epoch: true
+  seed: 239
+  frozen_encoder: false
+  min_load_ratio: 0.95
+yamls:
+  data: CONFIGS/data/finetune/audio/classification/MODMA-label.yaml
+  sampling: CONFIGS/data/finetune/audio/sampling/audio-4s-4clips.yaml
+  opt: CONFIGS/optimization/finetune/audio/epochs100-warmup0.yaml
+  model: CONFIGS/models/finetune/audio/emotion2vec-plus-large.yaml

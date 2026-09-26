@@ -107,12 +107,14 @@ validate_metadata() {
 # 唯一的命令模板：把一行任务元数据渲染成经过 shell 转义的 torchrun 命令。
 render_command() {
   local index=$1 row=$2
-  local group task task_overrides config folder port command override
+  local group config_group task task_overrides config folder port command override
   local -a argv task_set=()
 
   IFS='|' read -r group task task_overrides <<<"$row"
   case "$group" in
-    cls|reg|mlcls) ;;
+    cls) config_group=classification ;;
+    reg) config_group=regression ;;
+    mlcls) config_group=multilabel ;;
     *) die "TASK_META 第 $((index + 1)) 行分组无效: $group" ;;
   esac
   [[ "$task" =~ ^[A-Za-z0-9._-]+$ ]] \
@@ -120,7 +122,7 @@ render_command() {
   [[ -z "${SEEN_TASKS[$task]+x}" ]] || die "TASK_META 任务重复: $task"
   SEEN_TASKS[$task]=1
 
-  config="CONFIGS/tasks/vfinetune/$group/$task.yaml"
+  config="CONFIGS/tasks/finetune/video/$config_group/${task//_/-}.yaml"
   [[ -f "$config" ]] || die "任务配置不存在: $config"
   folder="${EXPERIMENT_META[output_root]}/${EXPERIMENT_META[model_name]}/$task/${EXPERIMENT_META[run_name]}"
   port=$((EXPERIMENT_META[master_port_base] + index))

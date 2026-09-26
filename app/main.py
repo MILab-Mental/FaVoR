@@ -4,6 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 
 import argparse
+import csv
 import importlib
 import logging
 import multiprocessing as mp
@@ -94,6 +95,25 @@ def _merge_config(base, override):
     return merged
 
 
+def _resolve_legacy_config_path(path):
+    """Keep old commands and saved YAML includes usable after config moves."""
+    path = Path(path).expanduser().resolve()
+    if path.is_file():
+        return path
+    try:
+        relative = path.relative_to(PROJECT_ROOT).as_posix()
+    except ValueError:
+        return path
+    mapping_path = PROJECT_ROOT / "CONFIGS/path-mapping.csv"
+    if not relative.startswith("CONFIGS/") or not mapping_path.is_file():
+        return path
+    with mapping_path.open(newline="", encoding="utf-8") as mapping_file:
+        for row in csv.DictReader(mapping_file):
+            if row["old_path"] == relative:
+                return PROJECT_ROOT / row["new_path"]
+    return path
+
+
 def _resolve_yaml_fragment(yaml_path, config_path):
     """Resolve a ``yamls`` fragment with portable repository-relative support.
 
@@ -118,7 +138,7 @@ def _resolve_yaml_fragment(yaml_path, config_path):
 
     unique_candidates = []
     for candidate in candidates:
-        candidate = candidate.resolve()
+        candidate = _resolve_legacy_config_path(candidate)
         if candidate not in unique_candidates:
             unique_candidates.append(candidate)
         if candidate.is_file():
@@ -136,7 +156,7 @@ def load_config(fname):
     ``CONFIGS/...`` fragment paths are repository-root-relative. Other
     relative paths remain relative to the entry YAML for compatibility.
     """
-    config_path = Path(fname).expanduser().resolve()
+    config_path = _resolve_legacy_config_path(fname)
     with config_path.open("r", encoding="utf-8") as y_file:
         config = yaml.load(y_file, Loader=yaml.FullLoader) or {}
     if not isinstance(config, dict):

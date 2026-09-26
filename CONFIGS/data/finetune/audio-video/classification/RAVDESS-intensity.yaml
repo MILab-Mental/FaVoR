@@ -1,0 +1,6 @@
+data:
+  task: classification
+  label_column: intensity
+  num_class: 2
+  manifests:
+  - DATASET/merged/finetune_va/2_RAVDESS_SV.csv

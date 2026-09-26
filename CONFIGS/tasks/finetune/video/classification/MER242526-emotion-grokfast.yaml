@@ -1,0 +1,24 @@
+app: finetune_v
+folder: OUTPUT/finetune_v/vitl16/MER242526-emotion/FaVoR-112px-48f-8fps-e5-drop03
+meta:
+  dtype: bfloat16
+  eval_freq: 1
+  load_checkpoint: true
+  read_checkpoint: OUTPUT/pretrain_v/vitl16/FaVoR-112px-48f/e5.pt
+  reset_epoch: true
+  save_every_freq: 100
+  seed: 239
+model:
+  backbone_dropout: 0.3
+  backbone_attention_dropout: 0.3
+  backbone_drop_path: 0.3
+  classifier_dropout: 0.3
+optimization:
+  grokfast: true
+  grokfast_alpha: 0.98
+  grokfast_lambda: 2.0
+yamls:
+  data: CONFIGS/data/finetune/video/classification/MER242526-emotion.yaml
+  sampling: CONFIGS/data/finetune/video/sampling/48frames-8fps.yaml
+  opt: CONFIGS/optimization/finetune/video/epochs80-warmup5-lr5e-05.yaml
+  model: CONFIGS/models/finetune/video/vit-l-4layers.yaml

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# train_a.sh —— 批量执行 CONFIGS/tasks/afinetune 下的 33 个音频下游任务。
+# train_a.sh —— 批量执行 CONFIGS/tasks/finetune/audio 下的 33 个音频下游任务。
 #
 # 用法：
 #   bash train_a.sh --dry-run  # 校验并打印 33 条命令
@@ -89,7 +89,7 @@ CMDS=()
 declare -A SEEN_TASKS=()
 
 validate_metadata() {
-  local key checkpoint last_port config_count
+  local key checkpoint last_port
   local required=(
     nproc_per_node master_port_base checkpoint output_root run_name
     backbone_mode feature_mode
@@ -112,8 +112,6 @@ validate_metadata() {
   checkpoint=${EXPERIMENT_META[checkpoint]}
   [[ -n "$checkpoint" && -f "$checkpoint" ]] || die "checkpoint 不存在: $checkpoint"
   ((${#TASK_META[@]} == 33)) || die "TASK_META 应为 33 项，当前为 ${#TASK_META[@]}"
-  config_count=$(find CONFIGS/tasks/afinetune -type f -name '*.yaml' | wc -l)
-  ((config_count == 33)) || die "CONFIGS/tasks/afinetune 应有 33 个 YAML，当前为 $config_count"
   last_port=$((EXPERIMENT_META[master_port_base] + ${#TASK_META[@]} - 1))
   ((last_port <= 65535)) || die "生成的 master_port 超出 65535: $last_port"
 
@@ -124,12 +122,14 @@ validate_metadata() {
 
 render_command() {
   local index=$1 row=$2
-  local group task task_overrides config folder port command override
+  local group config_group task task_overrides config folder port command override
   local -a argv task_set=()
 
   IFS='|' read -r group task task_overrides <<<"$row"
   case "$group" in
-    cls|mlcls|reg) ;;
+    cls) config_group=classification ;;
+    reg) config_group=regression ;;
+    mlcls) config_group=multilabel ;;
     *) die "TASK_META 第 $((index + 1)) 行分组无效: $group" ;;
   esac
   [[ "$task" =~ ^[A-Za-z0-9._-]+$ ]] \
@@ -137,7 +137,7 @@ render_command() {
   [[ -z "${SEEN_TASKS[$task]+x}" ]] || die "TASK_META 任务重复: $task"
   SEEN_TASKS[$task]=1
 
-  config="CONFIGS/tasks/afinetune/$group/$task.yaml"
+  config="CONFIGS/tasks/finetune/audio/$config_group/${task//_/-}.yaml"
   [[ -f "$config" ]] || die "任务配置不存在: $config"
   folder="${EXPERIMENT_META[output_root]}/$task/${EXPERIMENT_META[run_name]}"
   port=$((EXPERIMENT_META[master_port_base] + index))

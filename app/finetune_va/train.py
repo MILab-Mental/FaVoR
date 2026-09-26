@@ -10,10 +10,10 @@ from torch.utils.data import DataLoader, Sampler
 from torch.utils.data.distributed import DistributedSampler
 from torch.nn.parallel import DistributedDataParallel as DDP
 from app.pretrain_audio_lejepa.train import _state, _unwrap, _schedule, _append_csv
-from app.pretrain_va_lejepa.train import _optimizer, _save_all, _restore_rng, _grad_norm
+from app.pretrain_va_lejepa.train import _optimizer, _save_all, _restore_rng, _grad_norm, _record_skipped
 from app.finetune_a.train import _criterion, _regression_metrics
 from datasets.va_lejepa.finetune_dataset import AVCSVDataset
-from datasets.va_lejepa import collate_va_lejepa, to_device
+from datasets.va_lejepa import collate_va_lejepa, to_device, synchronize_training_batch
 from models.va_lejepa import build_va_lejepa, load_checkpoint
 from models.va_lejepa.finetune import VAFinetuner
 from utils.classification_metrics import classification_metrics, multilabel_metrics, save_metric_curves
@@ -62,13 +62,19 @@ def evaluate(model, loader, device, task, classes):
     model.eval()
     raw = _unwrap(model)
     records = []
+    skipped = 0
     for batch in loader:
+        skipped += len(batch.get('skipped_samples', []))
+        if 'global' not in batch:
+            continue
         output = raw(to_device(batch, device))
         for i, pair_id in enumerate(batch['pair_id']):
             records.append(dict(pair_id=pair_id, video_path=batch['video_path'][i], audio_path=batch['audio_path'][i],
                 truth=batch['label'][i].cpu().tolist(), logits=output['logits'][i].float().cpu().tolist(),
                 branches={mode: value[i].float().cpu().tolist() for mode, value in output['branches'].items()}))
     enabled, rank, world = _state()
+    if skipped:
+        LOGGER.warning('VA evaluation rank=%d skipped %d invalid pairs', rank, skipped)
     if enabled:
         gathered = [None] * world
         dist.all_gather_object(gathered, records)
@@ -144,7 +150,11 @@ def main(args):
         train_dataset.epoch = epoch
         model.train()
         running, count = 0., 0
-        for batch in train_loader:
+        for batch_index, batch in enumerate(train_loader):
+            _record_skipped(folder / f'logs/skipped_pairs_rank{rank}.jsonl', batch, epoch, batch_index)
+            batch, _ = synchronize_training_batch(batch, device)
+            if batch is None:
+                continue
             batch = to_device(batch, device)
             optimizer.zero_grad(set_to_none=True)
             _schedule(optimizer, step, opt)
@@ -162,6 +172,8 @@ def main(args):
             step += 1
             running += float(loss.detach()) * batch['label'].shape[0]
             count += batch['label'].shape[0]
+        if not count:
+            raise RuntimeError(f'no usable VA training batches in epoch {epoch}')
         metrics, records, predictions, probabilities, matrix = evaluate(model, val_loader, device, task, classes)
         score_key = cfg.get('best_metric', 'mae' if task == 'regression' else 'f1_macro')
         score = metrics[score_key] * (-1 if cfg.get('best_metric_mode', 'min' if task == 'regression' else 'max') == 'min' else 1)

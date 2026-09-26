@@ -1,0 +1,6 @@
+data:
+  task: classification
+  num_class: 4
+  label_column: PAYKEL
+  manifests:
+  - DATASET/merged/mental/clinical_canonical.csv

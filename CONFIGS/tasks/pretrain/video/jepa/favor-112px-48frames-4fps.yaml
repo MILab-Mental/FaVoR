@@ -1,0 +1,15 @@
+app: pretrain_v
+folder: OUTPUT/pretrain_v/vitl16/FaVoR-112px-48f
+meta:
+  dtype: bfloat16
+  eval_freq: 1
+  load_checkpoint: true
+  read_checkpoint: CKPT/vjepa2/vitl.pt
+  reset_epoch: true
+  save_every_freq: 5
+  seed: 239
+yamls:
+  data: CONFIGS/data/pretrain/video/jepa/112px-48frames-4fps.yaml
+  opt: CONFIGS/optimization/pretrain/video/jepa/epochs150-warmup40-lr0.000525.yaml
+  model: CONFIGS/models/pretrain/video/jepa/vit-l.yaml
+  mask: CONFIGS/losses/video-jepa.yaml

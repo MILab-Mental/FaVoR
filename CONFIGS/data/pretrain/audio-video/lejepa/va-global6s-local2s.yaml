@@ -1,0 +1,28 @@
+data:
+  manifests:
+  - DATASET/merged/pretrain_va_canonical.csv
+  batch_size: 8
+  num_workers: 2
+  sample_rate: 16000
+  # Short paired media is zero-padded; sync remains strict.
+  short_policy: zero_pad
+  minimum_seconds: 0.1
+  global_seconds: 6.0
+  local_seconds: 2.0
+  local_views: 4
+  video_fps: 8
+  video_frames_global: 48
+  video_frames_local: 16
+  video_global_size: 112
+  video_local_size: 48
+  normalize_audio: true
+  # Check pairs as they are read; log and skip bad pairs during training.
+  on_decode_error: skip
+  sync:
+    strict: true
+    require_same_source_id: true
+    require_same_start: true
+    require_same_duration: true
+    duration_tolerance_seconds: 0.02
+    offset_tolerance_seconds: 0.0
+    on_mismatch: error

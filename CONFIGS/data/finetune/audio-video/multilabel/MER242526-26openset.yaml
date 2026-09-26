@@ -1,0 +1,6 @@
+data:
+  task: multi_label_classification
+  label_column: 26openset
+  num_class: 23
+  manifests:
+  - DATASET/merged/finetune_va/2_MER242526_SV.csv
