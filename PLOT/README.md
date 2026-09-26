@@ -1,7 +1,8 @@
 # 论文图表与统计脚本
 
 本目录集中存放论文结果汇总、统计检验、LaTeX 制表和可视化脚本。脚本默认从仓库根目录的
-`OUTPUT/` 读取训练结果，并把新生成的文件写入 `PLOT/output/`。`PLOT/output/` 是可重复
+`OUTPUT/` 读取训练结果，多数脚本把新生成的文件写入 `PLOT/output/`；训练曲线默认写入输入目录。
+`PLOT/output/` 是可重复
 生成的产物目录，已加入 `.gitignore`。
 
 ## 目录
@@ -138,7 +139,7 @@ python PLOT/pca.py --input path/to/video.mp4 --ckpt path/to/checkpoint.pt \
 - VIDEO-LeJEPA `history.csv`：绘制 loss、SIGReg、表征统计、学习率和梯度范数四面板曲线。
 - AUDIO-LeJEPA `logs/history.csv`：绘制同类四面板曲线，并用不同纵轴展示原始与加权 SIGReg。
 
-默认写入 `PLOT/output/train/<日志目录名>/train_loss.png`：
+默认写入 `--logdir` 指定的输入目录下的 `train_loss.png`，可用 `--out` 指定其他位置：
 
 ```bash
 python PLOT/plot_train.py \
@@ -163,7 +164,7 @@ python PLOT/plot_train.py --logdir path/to/lejepa/output \
 
 ## 输入与输出约定
 
-- `OUTPUT/` 保存训练 checkpoint、日志、逐样本预测和其他实验原始产物；绘图脚本只读取它。
+- `OUTPUT/` 保存训练 checkpoint、日志、逐样本预测和其他实验原始产物；训练曲线默认也写入输入目录。
 - `PLOT/output/` 保存统计汇总、论文图表、LaTeX 表格和可视化视频；脚本会按需创建目录。
 - `--out`、`--output` 或 `--csv` 可覆盖默认输出位置。
 - `ana_bench.py` 和 `latex_table.py` 的默认实验通配符基于

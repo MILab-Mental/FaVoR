@@ -14,8 +14,6 @@ from pathlib import Path
 # cannot shadow a standard-library dependency imported by matplotlib.
 _SCRIPT_DIR = str(Path(__file__).resolve().parent)
 sys.path[:] = [path for path in sys.path if Path(path or ".").resolve() != Path(_SCRIPT_DIR)]
-PLOT_ROOT = Path(__file__).resolve().parent
-DEFAULT_OUTPUT_ROOT = PLOT_ROOT / "output" / "train"
 
 LEJEPA_FIELDS = (
     "epoch",
@@ -404,7 +402,7 @@ def main() -> None:
         "--out",
         type=Path,
         default=None,
-        help="output PNG path (default: PLOT/output/train/<logdir>/train_loss.png)",
+        help="output PNG path (default: <logdir>/train_loss.png)",
     )
     parser.add_argument(
         "--window",
@@ -439,7 +437,7 @@ def main() -> None:
             "matplotlib is required; install it with `pip install matplotlib`"
         ) from error
 
-    output = args.out or DEFAULT_OUTPUT_ROOT / args.logdir.resolve().name / "train_loss.png"
+    output = args.out or args.logdir / "train_loss.png"
     output.parent.mkdir(parents=True, exist_ok=True)
 
     audio_history_path = find_audio_lejepa_history(args.logdir)
