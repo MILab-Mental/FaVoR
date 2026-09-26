@@ -718,3 +718,13 @@ torchrun --nproc_per_node=2 -m app.main \
    `model.head.{attention_dropout,dropout}`；未配置项沿用模型片段中的值，新增的 head attention
    dropout 默认 `0.0`。`optimization.grokfast` 默认 `false`，开启时复用视频侧相同的
    `grokfast_alpha`（默认 `0.98`）和 `grokfast_lambda`（默认 `2.0`）。
+
+VA 预训练默认允许时长差 0.5 秒（或两帧时长，取较大值），起点及声明的 AV offset
+最多 0.1 秒；通过检查后按实际共同时间区间裁剪音视频，不拉伸或重复视频帧。
+`data.sync.duration_tolerance_seconds`、`duration_tolerance_frames` 和
+`offset_tolerance_seconds` 可调整这些限制；两帧容差设为 0 可使用固定秒数限制。
+超过容差、没有共同区间或解码损坏的 pair 仍按 `on_decode_error` 处理。
+控制台仅打印 `loss inv sigreg std rank lr wd grad clips/s`；多分支时 inv、sigreg、
+std、rank 取分支均值，lr / wd 取参数组最大值。详细分支指标和耗时仍写入 history，
+其中 `step_seconds` 为一次 optimizer step 的耗时，包含数据加载及梯度累积。
+skip 计数是本次启动以来的累计值，写入 data_skips.csv。

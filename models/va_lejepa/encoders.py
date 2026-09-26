@@ -31,5 +31,7 @@ def audio_token_output(encoder, view, sample_rate, checkpointing=False):
         pooled, tokens, mask = output.embedding, output.tokens, output.padding_mask
     times = audio_token_times(encoder.backbone.feature_extractor, tokens.shape[1], sample_rate,
                               view['audio_sample_range'][:, 0].double() / sample_rate, tokens.device)
+    if 'audio_time_origin' in view:
+        times = times - view['audio_time_origin'].to(tokens.device)[:, None]
     times = times - view['start_time'].to(tokens.device)[:, None]
     return TemporalTokenOutput(tokens, times, mask, pooled, tokens.shape[1])

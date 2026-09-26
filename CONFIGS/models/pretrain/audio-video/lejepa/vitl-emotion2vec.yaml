@@ -11,7 +11,7 @@ model:
     init_source: video_lejepa
     weight_source: encoder
     vjepa_checkpoint: CKPT/vjepa2/vitl.pt
-    video_lejepa_checkpoint: OUTPUT/pretrain_video_lejepa/vitl16/FaVoR-112px-48f8/latest.pt
+    video_lejepa_checkpoint: OUTPUT/pretrain_v_lejepa/vitl16/FaVoR-112px-48f8/e25.pt
   audio:
     backbone:
       mode: emotion2vec
@@ -66,7 +66,7 @@ model:
     init_source: audio_lejepa
     weight_source: encoder
     emotion2vec_checkpoint: CKPT/emotion2vec_plus_large/model.pt
-    audio_lejepa_checkpoint: OUTPUT/pretrain_audio_lejepa/emotion2vec-plus-large/A2-4s-local2s-crop-augment/latest.pt
+    audio_lejepa_checkpoint: OUTPUT/pretrain_a_lejepa/emotion2vec-plus-large/FaVoR-4s-local2s/latest.pt
   audio_gradient_checkpointing: true
   fusion:
     enabled:

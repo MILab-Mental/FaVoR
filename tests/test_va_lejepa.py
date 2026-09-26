@@ -168,7 +168,7 @@ def test_manifest_convert_spaces_and_reject_identity(tmp_path):
         read_manifest(canonical)
 
 
-@pytest.mark.parametrize('field,value',[('duration',6.1),('start',.1)])
+@pytest.mark.parametrize('field,value',[('duration',7.),('start',.2)])
 def test_strict_sync_reject(field,value):
     video={'duration':6.,'start':0.,'sample_rate':0}
     audio={'duration':6.,'start':0.,'sample_rate':16000}
@@ -247,7 +247,8 @@ def test_dataset_pair_owner_and_decode_failure(tmp_path):
         dataset[0]
 
 
-def test_pretrain_entry_accumulation_and_full_resume(tmp_path,monkeypatch):
+def test_pretrain_entry_accumulation_and_full_resume(tmp_path,monkeypatch,caplog):
+    caplog.set_level('INFO', logger='app.pretrain_va_lejepa.train')
     import app.pretrain_va_lejepa.train as train
     from torch.utils.data import DataLoader, Dataset
     class Samples(Dataset):
@@ -268,6 +269,15 @@ def test_pretrain_entry_accumulation_and_full_resume(tmp_path,monkeypatch):
         lr_video_pretrained=1e-4,lr_audio_pretrained=2e-4,lr_new=1e-3),meta=dict(auto_resume=True,log_every_steps=1,save_every_steps=1),
         ema=dict(enabled=True,update_every=1),loss={'sigreg':{'num_proj':4,'knots':3}})
     train.main(cfg)
+    # Emulate history written before the timing column was introduced.
+    history = tmp_path/'logs/history.csv'
+    with history.open() as handle:
+        previous = list(csv.DictReader(handle))
+    fields = [key for key in previous[0] if key != 'step_seconds']
+    with history.open('w', newline='') as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields, extrasaction='ignore')
+        writer.writeheader()
+        writer.writerows(previous)
     cfg['optimization']['total_steps']=3
     train.main(cfg)
     state=torch.load(tmp_path/'latest.pt',weights_only=False)
@@ -275,6 +285,13 @@ def test_pretrain_entry_accumulation_and_full_resume(tmp_path,monkeypatch):
     assert len(state['rng_states'])==1
     rows=list(csv.DictReader((tmp_path/'logs/history.csv').open()))
     assert [int(r['step']) for r in rows]==[1,2,3]
+    assert rows[0]['step_seconds'] == '' and float(rows[-1]['step_seconds']) > 0
+    messages = [r.getMessage() for r in caplog.records if r.getMessage().startswith('loss=')]
+    expected_fields = ['loss', 'inv', 'sigreg', 'std', 'rank', 'lr', 'wd', 'grad', 'clips/s']
+    assert messages
+    for message in messages:
+        assert [field.split('=')[0] for field in message.split()] == expected_fields
+        assert all(float(field.split('=')[1]) >= 0 for field in message.split())
 
 
 def test_branch_sigreg_remains_float32_under_autocast():
@@ -384,7 +401,8 @@ def test_padded_mixed_lengths_encode_and_backward_ignore_padding():
 
 
 
-def test_real_short_media_decode_zero_padding(tmp_path):
+@pytest.mark.parametrize('audio_seconds,source_fps', [(1.5,16), (1.53,16), (1.3,16), (1.5,4)])
+def test_real_short_media_decode_zero_padding(tmp_path, audio_seconds, source_fps):
     import shutil
     import subprocess
     if not shutil.which('ffmpeg') or not shutil.which('ffprobe'):
@@ -392,18 +410,68 @@ def test_real_short_media_decode_zero_padding(tmp_path):
     pytest.importorskip('decord')
     video = tmp_path / 'short.mp4'
     audio = tmp_path / 'short.wav'
-    subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i','color=c=red:s=32x32:r=16:d=1.5',
+    subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i',f'color=c=red:s=32x32:r={source_fps}:d=1.5',
                     '-an','-c:v','mpeg4',str(video)], check=True)
-    subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i','sine=frequency=440:sample_rate=16000:duration=1.5',
+    subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i',f'sine=frequency=440:sample_rate=16000:duration={audio_seconds}',
                     str(audio)], check=True)
     manifest = tmp_path / 'pairs.csv'
     manifest.write_text(f'pair_id,source_id,video_path,audio_path\nshort,short,{video},{audio}\n')
     dataset = VALeJEPADataset(dict(manifests=[str(manifest)],local_views=0,video_global_size=16),training=False)
     sample = dataset[0]
     view_ = sample['global']
-    assert view_['video_lengths'] == 12 and view_['audio_lengths'] == 24000
+    common_seconds = min(1.5, audio_seconds)
+    frames = int(common_seconds * min(8, source_fps))
+    samples = round(common_seconds * 16000)
+    assert view_['video_lengths'] == frames and view_['audio_lengths'] == samples
     assert view_['audio'].shape == (96000,)
-    assert torch.count_nonzero(view_['audio'][24000:]) == 0
-    assert torch.count_nonzero(view_['video'][:,12:]) == 0
-    assert view_['end_time'] == 1.5
+    assert torch.count_nonzero(view_['audio'][samples:]) == 0
+    assert torch.count_nonzero(view_['video'][:,frames:]) == 0
+    assert view_['end_time'] == pytest.approx(common_seconds)
     assert sample['sync_diagnostics']['padded']
+
+
+@pytest.mark.parametrize('video_seconds,audio_seconds,start', [(6., 6.03, 0.), (6., 5.7, .05), (6., 6.4, -.05)])
+def test_sync_accepts_small_timing_differences(video_seconds, audio_seconds, start):
+    diagnostics = validate_sync(
+        {'duration': video_seconds, 'start': 0., 'fps': 25.},
+        {'duration': audio_seconds, 'start': start, 'sample_rate': 16000},
+        {'pair_id': 'small'}, {})
+    assert diagnostics['audio_shift_seconds'] == start
+
+
+def test_sync_frame_tolerance_and_explicit_strict_limits():
+    video = {'duration': 6., 'start': 0., 'fps': 25.}
+    audio = {'duration': 6.06, 'start': 0., 'sample_rate': 16000}
+    validate_sync(video, audio, {'pair_id': 'frames'}, {'duration_tolerance_seconds': .02})
+    with pytest.raises(ValueError, match='mismatch'):
+        validate_sync(video, audio, {'pair_id': 'strict'},
+                      {'duration_tolerance_seconds': .02, 'duration_tolerance_frames': 0})
+
+
+@pytest.mark.parametrize('shift', [.05, -.05])
+def test_decoder_crops_common_timeline_and_audio_tokens(tmp_path, monkeypatch, shift):
+    import sys
+    import types
+    import numpy as np
+    import datasets.va_lejepa.av_decoder as decoding
+    from models.va_lejepa.encoders import audio_token_output
+    class Reader:
+        def __init__(self, *args, **kwargs): pass
+        def get_avg_fps(self): return 25.
+        def __len__(self): return 50
+        def get_batch(self, indices):
+            return types.SimpleNamespace(asnumpy=lambda: np.zeros((len(indices),16,16,3), dtype=np.uint8))
+    monkeypatch.setitem(sys.modules, 'decord', types.SimpleNamespace(VideoReader=Reader,cpu=lambda n:n))
+    monkeypatch.setattr(decoding, 'probe_media', lambda path, kind:
+        dict(duration=2., start=0. if kind=='video' else shift, fps=25., sample_rate=100))
+    monkeypatch.setattr(decoding, 'load_audio', lambda *args: torch.arange(200).float())
+    decoder = decoding.AVDecoder({'video_path':'v','audio_path':'a','pair_id':'x'},100,{})
+    assert decoder.video_duration == pytest.approx(1.95)
+    decoded = decoder.decode((0.,1.),8)
+    assert decoded['audio_sample_range'][0] == (0 if shift>0 else 5)
+    assert decoded['audio'][0] == (0 if shift>0 else 5)
+    assert (decoded['video_frame_times'] >= 0).all()
+    output = audio_token_output(AudioLeEncoder(tiny_audio()).eval(),
+                               {key: value[None] for key,value in decoded.items()},100)
+    _, _, center = cnn_geometry(AudioLeEncoder(tiny_audio()).backbone.feature_extractor)
+    assert output.token_times[0,0] == pytest.approx(center/100)

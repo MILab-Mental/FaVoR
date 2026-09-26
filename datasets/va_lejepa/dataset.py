@@ -80,7 +80,8 @@ class VALeJEPADataset(Dataset):
         target_frames = int(self.cfg.get(f'video_frames_{mode}', 16 if local else 48))
         duration = interval[1] - interval[0]
         # Short clips retain their real time axis and are never stretched/repeated.
-        frames = min(target_frames, max(1, math.floor(duration * float(self.cfg.get('video_fps', 8)) + 1e-8)))
+        sampling_fps = min(float(self.cfg.get('video_fps', 8)), float(getattr(decoder, 'fps', self.cfg.get('video_fps', 8))))
+        frames = min(target_frames, max(1, math.floor(duration * sampling_fps + 1e-8)))
         view = self.transforms(decoder.decode(interval, frames), local=local)
         length = int(view['audio_lengths'])
         target_samples = round(seconds * int(self.cfg.get('sample_rate', 16000)))

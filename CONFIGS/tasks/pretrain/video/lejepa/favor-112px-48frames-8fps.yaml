@@ -1,5 +1,5 @@
 app: pretrain_video_lejepa
-folder: OUTPUT/pretrain_video_lejepa/vitl16/FaVoR-112px-48f8
+folder: OUTPUT/pretrain_v_lejepa/vitl16/FaVoR-112px-48f8
 meta:
   dtype: bfloat16
   load_checkpoint: true

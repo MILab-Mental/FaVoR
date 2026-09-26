@@ -1,5 +1,6 @@
 """Step-based VA pretraining with shared encoders, DDP, AMP and full resume."""
 import logging
+import csv
 import json
 import random
 import time
@@ -138,6 +139,17 @@ def main(args):
         if rank == 0:
             _trim_history(history, step)
             _trim_history(folder / 'logs/data_skips.csv', step)
+    if rank == 0 and history.exists() and history.stat().st_size:
+        # Keep resumed histories readable after adding the timing column.
+        with history.open(newline='', encoding='utf-8') as handle:
+            reader = csv.DictReader(handle)
+            fields, rows = list(reader.fieldnames), list(reader)
+        if 'step_seconds' not in fields:
+            fields.insert(fields.index('duration_delta'), 'step_seconds')
+            with history.open('w', newline='', encoding='utf-8') as handle:
+                writer = csv.DictWriter(handle, fieldnames=fields)
+                writer.writeheader()
+                writer.writerows(rows)
     data_cfg = dict(args['data'])
     data_cfg['seed'] = int(meta.get('seed', 0))
     data_cfg.setdefault('audio_augmentation', args.get('audio_augmentation', {}))
@@ -215,8 +227,9 @@ def main(args):
                     embeddings = torch.cat((output[mode]['global'], output[mode]['local']), 1)
                     row.update({f'{mode}_{key}': _reduce(value) for key, value in embedding_statistics(embeddings.detach()).items()})
                 row.update({f'lr_{g["group_name"]}': g['lr'] for g in optimizer.param_groups})
+                step_seconds = time.perf_counter() - started
                 diagnostics = batch['sync_diagnostics']
-                row.update(duration_delta=max(d['duration_delta'] for d in diagnostics),
+                row.update(step_seconds=step_seconds, duration_delta=max(d['duration_delta'] for d in diagnostics),
                            start_delta=max(d['start_delta'] for d in diagnostics),
                            max_frame_sampling_drift_seconds=max(d.get('max_frame_sampling_drift_seconds', 0) for d in diagnostics),
                            max_audio_boundary_rounding_seconds=max(d.get('max_audio_boundary_rounding_seconds', 0) for d in diagnostics),
@@ -224,12 +237,20 @@ def main(args):
                            pad_ratio=sum(d['padded'] for d in diagnostics) / len(diagnostics),
                            forward_peak_bytes=forward_peak, backward_peak_bytes=backward_peak,
                            optimizer_peak_bytes=torch.cuda.max_memory_allocated(device) if device.type == 'cuda' else 0,
-                           samples_per_second=world * batch['global']['video'].shape[0] * accumulation / max(time.perf_counter() - started, 1e-9))
+                           samples_per_second=world * batch['global']['video'].shape[0] * accumulation / max(step_seconds, 1e-9))
                 if rank == 0:
                     _append_csv(history, row)
                     _append_csv(folder / 'logs/data_skips.csv', skip_summary)
-                    LOGGER.info('VA step %d/%d loss=%.6f skipped_pairs=%d ddp_discarded_pairs=%d skipped_batches=%d branch losses=%s',
-                                step, total, row['loss'], skip_summary['skipped_pairs'], skip_summary['ddp_discarded_pairs'], skipped_batches, losses['branches'])
+                    modes = tuple(losses['branches'])
+                    def branch_mean(metric):
+                        return sum(row[f'{mode}_{metric}'] for mode in modes) / len(modes)
+                    LOGGER.info(
+                        'loss=%.5f inv=%.5f sigreg=%.5f std=%.4f rank=%.2f lr=%.2e wd=%.3g grad=%.3f clips/s=%.2f',
+                        row['loss'], branch_mean('invariance_loss'), branch_mean('sigreg_loss'),
+                        branch_mean('embedding_std'), branch_mean('rankme'),
+                        max(group['lr'] for group in optimizer.param_groups),
+                        max(group['weight_decay'] for group in optimizer.param_groups),
+                        row['grad_norm'], row['samples_per_second'])
             started = time.perf_counter()
             save_every = int(meta.get('save_every_steps', 5000))
             if (save_every and step % save_every == 0) or step == total:

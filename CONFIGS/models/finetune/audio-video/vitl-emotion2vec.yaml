@@ -11,7 +11,7 @@ model:
     init_source: video_lejepa
     weight_source: encoder
     vjepa_checkpoint: CKPT/vjepa2/vitl.pt
-    video_lejepa_checkpoint: OUTPUT/pretrain_video_lejepa/vitl16/FaVoR-112px-48f8/latest.pt
+    video_lejepa_checkpoint: OUTPUT/pretrain_v_lejepa/vitl16/FaVoR-112px-48f8/latest.pt
   audio:
     backbone:
       mode: emotion2vec
