@@ -132,10 +132,11 @@ python PLOT/pca.py --input path/to/video.mp4 --ckpt path/to/checkpoint.pt \
 
 ## 训练 loss 曲线
 
-`plot_train.py` 会自动识别两种训练日志：
+`plot_train.py` 会自动识别三种训练日志：
 
 - 原有 V-JEPA 多 rank CSV：按 `(epoch, iteration)` 聚合 loss，绘制原始值和移动平均；
 - VIDEO-LeJEPA `history.csv`：绘制 loss、SIGReg、表征统计、学习率和梯度范数四面板曲线。
+- AUDIO-LeJEPA `logs/history.csv`：绘制同类四面板曲线，并用不同纵轴展示原始与加权 SIGReg。
 
 默认写入 `PLOT/output/train/<日志目录名>/train_loss.png`：
 
@@ -146,6 +147,10 @@ python PLOT/plot_train.py \
 # VIDEO-LeJEPA：自动读取目录根部的 history.csv 和参数快照中的 SIGReg 权重
 python PLOT/plot_train.py \
   --logdir OUTPUT/pretrain_video_lejepa/vitl16/FaVoR-224px-16f/
+
+# AUDIO-LeJEPA：自动读取 logs/history.csv
+python PLOT/plot_train.py \
+  --logdir OUTPUT/pretrain_a_lejepa/emotion2vec-plus-large/FaVoR-4s-local2s/
 
 # 调整平滑窗口或指定输出文件
 python PLOT/plot_train.py --logdir path/to/logs --window 50 \
