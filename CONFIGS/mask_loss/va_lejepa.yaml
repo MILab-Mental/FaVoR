@@ -1,0 +1,9 @@
+loss:
+  auxiliary:
+    audio_lejepa_weight: 0.0
+    video_lejepa_weight: 0.0
+  sigreg:
+    knots: 17
+    normalize_by_n: false
+    num_proj: 1024
+    weight: 0.02

@@ -228,3 +228,17 @@ GPU；rank 崩溃会立即报错并终止整组，不用再干等 NCCL 默认 60
 ## 许可
 
 骨干模型与预训练代码沿用上游 V-JEPA 2.1 的 MIT 许可；新增微调 / 配置 / 数据代码为项目自有。
+
+## VA-LeJEPA 音视频预训练与微调
+
+新增 `app=pretrain_va_lejepa` 和 `app=finetune_va`，复用 VIDEO/AUDIO-LeJEPA 的两个独立 encoder。
+支持严格同步 paired views、真实时间 token 对齐、Early/Feature/Late Transformer 融合的单选或多选、
+四种 backbone 初始化，以及分类、回归和多标签微调。
+
+配置入口位于 `CONFIGS/tasks/va_lejepa/` 和 `CONFIGS/tasks/vafinetune/`。
+训练使用带表头的 canonical paired manifest；下游分类标签沿用 FAVOR 的 one-based 约定。
+默认主配置需要已训练的 VIDEO-LeJEPA/AUDIO-LeJEPA 权重；I0 配置使用官方 V-JEPA/emotion2vec。
+
+完整数据准备、启动与恢复说明见 [VA-LeJEPA 实现说明](docs/lejepa/VA-LeJEPA-implementation.md)，
+两张 RTX PRO 6000 的实际峰值、paired 时间诊断与测试结果见
+[VA-LeJEPA 验证记录](docs/lejepa/VA-LeJEPA-validation.md)。

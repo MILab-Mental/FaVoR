@@ -137,7 +137,7 @@ def test_ddp_sigreg_matches_global_batch():
             args=(init_file, embeddings, result_file),
             nprocs=2,
             join=True,
-            start_method="fork",
+            start_method="spawn",
         )
         rank0_loss, rank0_grad = torch.load(f"{result_file}.0", weights_only=True)
         rank1_loss, rank1_grad = torch.load(f"{result_file}.1", weights_only=True)
