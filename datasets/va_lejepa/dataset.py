@@ -2,7 +2,6 @@ import random
 import torch
 from torch.utils.data import Dataset, DataLoader
 from torch.utils.data.distributed import DistributedSampler
-from functools import partial
 from datasets.common.indexed_manifest import IndexedManifest
 from .va_manifest import iter_manifest
 from .av_time_sampler import AVTimeSampler
@@ -19,16 +18,22 @@ class VALeJEPADataset(Dataset):
         self.on_decode_error = cfg.get('on_decode_error', 'error')
         if self.on_decode_error not in {'error', 'skip'}:
             raise ValueError('on_decode_error must be error or skip')
-        manifests = cfg.get('manifests', cfg.get('datasets', []))
+        manifests = cfg.get('datasets', cfg.get('manifests', []))
         if isinstance(manifests, str):
             manifests = [manifests]
         root = cfg.get('root')
         if root is not None:
             from pathlib import Path
             root = str(Path(root).expanduser().resolve())
+        from pathlib import Path
+        from datasets.common.paths import dataset_roots
+        registered = dataset_roots()
+        roots = {str(Path(path).expanduser().resolve()):
+                 root or registered.get(str(Path(path).expanduser().resolve()))
+                 for path in manifests}
         self.rows = IndexedManifest(manifests,
-            partial(iter_manifest, root=root, source_pattern=cfg.get('source_pattern')),
-            kind='va-lejepa', options=dict(root=root, source_pattern=cfg.get('source_pattern')),
+            lambda path: iter_manifest(path, root=roots[str(path)], source_pattern=cfg.get('source_pattern')),
+            kind='va-lejepa', options=dict(roots=roots, source_pattern=cfg.get('source_pattern')),
             unique_key='pair_id')
         self.sampler = AVTimeSampler(cfg.get('global_seconds', 6), cfg.get('local_seconds', 2), cfg.get('local_views', 4), training,
             cfg.get('short_policy', 'zero_pad'), cfg.get('minimum_seconds', .1))

@@ -205,7 +205,7 @@ def main(args):
     num_class = cfgs_data.get("num_class")
     label_column = cfgs_data["label_column"]
     dataset_paths = cfgs_data["datasets"]
-    root_paths = cfgs_data["rootpaths"]
+    root_paths = cfgs_data.get("rootpaths")
     fps = cfgs_data.get("fps")
     frame_step = cfgs_data.get("frame_step")
     num_clips = cfgs_data.get("num_clips", 1)

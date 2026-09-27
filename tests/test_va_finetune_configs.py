@@ -9,7 +9,7 @@ from app.main import load_config
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCES = sorted(path for group in ('classification', 'multilabel', 'regression', 'mental')
-                 for path in (ROOT / f'CONFIGS/data/finetune/video/{group}').glob('*.yaml'))
+                 for path in (ROOT / f'CONFIGS/data/finetune/audio-video/{group}').glob('*.yaml'))
 
 
 @pytest.mark.parametrize('source', SOURCES, ids=lambda path: f'{path.parent.name}/{path.stem}')
@@ -23,9 +23,9 @@ def test_va_task_has_concrete_data_and_matching_targets(source):
     assert data['task'] == original['task']
     assert data['label_column'] == original['label_column']
     assert data['num_class'] == original.get('num_class', 1)
-    expected = (['DATASET/merged/mental/clinical_canonical.csv'] if group == 'mental' else
-                [f'DATASET/merged/finetune_va/{Path(path).name}' for path in original['datasets']])
-    assert data['manifests'] == expected
+    assert data['datasets'] == original['datasets']
+    assert 'manifests' not in data
+    assert 'rootpaths' not in data
     assert data['local_views'] == 0
     assert data['video_frames_global'] == data['video_fps'] * data['global_seconds']
     regression = original['task'] == 'regression'

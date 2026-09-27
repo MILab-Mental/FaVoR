@@ -9,7 +9,7 @@ meta:
   save_every_freq: 100
   seed: 239
 yamls:
-  data: CONFIGS/data/finetune/video/mental/DSMxSCL-Psychosis.yaml
+  data: CONFIGS/data/finetune/audio-video/mental/DSMxSCL-Psychosis.yaml
   sampling: CONFIGS/data/finetune/video/sampling/48frames-8fps.yaml
   opt: CONFIGS/optimization/finetune/video/epochs80-warmup5-lr5e-05.yaml
   model: CONFIGS/models/finetune/video/vit-l-4layers.yaml

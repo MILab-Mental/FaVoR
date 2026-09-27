@@ -11,7 +11,7 @@ meta:
   save_every_freq: 100
   seed: 239
 yamls:
-  data: CONFIGS/data/finetune/video/classification/RAVDESS-emotion.yaml
+  data: CONFIGS/data/finetune/audio-video/classification/RAVDESS-emotion.yaml
   sampling: CONFIGS/data/finetune/video/sampling/RAVDESS-128frames-step2-reproduce.yaml
   opt: CONFIGS/optimization/finetune/video/RAVDESS-reproduce.yaml
   model: CONFIGS/models/finetune/video/vit-l-reproduce.yaml

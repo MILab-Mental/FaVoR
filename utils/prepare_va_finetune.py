@@ -30,12 +30,12 @@ def prepare():
     manifests = {}
     summary = []
     for group in GROUPS:
-        for fragment in sorted((ROOT / f'CONFIGS/data/finetune/video/{group}').glob('*.yaml')):
+        for fragment in sorted((ROOT / f'CONFIGS/data/finetune/audio-video/{group}').glob('*.yaml')):
             original = yaml.safe_load(fragment.read_text())['data']
-            if len(original['datasets']) != len(original['rootpaths']):
-                raise ValueError(f'{fragment}: datasets/rootpaths length mismatch')
+            from datasets.common.paths import get_dataset_paths
+            media_roots = get_dataset_paths(original['datasets'])
             paired_paths, all_rows = [], []
-            for csv_name, media_root in zip(original['datasets'], original['rootpaths']):
+            for csv_name, media_root in zip(original['datasets'], media_roots):
                 key = (csv_name, media_root)
                 if key not in manifests:
                     with (ROOT / csv_name).open(encoding='utf-8-sig', newline='') as handle:
@@ -94,8 +94,6 @@ def prepare():
             if not counts['0'] or not counts['1']:
                 raise ValueError(f'{fragment}: missing paired training or validation samples')
             data_path = Path(f'CONFIGS/data/finetune/audio-video/{group}/{fragment.name}')
-            data = dict(task=task, label_column=label, num_class=classes, manifests=paired_paths)
-            write_yaml(ROOT / data_path, {'data': data})
             config = deepcopy(template)
             config.update(app='finetune_va', folder=f'OUTPUT/finetune_va/{group}/{fragment.stem}',
                           data={'local_views': 0})

@@ -16,9 +16,12 @@ CONFIGS/
 │   └── finetune/
 │       └── {audio,video,audio-video}/
 │           └── {classification,regression,multilabel,mental}/
-├── data/                      # 与 tasks 使用相同的阶段、模态、方法分组
+├── data/                      # 任务数据共用，采样按模态分别配置
 │   ├── pretrain/
-│   └── finetune/              # 数据集片段 + sampling/ 采样预设
+│   └── finetune/
+│       ├── audio-video/       # 53 份共用数据片段 + 音视频 sampling/
+│       ├── audio/             # 18 份音频独有数据片段 + 音频 sampling/
+│       └── video/sampling/    # 视频 sampling/
 ├── models/                    # 按阶段、模态、方法分组的模型片段
 ├── optimization/              # 按阶段、模态、方法分组的优化片段
 ├── losses/                    # JEPA / LeJEPA 掩码与损失片段
@@ -49,7 +52,7 @@ CONFIGS/
 | 任务入口 | `tasks/finetune/video/{classification,regression,multilabel}/<任务名>.yaml` | `tasks/finetune/audio/{classification,regression,multilabel}/<任务名>.yaml` |
 | 多入口任务 | 保留 `tasks/finetune/video/<分组>/<任务名>/` 目录 | —（目前无） |
 | 入口 `app:` | `finetune_v` | `finetune_a` |
-| 数据片段 | `data/finetune/video/<类型>/<任务>.yaml` | `data/finetune/audio/<类型>/<任务>.yaml` |
+| 数据片段 | 共用 `data/finetune/audio-video/<类型>/<任务>.yaml` | 音视频数据集共用左侧片段；音频独有数据集位于 `data/finetune/audio/<类型>/<任务>.yaml` |
 | 采样片段 | `data/finetune/video/sampling/<帧数>frames-<帧率>fps.yaml`（由入口 `sampling:` 引用） | `data/finetune/audio/sampling/audio-4s-4clips.yaml` |
 | 输出目录 | `OUTPUT/finetune_v/` | `OUTPUT/finetune_a/` |
 | 代码模块 | `app/finetune_v/` ✅ 已实现 | `app/finetune_a/` ✅ 已实现 |
@@ -58,16 +61,21 @@ CONFIGS/
 > `multilabel/` = `multi_label_classification`，与 `data/` 下的同名分组一一对应。
 
 > **职责划分**：`classification/`、`regression/`、`multilabel/` 下的片段**只描述数据集是谁**（`datasets` / `datasets_weights` /
-> `rootpaths` / `task` / `num_class` / `label_column`），**不含任何采样或 dataloader 参数**；
+> `task` / `num_class` / `label_column`），**不含任何采样或 dataloader 参数**；
 > `batch_size` / `crop_size` / `patch_size` / `dataset_fpcs` / `tubelet_size` / `fps` / `num_workers` /
 > `persistent_workers` / `pin_mem` / `num_clips` 与 `data_aug` 全部来自顶层**采样预设片段**，
 > 由入口的 `sampling:` 键指定。
 >
-> 因此采样预设**不能单独使用**（缺 `datasets` / `rootpaths` / `label_column` 会在
+> 因此采样预设**不能单独使用**（缺 `datasets` / `label_column` 会在
 > `app/finetune_v/train.py:208-214` 处 KeyError），必须与一个数据集片段叠加。
 >
 > 这一划分对视频和音频微调入口都生效。视频采样预设提供帧数、fps 和图像增强；
 > 音频采样预设提供采样率、crop 时长、clip 数和 dataloader 参数。任务数据片段不再复制这些键。
+
+微调的数据片段按数据集是否包含视频去重：`data/finetune/audio-video/` 保留 53 份
+共用任务数据片段，供 audio、video、audio-video 三种入口引用；`data/finetune/audio/`
+仅保留 18 份音频独有任务的数据片段。`data/finetune/video/` 只保留视频采样预设。
+三个模态的 task 入口仍分别保留各自的 app、采样、模型、优化器和输出目录。
 
 ### VA-LeJEPA 预训练的数据异常处理
 
@@ -88,12 +96,12 @@ DDP 每个 batch 取各 rank 有效样本数的最小值；任一 rank 没有有
 项目内保留文件名 `DATASET/splits-0901/3_私有临床数据_LV.csv`，内容已替换为新数据源。
 `CONFIGS/datasets.csv` 中的 `original_csv_path` 同时指向该新文件。
 
-38 个任务分别提供 audio、video、audio-video 三种入口，共 114 份任务配置和 114 份数据片段：
+38 个任务分别提供 audio、video、audio-video 三种入口，共 114 份任务配置，共用 38 份数据片段：
 
 | 内容 | 路径 |
 |---|---|
 | 任务入口 | `CONFIGS/tasks/finetune/{audio,video,audio-video}/mental/<任务名>.yaml` |
-| 数据片段 | `CONFIGS/data/finetune/{audio,video,audio-video}/mental/<任务名>.yaml` |
+| 数据片段 | `CONFIGS/data/finetune/audio-video/mental/<任务名>.yaml` |
 | 音频输出 | `OUTPUT/finetune_a/mental/<任务名>/` |
 | 视频输出 | `OUTPUT/finetune_v/mental/<任务名>/` |
 | 音视频输出 | `OUTPUT/finetune_va/mental/<任务名>/` |
@@ -138,10 +146,12 @@ torchrun --nproc_per_node=2 -m app.main \
 旧路径通过 `path-mapping.csv` 分别兼容映射到 RAVDESS-emotion、MER242526-26openset、
 AVEC2014-PHQ；更早的 `vafinetune` 路径也直接映射到对应具体任务。
 
-普通配对清单位于 `DATASET/merged/finetune_va/<原split文件名>.csv`，临床清单仍位于
-`DATASET/merged/mental/clinical_canonical.csv`。清单保留所有原标签 / split 列，仅纳入同时有
-音频和视频路径的样本，并验证音视频身份和配对唯一性。RAVDESS 的 `02-` 视频与 `03-` 音频
-使用现有录制身份规则配对。采样预设只含采样参数，避免覆盖任务自己的清单。
+三种模态的数据片段统一使用 `datasets: [DATASET/splits-0901/xxx.csv]`。
+`CONFIGS/datasets.csv` 第一列 `split_csv` 保存同样的完整项目相对路径，第二列
+`root_path` 指定媒体根目录。移动媒体目录只需修改第二列；移动 split 文件时同步修改
+第一列和数据片段中的 `datasets`。audio-video 在加载原始 split 时保留标签和划分列，
+跳过缺失音频或视频路径的样本，生成配对标识并验证身份和唯一性。索引缓存包含媒体
+根目录，因此修改根目录会生成新的索引。已有 canonical CSV 仍可读取。
 
 ```bash
 # 生成 / 更新全部 53 个 VA 任务、配对清单和训练 / 验证样本数报告
@@ -171,7 +181,7 @@ torchrun --nproc_per_node=2 -m app.main \
 
 ```yaml
 yamls:
-  data:     CONFIGS/data/finetune/video/classification/CREMA-D-emotion.yaml
+  data:     CONFIGS/data/finetune/audio-video/classification/CREMA-D-emotion.yaml
   sampling: CONFIGS/data/finetune/video/sampling/48frames-8fps.yaml
   opt:      CONFIGS/optimization/finetune/video/epochs80-warmup5-lr5e-05.yaml
   model:    CONFIGS/models/finetune/video/vit-l-4layers.yaml
@@ -227,7 +237,7 @@ meta:
   seed: 239
   frozen_encoder: true          # 现已统一注释掉，见第 8 节
 yamls:
-  data: CONFIGS/data/finetune/video/classification/RAVDESS-emotion.yaml
+  data: CONFIGS/data/finetune/audio-video/classification/RAVDESS-emotion.yaml
   sampling: CONFIGS/data/finetune/video/sampling/48frames-8fps.yaml
   opt: CONFIGS/optimization/finetune/video/epochs250-warmup40-lr0.000525.yaml
   model: CONFIGS/models/finetune/video/vit-l.yaml
@@ -318,14 +328,14 @@ flash / memory-efficient attention **没有二阶导**，故该 pass 会临时�
 | `random_resize_scale` | 随机缩放比例范围 |
 | `motion_shift` / `auto_augment` / `reprob` | 运动偏移 / 自动增强 / 随机 erase 概率 |
 
-### 4.2 微调 data（`data/finetune/video/{classification,regression,multilabel}/*.yaml`）
+### 4.2 微调 data（`data/finetune/audio-video/{classification,regression,multilabel}/*.yaml`）
 
 在预训练字段基础上新增：
 
 | 字段 | 说明 |
 |---|---|
 | `datasets` | split CSV 列表（带表头，含 `video_path` + 标签列 + `{label}_split` 列） |
-| `rootpaths` | 每个 CSV 对应的视频根目录（列表，与 `datasets` 一一对应） |
+| 媒体根目录 | 自动按 `datasets` 文件路径查询 `CONFIGS/datasets.csv` 的 `root_path`，无需 `rootpaths` |
 | `num_clips` | 每个样本采样的 clip 数 |
 | `task` | `classification` / `regression` / `multi_label_classification` |
 | `num_class` | 分类类别数（`multi_label_classification` 必填且须 ≥2） |

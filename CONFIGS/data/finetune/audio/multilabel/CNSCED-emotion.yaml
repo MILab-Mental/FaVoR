@@ -2,8 +2,6 @@
 data:
   datasets:
     - DATASET/splits-0901/2_CNSCED_SA.csv
-  rootpaths:
-    - /home/data/sdb/基座模型数据集/2情绪数据集/CNSCED/
   task: multi_label_classification
   num_class: 7
   label_column: emotion

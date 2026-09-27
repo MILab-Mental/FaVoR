@@ -1,5 +1,6 @@
 """Canonical paired manifests with explicit identity verification."""
 import csv
+import hashlib
 import re
 from pathlib import Path
 from .progress import progress_lines
@@ -39,13 +40,19 @@ def iter_manifest(path, *, root=None, source_pattern=None, progress=False):
         first = handle.readline()
         handle.seek(0)
         reader = csv.DictReader(lines, delimiter='\t' if '\t' in first else ',')
-        if not reader.fieldnames or not REQUIRED.issubset(reader.fieldnames):
+        canonical = bool(reader.fieldnames and REQUIRED.issubset(reader.fieldnames))
+        if not reader.fieldnames or not {'audio_path', 'video_path'}.issubset(reader.fieldnames):
             raise ValueError(f'{path}: expected canonical columns {sorted(REQUIRED)}; run manifest_tools convert')
         seen = set()
         count = 0
         parents = {}
         for line, row in enumerate(reader, 2):
             try:
+                if not canonical:
+                    if not row.get('audio_path', '').strip() or not row.get('video_path', '').strip():
+                        continue
+                    row['source_id'] = ''
+                    row['pair_id'] = ''
                 for field in REQUIRED:
                     row[field] = str(row[field] or '').strip()
                 for field in ('video_path', 'audio_path'):
@@ -65,6 +72,9 @@ def iter_manifest(path, *, root=None, source_pattern=None, progress=False):
                         if resolved.is_symlink():
                             resolved = resolved.resolve()
                     row[field] = str(resolved)
+                if not canonical:
+                    row['source_id'] = source_key(row['video_path'], source_pattern)
+                    row['pair_id'] = hashlib.sha256(f'{row["video_path"]}\0{row["audio_path"]}'.encode()).hexdigest()[:24]
                 validate_identity(row, source_pattern)
                 if row['pair_id'] in seen:
                     raise ValueError(f'duplicate pair_id {row["pair_id"]}')

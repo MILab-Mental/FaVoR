@@ -2,7 +2,5 @@
 data:
   datasets:
     - DATASET/splits-0901/3_CMDC_LA.csv
-  rootpaths:
-    - /home/data/sdb/基座模型数据集/3心理数据集/CMDC/
   task: regression
   label_column: PHQ

@@ -2,8 +2,6 @@
 data:
   datasets:
     - DATASET/splits-0901/3_MODMA_SA.csv
-  rootpaths:
-    - /home/data/sdb/基座模型数据集/3心理数据集/MODMA/
   task: classification
   num_class: 2
   label_column: label

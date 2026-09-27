@@ -14,9 +14,12 @@ from .pretrain_dataset import crop_waveform, load_audio, normalize_waveform
 
 
 class AudioCSVDataset(Dataset):
-    def __init__(self, csv_paths, split, *, root_paths, label_column, task,
+    def __init__(self, csv_paths, split, *, root_paths=None, label_column, task,
                  num_class=None, sample_rate=16000, process_seconds=4.0,
                  num_clips=1, training=False, normalize=True, max_retries=10):
+        if root_paths is None:
+            from datasets.common.paths import get_dataset_paths
+            root_paths = get_dataset_paths(csv_paths)
         if len(csv_paths) != len(root_paths):
             raise ValueError("data.datasets and data.rootpaths must have the same length")
         self.split = int(split)
@@ -107,7 +110,7 @@ class AudioCSVDataset(Dataset):
         raise RuntimeError(f"Could not load a valid audio sample after {self.max_retries} attempts: {error}")
 
 
-def make_audiodataset_finetune_a(csv_paths, *, root_paths, label_column, task,
+def make_audiodataset_finetune_a(csv_paths, *, root_paths=None, label_column, task,
                                  num_class, sample_rate, process_seconds, num_clips):
     common = dict(
         root_paths=root_paths, label_column=label_column, task=task, num_class=num_class,

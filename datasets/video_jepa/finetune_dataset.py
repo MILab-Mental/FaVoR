@@ -33,6 +33,9 @@ class VideoCSVDataset(VideoDataset):
             if not path.is_file():
                 raise FileNotFoundError(f"CSV file does not exist: {path}")
 
+        if root_paths is None:
+            from datasets.common.paths import get_dataset_paths
+            root_paths = get_dataset_paths(csv_paths)
         if not isinstance(root_paths, list) or len(root_paths) != len(paths):
             raise ValueError("root_paths must be a list with exactly one path per CSV manifest")
         roots = [Path(root).expanduser().resolve() for root in root_paths]

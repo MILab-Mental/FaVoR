@@ -2,7 +2,5 @@
 data:
   datasets:
     - DATASET/splits-0901/2_CNSCED_SA.csv
-  rootpaths:
-    - /home/data/sdb/基座模型数据集/2情绪数据集/CNSCED/
   task: regression
   label_column: intensity

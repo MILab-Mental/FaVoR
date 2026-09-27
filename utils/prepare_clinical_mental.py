@@ -67,7 +67,7 @@ def prepare(source):
         reader = csv.DictReader(handle)
         catalog_fields, entries = reader.fieldnames, list(reader)
     for entry in entries:
-        if entry['split_csv'] == SPLIT.name:
+        if entry['split_csv'] == str(SPLIT):
             entry.update(root_path=str(source.parent) + '/', original_csv_path=str(source))
     with catalog.open('w', encoding='utf-8', newline='') as handle:
         writer = csv.DictWriter(handle, fieldnames=catalog_fields, lineterminator='\n')
@@ -79,14 +79,10 @@ def prepare(source):
         template_path = PROJECT_ROOT / f'CONFIGS/tasks/finetune/{modality}/classification/{template_name}.yaml'
         template = yaml.safe_load(template_path.read_text())
         for task in tasks:
-            data_path = Path(f'CONFIGS/data/finetune/{modality}/mental/{task}.yaml')
+            data_path = Path(f'CONFIGS/data/finetune/audio-video/mental/{task}.yaml')
             data = dict(task='classification', num_class=classes[task], label_column=task)
-            if modality == 'audio-video':
-                data['manifests'] = [str(PAIRED)]
-            else:
-                data.update(datasets=[str(SPLIT)], rootpaths=[str(source.parent) + '/'])
-                if modality == 'video':
-                    data['datasets_weights'] = [1]
+            data['datasets'] = [str(SPLIT)]
+            data['datasets_weights'] = [1]
             config = deepcopy(template)
             config['folder'] = f'OUTPUT/{app}/mental/{task}'
             if modality == 'audio-video':

@@ -236,8 +236,11 @@ GPU；rank 崩溃会立即报错并终止整组，不用再干等 NCCL 默认 60
 四种 backbone 初始化，以及分类、回归和多标签微调。
 
 配置入口位于 `CONFIGS/tasks/pretrain/audio-video/lejepa/` 和 `CONFIGS/tasks/finetune/audio-video/`。
-训练使用带表头的 canonical paired manifest；下游分类标签沿用 FAVOR 的 one-based 约定。
+音视频预训练继续使用带表头的 canonical paired manifest。微调的三种模态统一通过 `data.datasets` 指定 `DATASET/splits-0901/xxx.csv`；媒体根目录按文件路径从 `CONFIGS/datasets.csv` 查询，无需填写 `rootpaths`。下游分类标签沿用 FAVOR 的 one-based 约定。
 默认主配置需要已训练的 VIDEO-LeJEPA/AUDIO-LeJEPA 权重；I0 配置使用官方 V-JEPA/emotion2vec。
+
+微调数据片段集中在 `CONFIGS/data/finetune/audio-video/`，供 audio、video、audio-video 共用；
+`CONFIGS/data/finetune/audio/` 仅保留音频独有数据集的任务片段，各模态保留自己的采样预设。
 
 音视频微调已提供 15 个普通下游任务（7 个分类、1 个多标签、7 个回归）和 `mental/` 下的
 38 个临床任务。运行 `python -m utils.prepare_va_finetune` 可生成全部配对清单及任务配置；

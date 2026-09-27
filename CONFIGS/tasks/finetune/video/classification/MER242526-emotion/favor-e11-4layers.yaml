@@ -10,7 +10,7 @@ meta:
   save_every_freq: 100
   seed: 239
 yamls:
-  data: CONFIGS/data/finetune/video/classification/MER242526-emotion.yaml
+  data: CONFIGS/data/finetune/audio-video/classification/MER242526-emotion.yaml
   sampling: CONFIGS/data/finetune/video/sampling/48frames-4fps.yaml
   opt: CONFIGS/optimization/finetune/video/epochs250-warmup40-lr0.000525.yaml
   model: CONFIGS/models/finetune/video/vit-l-4layers.yaml

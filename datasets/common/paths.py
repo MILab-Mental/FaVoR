@@ -1,21 +1,33 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-#
-# This source code is licensed under the MIT license found in the
-# LICENSE file in the root directory of this source tree.
+"""Resolve dataset media roots from the shared registry."""
+import csv
+from pathlib import Path
 
-from utils.cluster import dataset_paths
-from utils.logging import get_logger
-
-logger = get_logger("Datasets utils")
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DATASETS_CSV = PROJECT_ROOT / 'CONFIGS/datasets.csv'
 
 
-def get_dataset_paths(datasets: list[str]):
+def _absolute(path):
+    path = Path(path).expanduser()
+    return (path if path.is_absolute() else PROJECT_ROOT / path).resolve()
+
+
+def dataset_roots():
+    with DATASETS_CSV.open(encoding='utf-8-sig', newline='') as handle:
+        roots = {}
+        for row in csv.DictReader(handle):
+            key = str(_absolute(row['split_csv']))
+            if key in roots:
+                raise ValueError(f'Duplicate dataset in {DATASETS_CSV}: {row["split_csv"]}')
+            roots[key] = str(_absolute(row['root_path']))
+        return roots
+
+
+def get_dataset_paths(datasets):
+    roots = dataset_roots()
     paths = []
-    for d in datasets:
-        try:
-            path = dataset_paths().get(d)
-        except Exception:
-            raise Exception(f"Unknown dataset: {d}")
-        paths.append(path)
-    logger.info(f"Datapaths {paths}")
+    for dataset in datasets:
+        key = str(_absolute(dataset))
+        if key not in roots:
+            raise ValueError(f'Unknown dataset {dataset}: add it to {DATASETS_CSV}')
+        paths.append(roots[key])
     return paths

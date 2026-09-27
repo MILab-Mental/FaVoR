@@ -2,5 +2,7 @@ data:
   task: classification
   num_class: 4
   label_column: PAYKEL
-  manifests:
-  - DATASET/merged/mental/clinical_canonical.csv
+  datasets:
+  - DATASET/splits-0901/3_私有临床数据_LV.csv
+  datasets_weights:
+  - 1

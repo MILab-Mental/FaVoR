@@ -330,7 +330,7 @@ def main(args):
     task = data_cfg.get("task", "classification").lower()
     num_class = data_cfg.get("num_class")
     train_dataset, val_dataset = make_audiodataset_finetune_a(
-        data_cfg["datasets"], root_paths=data_cfg["rootpaths"],
+        data_cfg["datasets"], root_paths=data_cfg.get("rootpaths"),
         label_column=data_cfg["label_column"], task=task, num_class=num_class,
         sample_rate=data_cfg.get("sample_rate", 16000),
         process_seconds=data_cfg.get("process_seconds", 4.0),

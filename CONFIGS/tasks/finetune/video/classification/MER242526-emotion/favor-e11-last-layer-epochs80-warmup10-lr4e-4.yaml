@@ -11,7 +11,7 @@ meta:
   seed: 239
   # frozen_encoder: true
 yamls:
-  data: CONFIGS/data/finetune/video/classification/MER242526-emotion.yaml
+  data: CONFIGS/data/finetune/audio-video/classification/MER242526-emotion.yaml
   sampling: CONFIGS/data/finetune/video/sampling/48frames-4fps.yaml
   opt: CONFIGS/optimization/finetune/video/epochs80-warmup10-lr0.0004.yaml
   model: CONFIGS/models/finetune/video/vit-l.yaml
