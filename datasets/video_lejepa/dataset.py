@@ -4,6 +4,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from datasets.common.indexed_manifest import IndexedManifest, ManifestColumn
 from datasets.common.weighted_sampler import DistributedWeightedSampler
 from datasets.video_jepa.pretrain_dataset import VideoDataset
 
@@ -15,6 +16,13 @@ logger = logging.getLogger(__name__)
 
 class VideoLeJEPADataset(VideoDataset):
     """FAVOR manifest/decode dataset with a single shared temporal sample."""
+
+    def _load_manifests(self):
+        def read(path):
+            samples, labels = self._load_data_path(str(path))
+            return (dict(path=sample, label=label) for sample, label in zip(samples, labels))
+        records = IndexedManifest(self.data_paths, read, kind='video-lejepa')
+        return ManifestColumn(records, 'path'), ManifestColumn(records, 'label'), records.counts
 
     def __getitem__(self, index):
         original_index = int(index)

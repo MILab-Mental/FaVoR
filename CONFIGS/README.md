@@ -728,3 +728,93 @@ VA 预训练默认允许时长差 0.5 秒（或两帧时长，取较大值），
 std、rank 取分支均值，lr / wd 取参数组最大值。详细分支指标和耗时仍写入 history，
 其中 `step_seconds` 为一次 optimizer step 的耗时，包含数据加载及梯度累积。
 skip 计数是本次启动以来的累计值，写入 data_skips.csv。
+
+### VA 预训练逐阶段计时
+
+`pretrain_va_lejepa` 支持短程性能诊断，保留 `torchrun` 的双卡 DDP：
+
+```bash
+OMP_NUM_THREADS=2 torchrun --standalone --nproc_per_node=2 \
+  -m app.main \
+  --fname CONFIGS/tasks/pretrain/audio-video/lejepa/default.yaml \
+  --set folder=OUTPUT/debug_va_step_timing \
+        meta.auto_resume=false \
+        meta.profile_steps=35
+```
+
+`meta.profile_steps=0`（默认）关闭计时；正数表示完成指定数量的**额外 optimizer steps** 后退出，
+不会改动学习率调度的 `optimization.total_steps`。使用独立输出目录可以保留正式训练的日志和参数快照。
+诊断模式默认不保存 checkpoint；如需测量保存开销，可加 `meta.profile_save_checkpoint=true`，
+仍按原来的 `save_every_steps` 或训练总步数触发保存。
+
+每个 rank 都在终端输出 `[timing rank=… step=…]`，并写入
+`<folder>/logs/step_timing_rank{rank}.csv`。时间单位为秒，梯度累积时一行汇总整个 optimizer step
+的所有 micro-batches，包括跨 epoch 的累积。记录：
+
+- `data_wait`：主进程等待 loader 产出 batch（首步包含 worker 启动），不是后台 worker 解码总时长。
+- `batch_sync`：有效样本数同步，包括等待其他 rank；`to_device`：数据传输。
+- `forward`：完整前向；`video_encoder`、`audio_encoder`、`alignment`、`fusion`、`projector` 为其子阶段，不能与 `forward` 重复相加。
+- `loss`：含 SIGReg 的 loss；`loss_check`：有限值检查；`backward`：含 checkpoint 重算和 DDP 梯度通信。
+- `grad_stats_clip`、`optimizer`、`ema`、`logging`、`checkpoint`：各阶段开销。
+- `encoder_calls`：每个编码器实际前向调用次数；全局 1 个、局部 4 个 view 的单 micro-batch 通常至少为 5，按真实长度分组会增加调用次数。
+- `total_seconds`：含 Python 等未单列开销的总时间；`samples` 为当前 rank 的实际累计样本数。
+
+CUDA 阶段在边界同步，因此记录的是完成计算后的 wall time。同步会减少 CPU/GPU 重叠，
+适用于定位瓶颈，不能直接当作无计时模式下的吞吐。对比各 rank，并略过包含初始化/首次分配的第一个 step。
+EMA 每 32 steps 更新一次，测量 35 steps 可观察这一周期（该入口当前使用 GPU EMA）；普通指标日志默认每 50 steps 才触发，
+如需逐步测量其开销，加 `meta.log_every_steps=1`。
+
+
+### VA 预训练执行优化
+
+`CONFIGS/tasks/pretrain/audio-video/lejepa/default.yaml` 默认启用以下执行优化：
+
+- `model.batch_local_views=true`：将 local views 的 `[B,K,...]` 展平为 `[B*K,...]` 一起按真实长度编码，然后恢复原来的样本/view 顺序。global 与 local 分辨率不同，仍分别编码；短样本继续裁掉 padding。
+- 视频、音频、feature fusion 的 activation checkpointing 关闭：保留激活，减少反向重算。
+- `ema.device=cuda:0`：EMA shadow 留在每个 rank 的 GPU，衰减和每 32 steps 更新频率沿用原值。保存时复用一次 CPU 快照，两个兼容字段共享同一份 shadow storage。
+
+这些优化保留 batch size、views 数量、输入分辨率、采样顺序、loss、学习率和模型参数结构。
+当前模型 dropout 为 0、归一化不依赖 batch 内其他样本；local 合并的输出、loss、梯度已通过等价性测试。
+FP32 测试在浮点容差内一致，真实 BF16 双卡对照的 loss 最大绝对差约 `2.94e-5`；不能保证逐 bit 一致或完全相同的长期训练轨迹。
+现有 checkpoint 可按原方式恢复，执行选项不改变参数键或形状；已启动的进程需要在下次启动时加载新配置。
+
+2026-09-27 在双 RTX PRO 6000、每卡 batch=8、同样 6 个真实 batch（前 2 步 warmup）下，
+基线平均 11.03 秒/step，重复基线 11.20 秒；仅合并 locals 为 6.32 秒，合并并关闭 checkpoint 为 4.37 秒。
+满长度压力测试（48 帧/6 秒 global，4 个 16 帧/2 秒 locals，GPU EMA 和 optimizer 均在场）峰值约 40.3 GiB/rank。
+压力测试使用满长度张量检查内存；性能对照使用真实样本和真实长度。共享 GPU 的其他任务始终在运行，速度仅代表该环境。
+
+当前入口面向 96 GB GPU，较小显存可通过 `--set` 恢复 checkpointing，同时保留 local 合并：
+
+```bash
+--set model.video.use_activation_checkpointing=true \
+      model.audio_gradient_checkpointing=true \
+      model.fusion.feature.gradient_checkpointing=true \
+      ema.device=cpu
+```
+
+若要完整恢复原执行方式，再加 `model.batch_local_views=false`。共享的模型 YAML 保留原来的保守设置。
+fused AdamW 和 DDP gradient bucket views 在本次对照中没有明确收益，未增加这些运行选项。
+
+### VA / V 预训练清单索引
+
+`VALeJEPADataset` 和 `VideoLeJEPADataset` 自动复用清单索引，不需要添加启动参数。
+首次使用时读取原清单，将记录和字节偏移缓存到 `<第一份清单的绝对路径>.index/<版本>/`：
+`records.jsonl` 保存清单记录，`offsets.npy` 保存偏移，`metadata.json` 保存源文件信息和各清单样本数。
+缓存只包含路径和清单字段，媒体仍由 worker 按需解码。
+
+后续启动只读取小型 metadata；取样时 mmap 偏移数组并读取对应的一条记录，
+不再为每个 rank 创建完整的路径/记录 Python 列表。每个 worker 独立打开文件，支持 fork 和 spawn。
+首建通过文件锁避免多个 rank 或训练进程重复构建，完成后原子发布。
+VA 的字段、身份和重复 pair_id 校验在首建时完成，源清单未变化时复用校验结果。
+
+清单路径、大小、mtime 或 ctime 改变时自动创建新版本；VA 的 root 或 source_pattern 改变也会重建。
+索引保存的是构建时的记录快照，修改媒体路径的符号链接后，如需重新解析路径，应删除对应 `.index` 缓存再启动。
+既有 worker 继续使用启动时的版本，下一次启动选择匹配当前清单的版本。
+样本顺序、各数据集样本数、采样权重、分布式 sampler、解码和增强规则保持原有行为。
+V 的首建沿用原 CSV/NPY 解析器；A 的现有行偏移索引不变。
+
+2026-09-27 已为当前 VA / V 清单各 2,737,884 条样本完成缓存构建。
+配置已加载后，复用缓存创建 Dataset、sampler 和 DataLoader 的 5 次实测：
+VA 为 0.4–6.3 ms，V 为 16.5–24.5 ms。该时间不包括模型初始化、worker 启动或媒体解码。
+双 rank、各 2 个 worker 的真实首批读取通过，相关回归测试 94 项通过。
+完整记录位于 `OUTPUT/debug_manifest_index_20260927/report.md`。

@@ -2,7 +2,9 @@ import random
 import torch
 from torch.utils.data import Dataset, DataLoader
 from torch.utils.data.distributed import DistributedSampler
-from .va_manifest import read_manifest
+from functools import partial
+from datasets.common.indexed_manifest import IndexedManifest
+from .va_manifest import iter_manifest
 from .av_time_sampler import AVTimeSampler
 from .av_decoder import AVDecoder
 from .transforms import AVTransforms
@@ -20,13 +22,14 @@ class VALeJEPADataset(Dataset):
         manifests = cfg.get('manifests', cfg.get('datasets', []))
         if isinstance(manifests, str):
             manifests = [manifests]
-        self.rows = []
-        for path in manifests:
-            self.rows.extend(read_manifest(path, root=cfg.get('root'), source_pattern=cfg.get('source_pattern')))
-        if not self.rows:
-            raise ValueError('no paired samples')
-        if len({r['pair_id'] for r in self.rows}) != len(self.rows):
-            raise ValueError('duplicate pair_id across manifests')
+        root = cfg.get('root')
+        if root is not None:
+            from pathlib import Path
+            root = str(Path(root).expanduser().resolve())
+        self.rows = IndexedManifest(manifests,
+            partial(iter_manifest, root=root, source_pattern=cfg.get('source_pattern')),
+            kind='va-lejepa', options=dict(root=root, source_pattern=cfg.get('source_pattern')),
+            unique_key='pair_id')
         self.sampler = AVTimeSampler(cfg.get('global_seconds', 6), cfg.get('local_seconds', 2), cfg.get('local_views', 4), training,
             cfg.get('short_policy', 'zero_pad'), cfg.get('minimum_seconds', .1))
         fps = float(cfg.get('video_fps', 8))

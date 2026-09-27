@@ -14,6 +14,7 @@ from app.pretrain_audio_lejepa.train import _state, _unwrap, _schedule, _reduce,
 from datasets.va_lejepa import make_va_lejepa_loader, to_device, synchronize_training_batch
 from models.va_lejepa import build_va_lejepa, VABranchLoss, save_checkpoint, load_checkpoint
 from models.video_lejepa import ModelEMA, embedding_statistics
+from utils.step_timing import StepTiming
 
 LOGGER = logging.getLogger(__name__)
 
@@ -98,6 +99,9 @@ def _write_curves(path, output):
 def main(args):
     distributed, rank, world = _state()
     meta, opt = args.get('meta', {}), args['optimization']
+    profile_steps = int(meta.get('profile_steps', 0))
+    if profile_steps < 0:
+        raise ValueError('meta.profile_steps must be >= 0')
     total, accumulation = int(opt['total_steps']), int(opt.get('grad_accum_steps', 1))
     if total < 1 or accumulation < 1 or int(meta.get('save_every_steps', 5000)) < 0:
         raise ValueError('invalid step/accumulation/save configuration')
@@ -160,15 +164,22 @@ def main(args):
         raise ValueError('resume batch_offset is outside current loader')
     model.train()
     optimizer.zero_grad(set_to_none=True)
+    timing = StepTiming(device, enabled=profile_steps > 0)
+    stop_step = min(total, step + profile_steps) if profile_steps else total
+    timing_path = folder / f'logs/step_timing_rank{rank}.csv'
+    profile_micros = profile_samples = 0
+    if profile_steps and rank == 0:
+        LOGGER.info('Step timing enabled: %d optimizer steps, synchronized CUDA phases; forward children overlap with forward. CSV: %s',
+                    stop_step - step, folder / 'logs/step_timing_rank*.csv')
     micro = 0
     skipped_pairs = discarded_pairs = skipped_batches = 0
     skipped_report = folder / f'logs/skipped_pairs_rank{rank}.jsonl'
     started = time.perf_counter()
-    while step < total:
+    while step < stop_step:
         sampler.set_epoch(epoch)
         loader.dataset.epoch = epoch
         attempted_batches = processed_batches = 0
-        for batch_index, batch in enumerate(loader):
+        for batch_index, batch in enumerate(timing.batches(loader) if timing.enabled else loader):
             if batch_index < offset:
                 continue
             if pending_rng is not None:
@@ -176,88 +187,106 @@ def main(args):
                 pending_rng = None
             attempted_batches += 1
             skipped_pairs += _record_skipped(skipped_report, batch, epoch, batch_index)
-            batch, discarded = synchronize_training_batch(batch, device)
+            with timing.phase('batch_sync'):
+                batch, discarded = synchronize_training_batch(batch, device)
             discarded_pairs += discarded
             if batch is None:
                 skipped_batches += 1
                 continue
             processed_batches += 1
-            batch = to_device(batch, device)
+            with timing.phase('to_device'):
+                batch = to_device(batch, device)
+            profile_micros += 1
+            profile_samples += batch['global']['video'].shape[0]
             should_step = (micro + 1) % accumulation == 0
             sync = model.no_sync() if distributed and not should_step else nullcontext()
             if device.type == 'cuda':
                 torch.cuda.reset_peak_memory_stats(device)
             with sync:
                 with torch.autocast(device.type, dtype=amp_dtype, enabled=mixed):
-                    output = model(batch)
-                    losses = criterion(output)
+                    with timing.phase('forward'):
+                        output = model(batch, timing=timing) if timing.enabled else model(batch)
+                    with timing.phase('loss'):
+                        losses = criterion(output)
                 forward_peak = torch.cuda.max_memory_allocated(device) if device.type == 'cuda' else 0
-                if not torch.isfinite(losses['loss']):
-                    raise FloatingPointError('nonfinite VA loss')
-                scaler.scale(losses['loss'] / accumulation).backward()
+                with timing.phase('loss_check'):
+                    if not torch.isfinite(losses['loss']):
+                        raise FloatingPointError('nonfinite VA loss')
+                with timing.phase('backward'):
+                    scaler.scale(losses['loss'] / accumulation).backward()
             backward_peak = torch.cuda.max_memory_allocated(device) if device.type == 'cuda' else 0
             micro += 1
             if not should_step:
                 continue
-            _schedule(optimizer, step, opt)
-            scaler.unscale_(optimizer)
-            norms = {family + '_grad_norm': _grad_norm(module.parameters()).to(device) for family, module in
-                     [('video', raw.video_encoder), ('audio', raw.audio_encoder), ('fusion', raw.fusion_adapters)]}
-            norms.update({mode + '_grad_norm': _grad_norm(raw.fusion_adapters[mode].parameters()).to(device) for mode in raw.enabled_modes})
-            norm = torch.nn.utils.clip_grad_norm_(raw.parameters(), float(opt.get('clip_grad_norm', 1)))
-            old_scale = scaler.get_scale()
-            scaler.step(optimizer)
-            scaler.update()
-            optimizer.zero_grad(set_to_none=True)
+            with timing.phase('grad_stats_clip'):
+                _schedule(optimizer, step, opt)
+                scaler.unscale_(optimizer)
+                norms = {family + '_grad_norm': _grad_norm(module.parameters()).to(device) for family, module in
+                         [('video', raw.video_encoder), ('audio', raw.audio_encoder), ('fusion', raw.fusion_adapters)]}
+                norms.update({mode + '_grad_norm': _grad_norm(raw.fusion_adapters[mode].parameters()).to(device) for mode in raw.enabled_modes})
+                norm = torch.nn.utils.clip_grad_norm_(raw.parameters(), float(opt.get('clip_grad_norm', 1)))
+            with timing.phase('optimizer'):
+                old_scale = scaler.get_scale()
+                scaler.step(optimizer)
+                scaler.update()
+                optimizer.zero_grad(set_to_none=True)
             if scaler.get_scale() < old_scale:
                 continue
             step += 1
-            if ema:
-                ema.update(raw, step)
-            log_every = max(1, int(meta.get('log_every_steps', 50)))
-            if step == 1 or step % log_every == 0 or step == total:
-                skip_summary = dict(step=step, epoch=epoch,
-                    skipped_pairs=int(round(_reduce(torch.tensor(skipped_pairs, device=device)) * world)),
-                    ddp_discarded_pairs=int(round(_reduce(torch.tensor(discarded_pairs, device=device)) * world)),
-                    skipped_batches=skipped_batches)
-                row = dict(step=step, epoch=epoch, loss=_reduce(losses['loss']), grad_norm=_reduce(norm),
-                           **{key: _reduce(value) for key, value in norms.items()})
-                for mode, values in losses['branches'].items():
-                    row.update({f'{mode}_{key}': _reduce(value) for key, value in values.items()})
-                    embeddings = torch.cat((output[mode]['global'], output[mode]['local']), 1)
-                    row.update({f'{mode}_{key}': _reduce(value) for key, value in embedding_statistics(embeddings.detach()).items()})
-                row.update({f'lr_{g["group_name"]}': g['lr'] for g in optimizer.param_groups})
-                step_seconds = time.perf_counter() - started
-                diagnostics = batch['sync_diagnostics']
-                row.update(step_seconds=step_seconds, duration_delta=max(d['duration_delta'] for d in diagnostics),
-                           start_delta=max(d['start_delta'] for d in diagnostics),
-                           max_frame_sampling_drift_seconds=max(d.get('max_frame_sampling_drift_seconds', 0) for d in diagnostics),
-                           max_audio_boundary_rounding_seconds=max(d.get('max_audio_boundary_rounding_seconds', 0) for d in diagnostics),
-                           repeat_ratio=sum(d['repeated'] for d in diagnostics) / len(diagnostics),
-                           pad_ratio=sum(d['padded'] for d in diagnostics) / len(diagnostics),
-                           forward_peak_bytes=forward_peak, backward_peak_bytes=backward_peak,
-                           optimizer_peak_bytes=torch.cuda.max_memory_allocated(device) if device.type == 'cuda' else 0,
-                           samples_per_second=world * batch['global']['video'].shape[0] * accumulation / max(step_seconds, 1e-9))
-                if rank == 0:
-                    _append_csv(history, row)
-                    _append_csv(folder / 'logs/data_skips.csv', skip_summary)
-                    modes = tuple(losses['branches'])
-                    def branch_mean(metric):
-                        return sum(row[f'{mode}_{metric}'] for mode in modes) / len(modes)
-                    LOGGER.info(
-                        'loss=%.5f inv=%.5f sigreg=%.5f std=%.4f rank=%.2f lr=%.2e wd=%.3g grad=%.3f clips/s=%.2f',
-                        row['loss'], branch_mean('invariance_loss'), branch_mean('sigreg_loss'),
-                        branch_mean('embedding_std'), branch_mean('rankme'),
-                        max(group['lr'] for group in optimizer.param_groups),
-                        max(group['weight_decay'] for group in optimizer.param_groups),
-                        row['grad_norm'], row['samples_per_second'])
+            with timing.phase('ema'):
+                if ema:
+                    ema.update(raw, step)
+            with timing.phase('logging'):
+                log_every = max(1, int(meta.get('log_every_steps', 50)))
+                if step == 1 or step % log_every == 0 or step == total:
+                    skip_summary = dict(step=step, epoch=epoch,
+                        skipped_pairs=int(round(_reduce(torch.tensor(skipped_pairs, device=device)) * world)),
+                        ddp_discarded_pairs=int(round(_reduce(torch.tensor(discarded_pairs, device=device)) * world)),
+                        skipped_batches=skipped_batches)
+                    row = dict(step=step, epoch=epoch, loss=_reduce(losses['loss']), grad_norm=_reduce(norm),
+                               **{key: _reduce(value) for key, value in norms.items()})
+                    for mode, values in losses['branches'].items():
+                        row.update({f'{mode}_{key}': _reduce(value) for key, value in values.items()})
+                        embeddings = torch.cat((output[mode]['global'], output[mode]['local']), 1)
+                        row.update({f'{mode}_{key}': _reduce(value) for key, value in embedding_statistics(embeddings.detach()).items()})
+                    row.update({f'lr_{g["group_name"]}': g['lr'] for g in optimizer.param_groups})
+                    step_seconds = time.perf_counter() - started
+                    diagnostics = batch['sync_diagnostics']
+                    row.update(step_seconds=step_seconds, duration_delta=max(d['duration_delta'] for d in diagnostics),
+                               start_delta=max(d['start_delta'] for d in diagnostics),
+                               max_frame_sampling_drift_seconds=max(d.get('max_frame_sampling_drift_seconds', 0) for d in diagnostics),
+                               max_audio_boundary_rounding_seconds=max(d.get('max_audio_boundary_rounding_seconds', 0) for d in diagnostics),
+                               repeat_ratio=sum(d['repeated'] for d in diagnostics) / len(diagnostics),
+                               pad_ratio=sum(d['padded'] for d in diagnostics) / len(diagnostics),
+                               forward_peak_bytes=forward_peak, backward_peak_bytes=backward_peak,
+                               optimizer_peak_bytes=torch.cuda.max_memory_allocated(device) if device.type == 'cuda' else 0,
+                               samples_per_second=world * batch['global']['video'].shape[0] * accumulation / max(step_seconds, 1e-9))
+                    if rank == 0:
+                        _append_csv(history, row)
+                        _append_csv(folder / 'logs/data_skips.csv', skip_summary)
+                        modes = tuple(losses['branches'])
+                        def branch_mean(metric):
+                            return sum(row[f'{mode}_{metric}'] for mode in modes) / len(modes)
+                        LOGGER.info(
+                            'step=%d/%d loss=%.5f inv=%.5f sigreg=%.5f std=%.4f rank=%.2f lr=%.2e wd=%.3g grad=%.3f clips/s=%.2f',
+                            step, total, row['loss'], branch_mean('invariance_loss'), branch_mean('sigreg_loss'),
+                            branch_mean('embedding_std'), branch_mean('rankme'),
+                            max(group['lr'] for group in optimizer.param_groups),
+                            max(group['weight_decay'] for group in optimizer.param_groups),
+                            row['grad_norm'], row['samples_per_second'])
             started = time.perf_counter()
             save_every = int(meta.get('save_every_steps', 5000))
-            if (save_every and step % save_every == 0) or step == total:
-                _save_all(folder / 'latest.pt', model, optimizer, scaler, ema, step, epoch, args, batch_index + 1)
-                if rank == 0:
-                    _write_curves(history, folder / 'logs/metrics_curves.png')
-            if step >= total:
+            save_allowed = not profile_steps or meta.get('profile_save_checkpoint', False)
+            if save_allowed and ((save_every and step % save_every == 0) or step == total):
+                with timing.phase('checkpoint'):
+                    _save_all(folder / 'latest.pt', model, optimizer, scaler, ema, step, epoch, args, batch_index + 1)
+                    if rank == 0:
+                        _write_curves(history, folder / 'logs/metrics_curves.png')
+            if timing.enabled:
+                timing.report(timing_path, rank, step, epoch, profile_micros, profile_samples)
+                timing.reset()
+                profile_micros = profile_samples = 0
+            if step >= stop_step:
                 break
         if attempted_batches and not processed_batches:
             raise RuntimeError(f'no usable VA training batches in epoch {epoch}; see logs/skipped_pairs_rank*.jsonl')
@@ -265,4 +294,5 @@ def main(args):
         offset = 0
     if distributed:
         dist.barrier()
-    return {'latest_checkpoint': folder / 'latest.pt', 'step': step}
+    return {'latest_checkpoint': folder / 'latest.pt' if not profile_steps or meta.get('profile_save_checkpoint', False) else None,
+            'step': step}

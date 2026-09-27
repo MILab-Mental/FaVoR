@@ -5,13 +5,27 @@ meta:
   dtype: bfloat16
   auto_resume: true
   read_checkpoint: null
-  log_every_steps: 50
+  log_every_steps: 10
   save_every_steps: 5000
+  # >0: synchronized per-phase timing, stop after this many additional optimizer steps.
+  profile_steps: 0
+  # Short timing runs do not write model checkpoints by default.
+  profile_save_checkpoint: false
 ema:
   enabled: true
   decay: 0.9999
   update_every: 32
-  device: cpu
+  device: cuda:0
+# Execution-only optimizations for the 96 GB GPUs used by this task.
+# Keep the shared model fragment conservative for other tasks/devices.
+model:
+  batch_local_views: true
+  audio_gradient_checkpointing: false
+  video:
+    use_activation_checkpointing: false
+  fusion:
+    feature:
+      gradient_checkpointing: false
 yamls:
   data: CONFIGS/data/pretrain/audio-video/lejepa/va-global6s-local2s.yaml
   model: CONFIGS/models/pretrain/audio-video/lejepa/vitl-emotion2vec.yaml

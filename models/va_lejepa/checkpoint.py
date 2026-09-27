@@ -81,6 +81,7 @@ def load_audio_encoder_init(encoder, cfg):
 def save_checkpoint(path, model, optimizer=None, scaler=None, ema=None, step=0, epoch=0, config=None, **extra):
     raw = model.module if hasattr(model, 'module') else model
     va = raw.va if hasattr(raw, 'va') else raw
+    ema_state = ema.state_dict() if ema else None
     state = dict(schema=SCHEMA, model=raw.state_dict(), video_encoder=va.video_encoder.state_dict(),
                  audio_encoder=va.audio_encoder.state_dict(), fusion_adapters=va.fusion_adapters.state_dict(),
                  fusion_input_adapters=va.input_adapters.state_dict(), fusion_loss_projectors=va.loss_projectors.state_dict(),
@@ -88,8 +89,8 @@ def save_checkpoint(path, model, optimizer=None, scaler=None, ema=None, step=0, 
                  alignment_config={'sample_rate': va.sample_rate, 'tubelet_size': 1},
                  initialization_report=va.initialization_report, config=config, step=int(step), epoch=int(epoch),
                  optimizer=optimizer.state_dict() if optimizer else None,
-                 scaler=scaler.state_dict() if scaler else None, ema=ema.state_dict() if ema else None,
-                 state_dict_ema=ema.state_dict()['shadow'] if ema else None, **extra)
+                 scaler=scaler.state_dict() if scaler else None, ema=ema_state,
+                 state_dict_ema=ema_state['shadow'] if ema_state else None, **extra)
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + '.tmp')

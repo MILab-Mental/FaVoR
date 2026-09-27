@@ -247,7 +247,8 @@ def test_dataset_pair_owner_and_decode_failure(tmp_path):
         dataset[0]
 
 
-def test_pretrain_entry_accumulation_and_full_resume(tmp_path,monkeypatch,caplog):
+@pytest.mark.parametrize('profile_steps', [0, 2])
+def test_pretrain_entry_accumulation_and_full_resume(tmp_path,monkeypatch,caplog,profile_steps):
     caplog.set_level('INFO', logger='app.pretrain_va_lejepa.train')
     import app.pretrain_va_lejepa.train as train
     from torch.utils.data import DataLoader, Dataset
@@ -266,7 +267,8 @@ def test_pretrain_entry_accumulation_and_full_resume(tmp_path,monkeypatch,caplog
     monkeypatch.setattr(train,'build_va_lejepa',lambda *args,**kwargs:tiny_va(('feature','late')))
     monkeypatch.setattr(train,'make_va_lejepa_loader',lambda *args:(None,DataLoader(Samples(),batch_size=1,collate_fn=collate_va_lejepa),Sampler()))
     cfg=dict(folder=str(tmp_path),model={},data={},optimization=dict(total_steps=2,warmup_steps=1,grad_accum_steps=2,
-        lr_video_pretrained=1e-4,lr_audio_pretrained=2e-4,lr_new=1e-3),meta=dict(auto_resume=True,log_every_steps=1,save_every_steps=1),
+        lr_video_pretrained=1e-4,lr_audio_pretrained=2e-4,lr_new=1e-3),meta=dict(auto_resume=True,log_every_steps=1,save_every_steps=1,
+            profile_steps=profile_steps,profile_save_checkpoint=True),
         ema=dict(enabled=True,update_every=1),loss={'sigreg':{'num_proj':4,'knots':3}})
     train.main(cfg)
     # Emulate history written before the timing column was introduced.
@@ -286,12 +288,37 @@ def test_pretrain_entry_accumulation_and_full_resume(tmp_path,monkeypatch,caplog
     rows=list(csv.DictReader((tmp_path/'logs/history.csv').open()))
     assert [int(r['step']) for r in rows]==[1,2,3]
     assert rows[0]['step_seconds'] == '' and float(rows[-1]['step_seconds']) > 0
-    messages = [r.getMessage() for r in caplog.records if r.getMessage().startswith('loss=')]
-    expected_fields = ['loss', 'inv', 'sigreg', 'std', 'rank', 'lr', 'wd', 'grad', 'clips/s']
-    assert messages
+    messages = [r.getMessage() for r in caplog.records if r.getMessage().startswith('step=')]
+    expected_fields = ['step', 'loss', 'inv', 'sigreg', 'std', 'rank', 'lr', 'wd', 'grad', 'clips/s']
+    assert [message.split()[0] for message in messages] == ['step=1/2', 'step=2/2', 'step=3/3']
     for message in messages:
         assert [field.split('=')[0] for field in message.split()] == expected_fields
-        assert all(float(field.split('=')[1]) >= 0 for field in message.split())
+        assert all(float(field.split('=')[1]) >= 0 for field in message.split()[1:])
+
+    timing_path = tmp_path / 'logs/step_timing_rank0.csv'
+    if profile_steps:
+        with timing_path.open() as handle:
+            timings = list(csv.DictReader(handle))
+        assert [int(r['step']) for r in timings] == [1, 2, 3]
+        for row in timings:
+            assert int(row['micro_batches']) == 2
+            assert int(row['samples']) == 2
+            assert int(row['encoder_calls']) == 4
+            assert float(row['backward_seconds']) > 0
+            assert float(row['checkpoint_seconds']) > 0
+            assert float(row['forward_seconds']) >= sum(float(row[k + '_seconds'])
+                for k in ('video_encoder', 'audio_encoder', 'alignment', 'fusion', 'projector'))
+        # A diagnostic run stops after additional steps without replacing the
+        # checkpoint, even when it crosses a configured save interval.
+        cfg['optimization']['total_steps'] = 100
+        cfg['meta'].update(profile_steps=1, profile_save_checkpoint=False)
+        result = train.main(cfg)
+        assert result['step'] == 4 and result['latest_checkpoint'] is None
+        assert torch.load(tmp_path/'latest.pt', weights_only=False)['step'] == 3
+        with timing_path.open() as handle:
+            assert float(list(csv.DictReader(handle))[-1]['checkpoint_seconds']) == 0
+    else:
+        assert not timing_path.exists()
 
 
 def test_branch_sigreg_remains_float32_under_autocast():
@@ -475,3 +502,103 @@ def test_decoder_crops_common_timeline_and_audio_tokens(tmp_path, monkeypatch, s
                                {key: value[None] for key,value in decoded.items()},100)
     _, _, center = cnn_geometry(AudioLeEncoder(tiny_audio()).backbone.feature_extractor)
     assert output.token_times[0,0] == pytest.approx(center/100)
+
+
+@pytest.mark.parametrize('local_views', [0, 4])
+@pytest.mark.parametrize('mixed_lengths', [False, True])
+def test_batched_locals_preserve_outputs_loss_and_gradients(local_views, mixed_lengths):
+    sequential = tiny_va(('early', 'feature', 'late'))
+    batched = copy.deepcopy(sequential)
+    batched.batch_local_views = True
+    data = batch_data(locals_=max(local_views, 1))
+    if not local_views:
+        data['local'] = {'video': torch.empty(2, 0)}
+    if mixed_lengths:
+        data['global']['video_lengths'] = torch.tensor([4, 2])
+        data['global']['audio_lengths'][1] = 100
+        data['global']['end_time'][1] = data['global']['start_time'][1] + 1.
+        if local_views:
+            data['local']['video_lengths'] = torch.tensor([[2]*local_views, [1]*local_views])
+            data['local']['audio_lengths'][1] = 50
+            data['local']['end_time'][1] = data['local']['start_time'][1] + .5
+    counts = {'sequential': 0, 'batched': 0}
+    def count(name):
+        def hook(*args): counts[name] += 1
+        return hook
+    sequential.video_encoder.register_forward_hook(count('sequential'))
+    batched.video_encoder.register_forward_hook(count('batched'))
+    reference = sequential(data)
+    actual = batched(data)
+    for mode in reference:
+        for view_name in ('global', 'local'):
+            torch.testing.assert_close(actual[mode][view_name], reference[mode][view_name], rtol=2e-5, atol=2e-6)
+    loss_cfg = {'sigreg': {'knots': 5, 'num_proj': 8}}
+    torch.manual_seed(19)
+    reference_loss = VABranchLoss(sequential, loss_cfg)(reference)['loss']
+    torch.manual_seed(19)
+    actual_loss = VABranchLoss(batched, loss_cfg)(actual)['loss']
+    torch.testing.assert_close(actual_loss, reference_loss, rtol=2e-5, atol=2e-6)
+    reference_loss.backward()
+    actual_loss.backward()
+    for (name, expected), (_, parameter) in zip(sequential.named_parameters(), batched.named_parameters()):
+        if expected.grad is None:
+            assert parameter.grad is None, name
+        else:
+            torch.testing.assert_close(parameter.grad, expected.grad, rtol=5e-4, atol=2e-6, msg=name)
+    if local_views:
+        assert counts['batched'] < counts['sequential']
+
+
+@pytest.mark.parametrize('checkpoint_family', ['audio', 'video', 'fusion', 'all'])
+def test_checkpoint_execution_choices_preserve_loss_and_gradients(checkpoint_family):
+    reference = tiny_va()
+    reference.video_encoder.use_activation_checkpointing = True
+    actual = copy.deepcopy(reference)
+    if checkpoint_family in ('audio', 'all'):
+        actual.audio_checkpointing = False
+    if checkpoint_family in ('video', 'all'):
+        actual.video_encoder.use_activation_checkpointing = False
+    if checkpoint_family in ('fusion', 'all'):
+        actual.fusion_adapters['feature'].checkpointing = False
+    data = batch_data()
+    loss_cfg = {'sigreg': {'knots': 5, 'num_proj': 8}}
+    torch.manual_seed(19)
+    expected_loss = VABranchLoss(reference, loss_cfg)(reference(data))['loss']
+    torch.manual_seed(19)
+    actual_loss = VABranchLoss(actual, loss_cfg)(actual(data))['loss']
+    torch.testing.assert_close(actual_loss, expected_loss)
+    expected_loss.backward()
+    actual_loss.backward()
+    for (name, expected), (_, parameter) in zip(reference.named_parameters(), actual.named_parameters()):
+        if expected.grad is None:
+            assert parameter.grad is None, name
+        else:
+            torch.testing.assert_close(parameter.grad, expected.grad, msg=name)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA EMA comparison')
+def test_cuda_ema_matches_cpu_and_checkpoint_reuses_shadow(tmp_path):
+    cpu = tiny_va()
+    gpu = copy.deepcopy(cpu).cuda()
+    cpu_ema = ModelEMA(cpu, decay=.99, update_every=32, device='cpu')
+    gpu_ema = ModelEMA(gpu, decay=.99, update_every=32, device='cuda:0')
+    for step in (1, 31, 32, 33, 64):
+        with torch.no_grad():
+            for parameter in cpu.parameters():
+                parameter.add_(.001)
+        gpu.load_state_dict(cpu.state_dict())
+        assert cpu_ema.update(cpu, step) == gpu_ema.update(gpu, step)
+    assert gpu_ema.num_updates == cpu_ema.num_updates == 2
+    for name, expected in cpu_ema.shadow.items():
+        torch.testing.assert_close(gpu_ema.shadow[name].cpu(), expected, rtol=1e-6, atol=1e-7)
+    path = tmp_path / 'gpu_ema.pt'
+    save_checkpoint(path, gpu, ema=gpu_ema, step=64)
+    state = torch.load(path, weights_only=False)
+    for name, value in state['ema']['shadow'].items():
+        assert value.device.type == 'cpu'
+        assert value.data_ptr() == state['state_dict_ema'][name].data_ptr()
+    restored = ModelEMA(gpu, device='cuda:0')
+    load_checkpoint(path, gpu, ema=restored)
+    assert restored.last_step == 64 and restored.num_updates == 2
+    for name, value in restored.shadow.items():
+        torch.testing.assert_close(value, gpu_ema.shadow[name], rtol=0, atol=0)

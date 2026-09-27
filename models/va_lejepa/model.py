@@ -1,5 +1,6 @@
 import copy
 import logging
+from contextlib import nullcontext
 import torch
 from torch import nn
 from models.video_lejepa import Projector, LeJEPALoss
@@ -14,11 +15,12 @@ LOGGER = logging.getLogger(__name__)
 
 
 class VALeJEPA(nn.Module):
-    def __init__(self, video_encoder, audio_encoder, fusion_cfg, sample_rate=16000, audio_checkpointing=True):
+    def __init__(self, video_encoder, audio_encoder, fusion_cfg, sample_rate=16000, audio_checkpointing=True, batch_local_views=False):
         super().__init__()
         self.video_encoder, self.audio_encoder = video_encoder, audio_encoder
         self.sample_rate = int(sample_rate)
         self.audio_checkpointing = audio_checkpointing
+        self.batch_local_views = bool(batch_local_views)
         enabled = fusion_cfg.get('enabled', ['feature'])
         self.enabled_modes = [enabled] if isinstance(enabled, str) else list(enabled)
         if not self.enabled_modes or len(set(self.enabled_modes)) != len(self.enabled_modes) or set(self.enabled_modes) - {'early', 'feature', 'late'}:
@@ -52,10 +54,10 @@ class VALeJEPA(nn.Module):
                 encoder.eval()
         return self
 
-    def encode_view(self, view, return_alignment=False):
+    def encode_view(self, view, return_alignment=False, timing=None):
         lengths = view.get('video_lengths')
         if lengths is None:
-            return self._encode_valid_view(view, return_alignment)
+            return self._encode_valid_view(view, return_alignment, timing)
         if lengths.ndim != 1 or lengths.shape[0] != view['video'].shape[0]:
             raise ValueError('video_lengths must be [B]')
         if (lengths < 1).any() or (lengths > view['video'].shape[2]).any():
@@ -78,7 +80,7 @@ class VALeJEPA(nn.Module):
             cropped['audio'] = cropped['audio'][:, :audio_length]
             if 'audio_padding_mask' in cropped:
                 cropped['audio_padding_mask'] = cropped['audio_padding_mask'][:, :audio_length]
-            output = self._encode_valid_view(cropped, return_alignment)
+            output = self._encode_valid_view(cropped, return_alignment, timing)
             if return_alignment:
                 output, alignment = output
                 alignments.append((ids, alignment))
@@ -93,24 +95,37 @@ class VALeJEPA(nn.Module):
             return representations, alignment
         return representations
 
-    def _encode_valid_view(self, view, return_alignment=False):
-        video = video_token_output(self.video_encoder, view)
-        audio = audio_token_output(self.audio_encoder, view, self.sample_rate, self.audio_checkpointing)
-        aligned = align_audio_to_video(video, audio, torch.zeros_like(view['start_time'], dtype=torch.float64),
-                                       (view['end_time'] - view['start_time']).double())
-        representations = {mode: self.fusion_adapters[mode](aligned, self.input_adapters[mode]) for mode in self.enabled_modes}
+    def _encode_valid_view(self, view, return_alignment=False, timing=None):
+        phase = timing.phase if timing is not None else lambda name: nullcontext()
+        with phase('video_encoder'):
+            video = video_token_output(self.video_encoder, view)
+        with phase('audio_encoder'):
+            audio = audio_token_output(self.audio_encoder, view, self.sample_rate, self.audio_checkpointing)
+        with phase('alignment'):
+            aligned = align_audio_to_video(video, audio, torch.zeros_like(view['start_time'], dtype=torch.float64),
+                                           (view['end_time'] - view['start_time']).double())
+        with phase('fusion'):
+            representations = {mode: self.fusion_adapters[mode](aligned, self.input_adapters[mode]) for mode in self.enabled_modes}
         return (representations, aligned) if return_alignment else representations
 
-    def forward(self, batch):
-        # Execute locals one at a time; all fusion branches reuse each encoder execution.
-        representations = [self.encode_view(batch['global'])]
+    def forward(self, batch, timing=None):
+        # Fusion branches reuse each encoder execution; batching locals keeps
+        # their real lengths and sample/view order unchanged.
+        representations = [self.encode_view(batch['global'], timing=timing)]
         local = batch['local']
-        for k in range(local['video'].shape[1]):
-            representations.append(self.encode_view({key: value[:, k] for key, value in local.items()}))
+        batch_size, count = local['video'].shape[:2]
+        if self.batch_local_views and count:
+            encoded = self.encode_view({key: value.flatten(0, 1) for key, value in local.items()}, timing=timing)
+            encoded = {mode: value.reshape(batch_size, count, -1) for mode, value in encoded.items()}
+            representations.extend({mode: value[:, k] for mode, value in encoded.items()} for k in range(count))
+        else:
+            for k in range(count):
+                representations.append(self.encode_view({key: value[:, k] for key, value in local.items()}, timing=timing))
         output = {}
-        for mode in self.enabled_modes:
-            z = self.loss_projectors[mode](torch.stack([rep[mode] for rep in representations], 1))
-            output[mode] = {'global': z[:, :1], 'local': z[:, 1:]}
+        with timing.phase('projector') if timing is not None else nullcontext():
+            for mode in self.enabled_modes:
+                z = self.loss_projectors[mode](torch.stack([rep[mode] for rep in representations], 1))
+                output[mode] = {'global': z[:, :1], 'local': z[:, 1:]}
         return output
 
 
@@ -154,7 +169,9 @@ def build_va_lejepa(model_cfg, data_cfg, initialize=True):
     seconds = float(data_cfg.get('global_seconds', 6))
     audio_cfg['audio'] = dict(sample_rate=int(data_cfg.get('sample_rate', 16000)), process_seconds=seconds, max_process_seconds=seconds)
     audio = AudioLeEncoder(audio_cfg)
-    model = VALeJEPA(video, audio, cfg['fusion'], audio_cfg['audio']['sample_rate'], cfg.get('audio_gradient_checkpointing', True))
+    model = VALeJEPA(video, audio, cfg['fusion'], sample_rate=audio_cfg['audio']['sample_rate'],
+                     audio_checkpointing=cfg.get('audio_gradient_checkpointing', True),
+                     batch_local_views=cfg.get('batch_local_views', False))
     for module, frozen in ((video, video_cfg.get('freeze', False)), (audio, audio_cfg.get('freeze', False))):
         if frozen:
             module.requires_grad_(False)

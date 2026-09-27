@@ -176,13 +176,7 @@ class VideoDataset(torch.utils.data.Dataset):
             )
 
         # Load video paths and labels
-        samples, labels = [], []
-        self.num_samples_per_dataset = []
-        for data_path in self.data_paths:
-            path_samples, path_labels = self._load_data_path(data_path)
-            samples += path_samples
-            labels += path_labels
-            self.num_samples_per_dataset.append(len(path_samples))
+        samples, labels, self.num_samples_per_dataset = self._load_manifests()
 
         self.per_dataset_indices = ConcatIndices(self.num_samples_per_dataset)
 
@@ -190,12 +184,20 @@ class VideoDataset(torch.utils.data.Dataset):
         # weighted video sampler
         self.sample_weights = None
         if self.datasets_weights is not None:
-            self.sample_weights = []
-            for dw, ns in zip(self.datasets_weights, self.num_samples_per_dataset):
-                self.sample_weights += [dw / ns] * ns
+            self.sample_weights = np.concatenate([np.full(ns, dw / ns, dtype=np.float64)
+                for dw, ns in zip(self.datasets_weights, self.num_samples_per_dataset)])
 
         self.samples = samples
         self.labels = labels
+
+    def _load_manifests(self):
+        samples, labels, counts = [], [], []
+        for path in self.data_paths:
+            paths, values = self._load_data_path(path)
+            samples.extend(paths)
+            labels.extend(values)
+            counts.append(len(paths))
+        return samples, labels, counts
 
     def _load_data_path(self, data_path):
         """Load one pre-training manifest. Subclasses may customize this."""

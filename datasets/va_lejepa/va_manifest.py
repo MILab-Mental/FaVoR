@@ -33,7 +33,7 @@ def validate_identity(row, pattern=None):
         raise ValueError('empty pair_id')
 
 
-def read_manifest(path, *, root=None, source_pattern=None, progress=False):
+def iter_manifest(path, *, root=None, source_pattern=None, progress=False):
     path = Path(path)
     with path.open(encoding='utf-8-sig', newline='') as handle, progress_lines(handle, path, 'Read manifest', progress) as lines:
         first = handle.readline()
@@ -41,7 +41,9 @@ def read_manifest(path, *, root=None, source_pattern=None, progress=False):
         reader = csv.DictReader(lines, delimiter='\t' if '\t' in first else ',')
         if not reader.fieldnames or not REQUIRED.issubset(reader.fieldnames):
             raise ValueError(f'{path}: expected canonical columns {sorted(REQUIRED)}; run manifest_tools convert')
-        rows, seen = [], set()
+        seen = set()
+        count = 0
+        parents = {}
         for line, row in enumerate(reader, 2):
             try:
                 for field in REQUIRED:
@@ -50,14 +52,30 @@ def read_manifest(path, *, root=None, source_pattern=None, progress=False):
                     value = Path(row[field]).expanduser()
                     if not value.is_absolute():
                         value = Path(root or path.parent) / value
-                    row[field] = str(value.resolve())
+                    # Resolving the shared parent once avoids repeated walks
+                    # through the same directories for millions of files.
+                    if value.name == '..':
+                        resolved = value.resolve()
+                    else:
+                        if value.parent not in parents:
+                            if len(parents) >= 8192:
+                                parents.clear()
+                            parents[value.parent] = value.parent.resolve()
+                        resolved = parents[value.parent] / value.name
+                        if resolved.is_symlink():
+                            resolved = resolved.resolve()
+                    row[field] = str(resolved)
                 validate_identity(row, source_pattern)
                 if row['pair_id'] in seen:
                     raise ValueError(f'duplicate pair_id {row["pair_id"]}')
                 seen.add(row['pair_id'])
-                rows.append(row)
+                count += 1
+                yield row
             except Exception as error:
                 raise ValueError(f'{path}:{line}: {error}') from error
-    if not rows:
+    if not count:
         raise ValueError(f'{path}: empty manifest')
-    return rows
+
+
+def read_manifest(path, *, root=None, source_pattern=None, progress=False):
+    return list(iter_manifest(path, root=root, source_pattern=source_pattern, progress=progress))
