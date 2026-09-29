@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Plot training curves from V-JEPA rank logs or a LeJEPA history.csv."""
+"""Plot training curves from V-JEPA or video, audio, and VA LeJEPA logs."""
 
 from __future__ import annotations
 
@@ -38,6 +38,9 @@ AUDIO_LEJEPA_FIELDS = (
     "lr_pretrained",
     "lr_new",
     "grad_norm",
+)
+VA_BRANCH_FIELDS = (
+    "loss", "invariance_loss", "sigreg_loss", "embedding_std", "rankme",
 )
 
 
@@ -103,6 +106,50 @@ def find_audio_lejepa_history(logdir: Path) -> Path | None:
     except (OSError, UnicodeDecodeError, csv.Error):
         return None
     return history_path if set(AUDIO_LEJEPA_FIELDS).issubset(fieldnames) else None
+
+
+def find_va_lejepa_history(logdir: Path) -> tuple[Path, tuple[str, ...], tuple[str, ...]] | None:
+    """Find a VA history and discover its enabled fusion branches and LR groups."""
+    history_path = logdir / "logs" / "history.csv"
+    if not history_path.is_file():
+        return None
+    try:
+        with history_path.open(newline="", encoding="utf-8-sig") as handle:
+            fields = set(csv.DictReader(handle).fieldnames or ())
+    except (OSError, UnicodeDecodeError, csv.Error):
+        return None
+    if not {"step", "loss", "grad_norm"}.issubset(fields):
+        return None
+    branches = tuple(sorted(
+        field.removesuffix("_invariance_loss")
+        for field in fields if field.endswith("_invariance_loss")
+        and all(f"{field.removesuffix('_invariance_loss')}_{metric}" in fields
+                for metric in VA_BRANCH_FIELDS)
+    ))
+    lr_fields = tuple(sorted(field for field in fields if field.startswith("lr_")))
+    if not branches or not lr_fields:
+        return None
+    return history_path, branches, lr_fields
+
+
+def read_va_lejepa_history(
+    history_path: Path, branches: tuple[str, ...], lr_fields: tuple[str, ...],
+) -> list[dict[str, float]]:
+    """Read complete VA rows; the latest row wins when a resumed run repeats a step."""
+    fields = ("step", "loss", "grad_norm") + lr_fields + tuple(
+        f"{branch}_{metric}" for branch in branches for metric in VA_BRANCH_FIELDS
+    )
+    rows_by_step: dict[int, dict[str, float]] = {}
+    with history_path.open(newline="", encoding="utf-8-sig") as handle:
+        for raw_row in csv.DictReader(handle):
+            try:
+                row = {field: float(raw_row[field]) for field in fields}
+                step = int(row["step"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if step >= 0 and all(math.isfinite(value) for value in row.values()):
+                rows_by_step[step] = row
+    return [rows_by_step[step] for step in sorted(rows_by_step)]
 
 
 def read_audio_lejepa_history(history_path: Path) -> list[dict[str, float]]:
@@ -395,6 +442,86 @@ def plot_audio_lejepa(
     plt.close(figure)
 
 
+def plot_va_lejepa(
+    rows: list[dict[str, float]],
+    branches: tuple[str, ...],
+    lr_fields: tuple[str, ...],
+    output: Path,
+    window: int,
+    sigreg_weight: float,
+    title: str,
+    plt,
+) -> None:
+    """Plot VA loss, branch statistics, and optimizer metrics."""
+    steps = [row["step"] for row in rows]
+
+    def smooth(field: str) -> list[float]:
+        return moving_average([row[field] for row in rows], window)
+
+    figure, axes = plt.subplots(2, 2, figsize=(14, 9), dpi=160, constrained_layout=True)
+
+    axis = axes[0, 0]
+    axis.plot(steps, [row["loss"] for row in rows], color="tab:blue", alpha=0.12, linewidth=0.6)
+    axis.plot(steps, smooth("loss"), color="tab:blue", linewidth=2, label="total loss")
+    for index, branch in enumerate(branches):
+        axis.plot(steps, smooth(f"{branch}_invariance_loss"),
+                  color=plt.get_cmap("tab10")((index + 1) % 10), linewidth=1.7,
+                  label=f"{branch} invariance")
+    axis.set(title="Training Loss", xlabel="Optimizer step", ylabel="Loss")
+    axis.grid(alpha=0.25)
+    axis.legend()
+
+    axis = axes[0, 1]
+    weighted_axis = axis.twinx()
+    for branch in branches:
+        raw = smooth(f"{branch}_sigreg_loss")
+        line, = axis.plot(steps, raw, linewidth=1.7, label=f"{branch} raw SIGReg")
+        weighted_axis.plot(steps, [sigreg_weight * value for value in raw],
+                           color=line.get_color(), linestyle="--", linewidth=1.3,
+                           label=f"{branch} weighted (×{sigreg_weight:g})")
+    axis.set(title="SIGReg Loss", xlabel="Optimizer step", ylabel="Raw SIGReg")
+    weighted_axis.set_ylabel("Weighted SIGReg")
+    axis.grid(alpha=0.25)
+    lines = axis.get_lines() + weighted_axis.get_lines()
+    axis.legend(lines, [line.get_label() for line in lines])
+
+    axis = axes[1, 0]
+    rank_axis = axis.twinx()
+    for branch in branches:
+        line, = axis.plot(steps, smooth(f"{branch}_embedding_std"), linewidth=1.7,
+                          label=f"{branch} std")
+        rank_axis.plot(steps, smooth(f"{branch}_rankme"), color=line.get_color(),
+                       linestyle="--", linewidth=1.4, label=f"{branch} RankMe")
+    axis.set(title="Representation Statistics", xlabel="Optimizer step", ylabel="Embedding std")
+    rank_axis.set_ylabel("RankMe")
+    axis.grid(alpha=0.25)
+    lines = axis.get_lines() + rank_axis.get_lines()
+    axis.legend(lines, [line.get_label() for line in lines])
+
+    axis = axes[1, 1]
+    # The no-decay group shares the same schedule; show one LR per family.
+    selected_lrs = tuple(field for field in lr_fields if field.endswith("_decay")
+                         and not field.endswith("_no_decay"))
+    if not selected_lrs:
+        selected_lrs = lr_fields
+    for field in selected_lrs:
+        axis.plot(steps, [row[field] for row in rows], linewidth=1.7,
+                  label=field.removeprefix("lr_").removesuffix("_decay") + " LR")
+    axis.set(title="Optimization", xlabel="Optimizer step", ylabel="Learning rate")
+    grad_axis = axis.twinx()
+    grad_axis.plot(steps, smooth("grad_norm"), color="tab:red", linewidth=1.5,
+                   label="grad norm")
+    grad_axis.set_ylabel("Gradient norm", color="tab:red")
+    grad_axis.tick_params(axis="y", labelcolor="tab:red")
+    axis.grid(alpha=0.25)
+    lines = axis.get_lines() + grad_axis.get_lines()
+    axis.legend(lines, [line.get_label() for line in lines])
+
+    figure.suptitle(title, fontsize=15)
+    figure.savefig(output)
+    plt.close(figure)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--logdir", type=Path, required=True)
@@ -440,9 +567,29 @@ def main() -> None:
     output = args.out or args.logdir / "train_loss.png"
     output.parent.mkdir(parents=True, exist_ok=True)
 
+    va_history = find_va_lejepa_history(args.logdir)
     audio_history_path = find_audio_lejepa_history(args.logdir)
     history_path = find_lejepa_history(args.logdir)
-    if audio_history_path is not None:
+    if va_history is not None:
+        va_history_path, branches, lr_fields = va_history
+        window = args.window if args.window is not None else 20
+        rows = read_va_lejepa_history(va_history_path, branches, lr_fields)
+        if not rows:
+            parser.error(f"no complete VA-LeJEPA training rows found in {va_history_path}")
+        sigreg_weight = (
+            args.sigreg_weight if args.sigreg_weight is not None
+            else infer_sigreg_weight(args.logdir)
+        )
+        plot_va_lejepa(
+            rows, branches, lr_fields, output, window, sigreg_weight,
+            f"VA-LeJEPA Training — {args.logdir.resolve().name}", plt,
+        )
+        print(f"detected VA-LeJEPA history: {va_history_path}")
+        print(
+            f"read {len(rows)} points; branches: {', '.join(branches)}; "
+            f"moving-average window: {window}; SIGReg weight: {sigreg_weight:g}"
+        )
+    elif audio_history_path is not None:
         window = args.window if args.window is not None else 20
         rows = read_audio_lejepa_history(audio_history_path)
         if not rows:
