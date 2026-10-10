@@ -6,13 +6,9 @@ data:
   short_policy: zero_pad
   minimum_seconds: 0.1
   global_seconds: 6.0
-  local_seconds: 2.0
-  local_views: 0
   video_fps: 8
   video_frames_global: 48
-  video_frames_local: 16
   video_global_size: 112
-  video_local_size: 48
   normalize_audio: true
   on_decode_error: error
   sync:

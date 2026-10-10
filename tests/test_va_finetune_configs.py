@@ -26,7 +26,7 @@ def test_va_task_has_concrete_data_and_matching_targets(source):
     assert data['datasets'] == original['datasets']
     assert 'manifests' not in data
     assert 'rootpaths' not in data
-    assert data['local_views'] == 0
+    assert not {'local_views', 'local_seconds', 'video_frames_local', 'video_local_size'} & data.keys()
     assert data['video_frames_global'] == data['video_fps'] * data['global_seconds']
     regression = original['task'] == 'regression'
     assert config['finetune']['best_metric'] == ('mae' if regression else 'f1_macro')

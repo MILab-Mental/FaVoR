@@ -86,7 +86,7 @@ def prepare(source):
             config = deepcopy(template)
             config['folder'] = f'OUTPUT/{app}/mental/{task}'
             if modality == 'audio-video':
-                config['data'] = {'local_views': 0}
+                config.pop('data', None)
                 config['finetune'].update(best_metric='f1_macro', best_metric_mode='max', branch_loss_weight=0.0)
                 # Keep task-specific data last and use the shared sampling preset.
                 config['yamls'].pop('data', None)

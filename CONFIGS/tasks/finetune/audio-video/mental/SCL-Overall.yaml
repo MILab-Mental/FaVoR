@@ -4,8 +4,6 @@ meta:
   seed: 0
   auto_resume: true
   read_checkpoint: null
-data:
-  local_views: 0
 finetune:
   pretrained_checkpoint: OUTPUT/pretrain_va_lejepa/I3-C1/latest.pt
   branch_aggregation: separate_logits
