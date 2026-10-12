@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 
 from models.audio_jepa import AudioBackbone
+from models.instance_aggregator import InstancePredictionHead
 
 class MultiClipAttentionHead(nn.Module):
     def __init__(self, embed_dim, num_heads, task, num_class=None, hidden_dim=256,
@@ -32,6 +33,11 @@ class AudioFineTuneModel(nn.Module):
         super().__init__()
         self.backbone = AudioBackbone(cfg)
         head_cfg = cfg.get("head", {})
+        self.instance_enabled = 'instance_aggregator' in cfg
+        if self.instance_enabled:
+            outputs = num_class if task in {'classification', 'multi_label_classification'} else 1
+            self.head = InstancePredictionHead(self.backbone.embed_dim, outputs, cfg['instance_aggregator'])
+            return
         self.head = MultiClipAttentionHead(
             self.backbone.embed_dim,
             int(head_cfg.get("num_heads", 4)),
@@ -43,6 +49,12 @@ class AudioFineTuneModel(nn.Module):
         )
 
     def forward(self, clips):
+        if self.instance_enabled:
+            sentences = clips if clips.ndim == 4 else clips.unsqueeze(1)
+            batch, count, crops, length = sentences.shape
+            features = self.backbone.extract_features(sentences.reshape(batch * count * crops, length), pool=True)
+            features = features.reshape(batch, count, crops, -1).mean(2)
+            return self.head(features)
         batch_size, num_clips, length = clips.shape
         features = self.backbone.extract_features(clips.reshape(batch_size * num_clips, length), pool=True)
         return self.head(features.reshape(batch_size, num_clips, -1))

@@ -109,14 +109,26 @@ class AudioCSVDataset(Dataset):
                 index = random.randrange(len(self.samples))
         raise RuntimeError(f"Could not load a valid audio sample after {self.max_retries} attempts: {error}")
 
+    def get_sentence(self, index):
+        """Decode this exact sentence; never retry with a different instance."""
+        path = self.samples[index]
+        clips = self._clips(load_audio(path, self.sample_rate))
+        label = torch.as_tensor(self.labels[index], dtype=torch.long if self.task == 'classification' else torch.float32)
+        return clips, label, path
+
 
 def make_audiodataset_finetune_a(csv_paths, *, root_paths=None, label_column, task,
-                                 num_class, sample_rate, process_seconds, num_clips):
+                                 num_class, sample_rate, process_seconds, num_clips,
+                                 num_sentence=0, sentence_eval_stride=1):
     common = dict(
         root_paths=root_paths, label_column=label_column, task=task, num_class=num_class,
         sample_rate=sample_rate, process_seconds=process_seconds, num_clips=num_clips,
     )
-    return (
+    datasets = (
         AudioCSVDataset(csv_paths, 0, training=True, **common),
         AudioCSVDataset(csv_paths, 1, training=False, **common),
     )
+    from datasets.common.instances import as_sentence_instances
+    cfg = dict(num_sentence=num_sentence, sentence_eval_stride=sentence_eval_stride)
+    return tuple(as_sentence_instances(dataset, cfg, 'audio', training)
+                 for dataset, training in zip(datasets, (True, False)))

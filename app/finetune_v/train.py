@@ -36,6 +36,7 @@ from utils.classification_metrics import (
     write_regression_best_reports,
 )
 from utils.progress import progress_ncols
+from utils.instance_evaluation import predict_instance_batch
 
 
 LOGGER = logging.getLogger(__name__)
@@ -196,6 +197,8 @@ def main(args):
 
     # -- DATA
     cfgs_data = args.get("data", {})
+    if int(cfgs_data.get('num_sentence', 0)) > 0 and 'instance_aggregator' not in cfgs_model:
+        raise ValueError('data.num_sentence > 0 requires model.instance_aggregator')
     task = cfgs_data.get("task", "classification").lower()
     crop_size = cfgs_data.get("crop_size", 224)
     patch_size = cfgs_data.get("patch_size", 16)
@@ -236,6 +239,8 @@ def main(args):
         train_transform=train_transform,
         val_transform=make_finetune_transforms(False, crop_size),
         num_clips=num_clips,
+        num_sentence=cfgs_data.get('num_sentence', 0),
+        sentence_eval_stride=cfgs_data.get('sentence_eval_stride', 1),
     )
     if is_main:
         LOGGER.info(
@@ -263,8 +268,10 @@ def main(args):
         pin_memory=pin_mem,
         persistent_workers=bool(persistent_workers and num_workers > 0),
     )
-    train_loader = DataLoader(train_dataset, sampler=train_sampler, shuffle=train_sampler is None, drop_last=False, **loader_kwargs)
-    val_loader = DataLoader(val_dataset, sampler=val_sampler, shuffle=False, drop_last=False, **loader_kwargs)
+    train_loader = DataLoader(train_dataset, sampler=train_sampler, shuffle=train_sampler is None, drop_last=False,
+                              collate_fn=getattr(train_dataset, 'collate_fn', None), **loader_kwargs)
+    val_loader = DataLoader(val_dataset, sampler=val_sampler, shuffle=False, drop_last=False,
+                            collate_fn=getattr(val_dataset, 'collate_fn', None), **loader_kwargs)
     if not len(train_loader):
         raise ValueError("Training DataLoader is empty; reduce data.batch_size or add training samples")
     iterations_per_epoch = len(train_loader)
@@ -296,6 +303,7 @@ def main(args):
         backbone_attention_dropout=backbone_attention_dropout,
         backbone_drop_path=backbone_drop_path,
         classifier_dropout=classifier_dropout,
+        instance_aggregator=cfgs_model.get('instance_aggregator'),
     )
     encoder.to(device)
     task_head.to(device)
@@ -467,12 +475,16 @@ def main(args):
             val_stats = torch.zeros(2, dtype=torch.float64, device=device)
             val_paths, val_truth, val_outputs = [], [], []
             with torch.no_grad():
-                for clips, labels, _, paths in val_loader:
-                    clips = _move_clips(clips, device)
-                    labels = labels.to(device, non_blocking=True)
-                    labels = labels.long() if task == "classification" else labels.float()
+                for batch in val_loader:
                     with torch.autocast(device_type=device.type, dtype=amp_dtype, enabled=mixed_precision):
-                        outputs = _task_outputs(encoder, task_head, clips, frozen_encoder)
+                        if isinstance(batch, dict) and 'instance_samples' in batch:
+                            outputs, labels, paths = predict_instance_batch(batch, lambda window: _task_outputs(
+                                _unwrap(encoder), _unwrap(task_head), _move_clips(window[0], device), frozen_encoder), task)
+                        else:
+                            clips, labels, _, paths = batch
+                            outputs = _task_outputs(_unwrap(encoder), _unwrap(task_head), _move_clips(clips, device), frozen_encoder)
+                        labels = labels.to(device, non_blocking=True)
+                        labels = labels.long() if task == "classification" else labels.float()
                         loss = criterion(outputs if higher_is_better else outputs.squeeze(-1), labels)
                     val_stats += torch.tensor([loss.item() * len(labels), len(labels)], dtype=torch.float64, device=device)
                     val_paths.extend(paths)

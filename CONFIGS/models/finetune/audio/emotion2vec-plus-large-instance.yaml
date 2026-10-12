@@ -1,0 +1,52 @@
+model:
+  name: emotion2vec_plus_large_50hz
+  backbone:
+    mode: emotion2vec
+    conv_pos_depth: 5
+    conv_pos_width: 95
+    conv_pos_groups: 16
+    prenet_depth: 4
+    prenet_dropout: 0.0
+    num_extra_tokens: 10
+    learned_alibi_scale: false
+  extractor:
+    conv_layers:
+      - [512, 10, 5]
+      - [512, 3, 2]
+      - [512, 3, 2]
+      - [512, 3, 2]
+      - [512, 3, 2]
+      - [512, 2, 2]
+      - [512, 2, 2]
+    mode: layer_norm
+    conv_bias: false
+    dropout: 0.0
+  encoder:
+    depth: 8
+    d_model: 1024
+    nhead: 16
+    dim_feedforward: 4096
+    dropout: 0.0
+    attention_dropout: 0.0
+    activation_dropout: 0.0
+    post_mlp_dropout: 0.0
+    dropout_input: 0.0
+    qkv_bias: true
+    layer_norm_first: false
+    norm_eps: 1.0e-6
+    ffn_targets: true
+  features:
+    mode: last
+    topk_layers: 8
+  target:
+    topk_layers: 8
+  head:
+    num_heads: 4
+    hidden_dim: 256
+    attention_dropout: 0.0
+    dropout: 0.1
+  instance_aggregator:
+    pooling: attention
+    hidden_dim: 256
+    dropout: 0.0
+    head_dropout: 0.0

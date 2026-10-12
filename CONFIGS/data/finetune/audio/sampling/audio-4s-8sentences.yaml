@@ -1,0 +1,12 @@
+data:
+  num_sentence: 8
+  sentence_eval_stride: 1
+  sample_rate: 16000
+  process_seconds: 4.0
+  num_clips: 1
+  batch_size: 16
+  num_workers: 8
+  persistent_workers: true
+  pin_mem: false
+  normalize_waveform: true
+

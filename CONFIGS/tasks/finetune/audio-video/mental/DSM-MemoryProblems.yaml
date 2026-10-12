@@ -1,5 +1,5 @@
 app: finetune_va
-folder: OUTPUT/finetune_va/mental/DSM-MemoryProblems
+folder: OUTPUT/finetune_va/mental/DSM-MemoryProblems/instance-sentences8
 meta:
   seed: 0
   auto_resume: true
@@ -19,7 +19,7 @@ finetune:
   best_metric_mode: max
   branch_loss_weight: 0.0
 yamls:
-  sampling: CONFIGS/data/finetune/audio-video/sampling/va-6s.yaml
-  model: CONFIGS/models/finetune/audio-video/vitl-emotion2vec.yaml
+  sampling: CONFIGS/data/finetune/audio-video/sampling/va-6s-8sentences.yaml
+  model: CONFIGS/models/finetune/audio-video/vitl-emotion2vec-instance.yaml
   opt: CONFIGS/optimization/finetune/audio-video/epochs20-warmup0-lr0.001.yaml
   data: CONFIGS/data/finetune/audio-video/mental/DSM-MemoryProblems.yaml

@@ -1,6 +1,7 @@
 app: finetune_v
-folder: OUTPUT/finetune_v/mental/SCL-Overall
+folder: OUTPUT/finetune_v/mental/SCL-Overall/instance-sentences8
 meta:
+  frozen_encoder: false
   dtype: bfloat16
   eval_freq: 1
   load_checkpoint: true
@@ -10,6 +11,6 @@ meta:
   seed: 239
 yamls:
   data: CONFIGS/data/finetune/audio-video/mental/SCL-Overall.yaml
-  sampling: CONFIGS/data/finetune/video/sampling/48frames-8fps.yaml
+  sampling: CONFIGS/data/finetune/video/sampling/48frames-8fps-8sentences.yaml
   opt: CONFIGS/optimization/finetune/video/epochs80-warmup5-lr5e-05.yaml
-  model: CONFIGS/models/finetune/video/vit-l-4layers.yaml
+  model: CONFIGS/models/finetune/video/vit-l-4layers-instance.yaml

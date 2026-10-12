@@ -125,6 +125,10 @@ render_command() {
   config="CONFIGS/tasks/finetune/video/$config_group/${task//_/-}.yaml"
   [[ -f "$config" ]] || die "任务配置不存在: $config"
   folder="${EXPERIMENT_META[output_root]}/${EXPERIMENT_META[model_name]}/$task/${EXPERIMENT_META[run_name]}"
+  # Sentence aggregation uses a separate checkpoint namespace.
+  if [[ $(<"$config") == *'/sampling/'*'8sentences.yaml'* ]]; then
+    folder+="/instance-sentences8"
+  fi
   port=$((EXPERIMENT_META[master_port_base] + index))
 
   argv=(

@@ -17,6 +17,9 @@ from datasets.va_lejepa import collate_va_lejepa, to_device, synchronize_trainin
 from models.va_lejepa import build_va_lejepa, load_checkpoint
 from models.va_lejepa.finetune import VAFinetuner
 from utils.classification_metrics import classification_metrics, multilabel_metrics, save_metric_curves
+from datasets.common.instances import as_sentence_instances
+from datasets.common.instances import sentence_identity
+from utils.instance_evaluation import predict_instance_batch
 
 LOGGER = logging.getLogger(__name__)
 
@@ -65,6 +68,16 @@ def evaluate(model, loader, device, task, classes):
     skipped = 0
     for batch in loader:
         skipped += len(batch.get('skipped_samples', []))
+        if 'instance_samples' in batch:
+            if not batch['instance_samples']:
+                continue
+            output, labels, identities = predict_instance_batch(batch, lambda window: raw(to_device(window, device)), task)
+            for i, (sample, identity) in enumerate(zip(batch['instance_samples'], identities)):
+                first = sample['sentences'][0]
+                records.append(dict(pair_id=identity, video_path=identity, audio_path=sentence_identity(first['audio_path'])[0],
+                    truth=labels[i].tolist(), logits=output['logits'][i].cpu().tolist(),
+                    branches={mode: value[i].cpu().tolist() for mode, value in output['branches'].items()}))
+            continue
         if 'global' not in batch:
             continue
         output = raw(to_device(batch, device))
@@ -90,7 +103,11 @@ def evaluate(model, loader, device, task, classes):
 
 def main(args):
     distributed, rank, world = _state()
-    data, cfg, opt = dict(args['data']), args.get('finetune', {}), dict(args['optimization'])
+    data, cfg, opt = dict(args['data']), dict(args.get('finetune', {})), dict(args['optimization'])
+    if 'instance_aggregator' in args['model']:
+        cfg['instance_aggregator'] = args['model']['instance_aggregator']
+    if int(data.get('num_sentence', 0)) > 0 and 'instance_aggregator' not in cfg:
+        raise ValueError('data.num_sentence > 0 requires model.instance_aggregator')
     meta = args.get('meta', {})
     data['seed'] = int(meta.get('seed', 0))
     task = data.get('task', 'classification')
@@ -122,10 +139,13 @@ def main(args):
     mixed = device.type == 'cuda'
     scaler = torch.amp.GradScaler('cuda', enabled=False)
     train_dataset, val_dataset = AVCSVDataset(data, 0, True), AVCSVDataset(data, 1, False)
+    train_dataset = as_sentence_instances(train_dataset, data, 'audio-video', True)
+    val_dataset = as_sentence_instances(val_dataset, data, 'audio-video', False)
     sampler = DistributedSampler(train_dataset, num_replicas=world, rank=rank, shuffle=True)
     def loader(dataset, sample):
         return DataLoader(dataset, sampler=sample, batch_size=int(data.get('batch_size', 1)),
-            num_workers=int(data.get('num_workers', 4)), collate_fn=collate_va_lejepa, pin_memory=True)
+            num_workers=int(data.get('num_workers', 4)),
+            collate_fn=getattr(dataset, 'collate_fn', collate_va_lejepa), pin_memory=True)
     train_loader = loader(train_dataset, sampler)
     val_loader = loader(val_dataset, EvaluationSampler(val_dataset, rank, world))
     if not len(train_loader):

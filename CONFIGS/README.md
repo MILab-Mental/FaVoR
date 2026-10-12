@@ -828,3 +828,96 @@ V 的首建沿用原 CSV/NPY 解析器；A 的现有行偏移索引不变。
 VA 为 0.4–6.3 ms，V 为 16.5–24.5 ms。该时间不包括模型初始化、worker 启动或媒体解码。
 双 rank、各 2 个 worker 的真实首批读取通过，相关回归测试 94 项通过。
 完整记录位于 `OUTPUT/debug_manifest_index_20260927/report.md`。
+
+## 13. LV / LA 的 instance 级 sentences 微调
+
+长视频（LV）和长音频（LA）任务按原始媒体 instance 训练。已裁切文件是一个
+**sentence**：同一目录中 `name-s0001.*`、`name-s0002.*` 属于 instance `name`。
+分组保留完整目录，避免不同来源的同名文件混在一起；段号按整数排序。
+每个 instance 对应一个标签、一次任务预测和一次 loss，batch size 始终表示 instance 数。
+
+### 13.1 采样配置
+
+长媒体任务已引用以下新预设；普通短音视频任务无需添加 `num_sentence`：
+
+| 模态 | sampling 预设 | instance batch size |
+|---|---|---:|
+| video | `data/finetune/video/sampling/48frames-8fps-8sentences.yaml` | 64 |
+| audio | `data/finetune/audio/sampling/audio-4s-8sentences.yaml` | 16 |
+| audio-video | `data/finetune/audio-video/sampling/va-6s-8sentences.yaml` | 1 |
+
+- `data.num_sentence`：默认 `0`，表示沿用单行媒体样本；正整数表示按原始 instance
+  分组，并从中采样该数量的 sentences。新预设为 `8`。
+- 训练时随机选择不同的 sentences；不足 8 段时保留全部已有段并重复最后一段。
+  重复使用已解码的最后一段，不额外生成一个不同裁切。
+- `data.sentence_eval_stride`：评估窗口的步长，默认 `1`。窗口宽度为 `num_sentence`。
+  若自定义步长不能整除最后一个窗口起点，追加末尾完整窗口，覆盖最后一段。
+- 音频新预设每个 sentence 内采一个 4 秒 crop（`num_clips: 1`）；视频和音视频
+  每个 sentence 使用原来的 48 帧 / 6 秒采样。sentence 是跨文件的 instance 维度，
+  与已有的单文件内部 crop/view 维度分别处理。
+
+音频训练输入为 `[B,N,1,L]`；视频在原有 crop/view 容器内为 `[B,N,3,F,H,W]`；
+音视频 `global.video` 为 `[B,N,3,F,H,W]`、`global.audio` 为 `[B,N,L]`。
+编码器将 batch 与 sentence 维度暂时展平，提取 `[B,N,D]` sentence 特征，
+随后进行 instance 特征聚合和任务预测。音视频先对每个同步 sentence 做模态融合，
+再在各融合分支内聚合多个 sentences。
+
+### 13.2 模型配置与全量微调
+
+长媒体任务分别引用：
+
+- `models/finetune/video/vit-l-4layers-instance.yaml`
+- `models/finetune/audio/emotion2vec-plus-large-instance.yaml`
+- `models/finetune/audio-video/vitl-emotion2vec-instance.yaml`
+
+三个模型片段均包含：
+
+```yaml
+model:
+  instance_aggregator:
+    pooling: attention       # mean 或 attention
+    hidden_dim: 256         # attention 打分网络隐藏维度
+    dropout: 0.0            # attention 打分网络 dropout
+    head_dropout: 0.0       # 聚合后任务头 dropout
+```
+
+`mean` 直接平均 sentence 特征；`attention` 用小型打分网络对 sentences 做 softmax
+加权求和。两种方式均先聚合特征，再接任务头；训练梯度回传所有参与的 sentences
+及视频、音频编码器。长媒体任务显式关闭编码器／融合模块冻结；VA 预训练专用的
+loss projectors 不参与下游预测，仍沿用已有微调行为。
+
+已切换 39 个 video、44 个 audio、39 个 audio-video 任务，共 122 个入口。
+各任务输出目录追加 `/instance-sentences8`，与旧片段级微调的 checkpoint 分开；
+预训练初始化 checkpoint 保持任务原设置。数据准备脚本重新生成长媒体任务时也会
+选择这些预设。
+
+### 13.3 评估与指标
+
+评估按段号排序，取所有完整滑动窗口。例如 10 个 sentences、窗口宽度 8、步长 1：
+`[1..8]`、`[2..9]`、`[3..10]`。只有 3 个 sentences 时，唯一窗口为
+`[1,2,3,3,3,3,3,3]`。每个 sentence 只解码一次；重叠窗口使用已有解码结果。
+
+每个窗口分别做特征聚合和任务预测，然后对同一 instance 的所有窗口结果取平均：
+分类平均 softmax 概率，多标签平均 sigmoid 概率，回归平均预测值。分类／多标签
+结果转回等价 logits，兼容现有 loss、指标和报告接口。
+
+验证采样器按 instance 分区，不补齐重复样本；各 rank 可有不同数量的窗口，
+评估直接调用未包裹 DDP 的模型，再汇总 instance 预测。
+预测 CSV、混淆矩阵、F1、MAE、RMSE 等均按 instance 计算，一个 instance 只计一次。
+CSV 中媒体标识使用去掉 `-sXXXX` 和扩展名后的 instance 路径。
+
+从仓库根目录启动，例如：
+
+```bash
+torchrun --standalone --nproc_per_node=2 -m app.main \
+  --fname CONFIGS/tasks/finetune/video/regression/AVEC2014-PHQ.yaml
+
+# 换成 mean pooling；建议也指定新的实验目录，避免混用已训练的 attention 任务头。
+torchrun --standalone --nproc_per_node=2 -m app.main \
+  --fname CONFIGS/tasks/finetune/audio/mental/DSM-Depression.yaml \
+  --set model.instance_aggregator.pooling=mean \
+        folder=OUTPUT/finetune_a/mental/DSM-Depression/instance-sentences8-mean
+```
+
+保留 instance batch size 后，每步需要编码 8 倍的单段输入；这里没有根据显存自动缩小
+batch size。实际完整模型训练的显存与吞吐需在目标 GPU 上测量。

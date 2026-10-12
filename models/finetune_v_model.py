@@ -7,6 +7,7 @@ import torch.nn as nn
 
 from models.video_jepa.attentive_pooler import AttentiveClassifier
 from models.video_jepa import vision_transformer as vit
+from models.instance_aggregator import InstancePredictionHead
 
 LOGGER = logging.getLogger(__name__)
 
@@ -20,9 +21,10 @@ class ClipEncoder(nn.Module):
     V-JEPA's ``vit_encoder_multiclip_multilevel`` evaluation wrapper.
     """
 
-    def __init__(self, backbone):
+    def __init__(self, backbone, instance_enabled=False):
         super().__init__()
         self.backbone = backbone
+        self.instance_enabled = bool(instance_enabled)
 
     @property
     def embed_dim(self):
@@ -30,6 +32,14 @@ class ClipEncoder(nn.Module):
 
     def forward(self, clips):
         # DataLoader returns [num_clips][num_views][B,C,T,H,W].
+        sentence_count = 1
+        if clips[0][0].ndim == 6:
+            if not self.instance_enabled:
+                raise ValueError('sentence inputs require model.instance_aggregator')
+            instance_batch, sentence_count = clips[0][0].shape[:2]
+            clips = [[view.flatten(0, 1) for view in clip] for clip in clips]
+        else:
+            instance_batch = clips[0][0].shape[0]
         num_clips = len(clips)
         num_views = len(clips[0])
         batch, _, frames, _, _ = clips[0][0].shape
@@ -57,11 +67,15 @@ class ClipEncoder(nn.Module):
                     clip_outputs[view_index * batch : (view_index + 1) * batch]
                 )
 
-        return [
+        token_views = [
             torch.cat([output.reshape(batch, temporal_tokens, spatial_tokens, embed_dim) for output in view_outputs], dim=1)
             .flatten(1, 2)
             for view_outputs in all_views
         ]
+        if self.instance_enabled:
+            features = torch.stack([tokens.mean(1) for tokens in token_views]).mean(0)
+            return [features.reshape(instance_batch, sentence_count, -1)]
+        return token_views
 
 
 class AttentiveRegressor(AttentiveClassifier):
@@ -127,6 +141,7 @@ def build_model(
     backbone_attention_dropout=0.0,
     backbone_drop_path=0.0,
     classifier_dropout=0.0,
+    instance_aggregator=None,
 ):
     """Build a fine-tuning encoder and task head from configuration values.
 
@@ -174,7 +189,10 @@ def build_model(
         drop_path_rate=regularization["backbone_drop_path"],
     )
     checkpoint = load_backbone(backbone, checkpoint_path)
-    encoder = ClipEncoder(backbone)
+    encoder = ClipEncoder(backbone, instance_enabled=instance_aggregator is not None)
+    if instance_aggregator is not None:
+        outputs = num_class if task in {'classification', 'multi_label_classification'} else 1
+        return encoder, InstancePredictionHead(encoder.embed_dim, outputs, instance_aggregator)
     head_kwargs = dict(
         embed_dim=encoder.embed_dim,
         num_heads=classifier_num_heads or backbone.num_heads,

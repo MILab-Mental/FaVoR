@@ -6,6 +6,7 @@ import logging
 import math
 import random
 from collections import Counter
+from datetime import timedelta
 from pathlib import Path
 
 import numpy as np
@@ -34,6 +35,8 @@ from utils.classification_metrics import (
     write_regression_best_reports,
 )
 from utils.progress import progress_ncols
+from utils.instance_evaluation import predict_instance_batch
+from torch.utils.data import default_collate
 
 LOGGER = logging.getLogger(__name__)
 
@@ -101,6 +104,22 @@ def _gather(value, distributed, world_size):
     values = [None] * world_size
     dist.all_gather_object(values, value)
     return values
+
+
+def _loader_kwargs(data_cfg):
+    workers = int(data_cfg.get("num_workers", 0))
+    kwargs = dict(
+        batch_size=data_cfg["batch_size"], num_workers=workers,
+        pin_memory=data_cfg.get("pin_mem", False),
+        persistent_workers=bool(data_cfg.get("persistent_workers", False) and workers > 0),
+    )
+    if workers > 0:
+        # Iterators start workers after CUDA/NCCL initialization. Forking at
+        # that point can inherit locked runtime threads, especially when the
+        # validation pool starts after the training pool is already active.
+        kwargs.update(multiprocessing_context="spawn",
+                      timeout=float(data_cfg.get("loader_timeout", 180)))
+    return kwargs
 
 
 def _optimizer(model, cfg, frozen):
@@ -245,6 +264,8 @@ def _run_epoch(model, loader, criterion, optimizer, scaler, device, task, traini
     paths, truths, outputs = [], [], []
     context = torch.enable_grad if training else torch.no_grad
     phase = "train" if training else "val"
+    rank = _state()[1]
+    LOGGER.info("rank=%d %s epoch=%d starting batches=%d", rank, phase, epoch + 1, len(loader))
     progress = tqdm(
         loader,
         disable=not is_main,
@@ -254,8 +275,13 @@ def _run_epoch(model, loader, criterion, optimizer, scaler, device, task, traini
     grokfast_modules = _grokfast_modules(model, grokfast_scope) \
         if training and grokfast_enabled else None
     with context():
-        for clips, labels, batch_paths in progress:
-            clips = clips.to(device, non_blocking=True)
+        for batch in progress:
+            instance_evaluation = isinstance(batch, dict) and 'instance_samples' in batch
+            if not instance_evaluation:
+                clips, labels, batch_paths = batch
+                clips = clips.to(device, non_blocking=True)
+            else:
+                labels = default_collate([s['label'] for s in batch['instance_samples']])
             labels = labels.to(device, non_blocking=True)
             if task == "classification":
                 labels = labels.long()
@@ -264,7 +290,11 @@ def _run_epoch(model, loader, criterion, optimizer, scaler, device, task, traini
             if training:
                 optimizer.zero_grad(set_to_none=True)
             with torch.autocast(device_type=device.type, dtype=amp_dtype, enabled=mixed):
-                logits = model(clips)
+                if instance_evaluation:
+                    logits, _, batch_paths = predict_instance_batch(
+                        batch, lambda window: _raw(model)(window[0].to(device, non_blocking=True)), task)
+                else:
+                    logits = (model if training else _raw(model))(clips)
                 loss = criterion(logits if task != "regression" else logits.squeeze(-1), labels)
             if training:
                 scaler.scale(loss).backward()
@@ -283,6 +313,7 @@ def _run_epoch(model, loader, criterion, optimizer, scaler, device, task, traini
             paths.extend(batch_paths)
             truths.extend(labels.detach().cpu().tolist())
             outputs.append(logits.detach().float().cpu().numpy())
+    LOGGER.info("rank=%d %s epoch=%d finished samples=%d", rank, phase, epoch + 1, count)
     return (total_loss, count, paths, truths, outputs), grokfast_grads
 
 
@@ -291,6 +322,8 @@ def main(args):
     is_main = rank == 0
     meta, data_cfg, opt_cfg = args.get("meta", {}), args["data"], args["optimization"]
     model_cfg = dict(args["model"])
+    if int(data_cfg.get('num_sentence', 0)) > 0 and 'instance_aggregator' not in model_cfg:
+        raise ValueError('data.num_sentence > 0 requires model.instance_aggregator')
     model_cfg["audio"] = {
         "sample_rate": data_cfg.get("sample_rate", 16000),
         "process_seconds": data_cfg.get("process_seconds", 4.0),
@@ -313,19 +346,19 @@ def main(args):
         torch.cuda.set_device(device)
     folder = Path(args["folder"])
     logs_dir = folder / "logs"
-    if is_main:
-        folder.mkdir(parents=True, exist_ok=True)
-        logs_dir.mkdir(parents=True, exist_ok=True)
-        log_path = (folder / "train.log").resolve()
-        if not any(
-            isinstance(handler, logging.FileHandler)
-            and Path(handler.baseFilename).resolve() == log_path
-            for handler in LOGGER.handlers
-        ):
-            handler = logging.FileHandler(log_path, encoding="utf-8")
-            handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
-            LOGGER.addHandler(handler)
-        LOGGER.setLevel(logging.INFO)
+    folder.mkdir(parents=True, exist_ok=True)
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    log_path = (folder / ("train.log" if is_main else f"train-rank{rank}.log")).resolve()
+    if not any(
+        isinstance(handler, logging.FileHandler)
+        and Path(handler.baseFilename).resolve() == log_path
+        for handler in LOGGER.handlers
+    ):
+        handler = logging.FileHandler(log_path, encoding="utf-8")
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+        LOGGER.addHandler(handler)
+    LOGGER.setLevel(logging.INFO)
+    LOGGER.propagate = is_main
 
     task = data_cfg.get("task", "classification").lower()
     num_class = data_cfg.get("num_class")
@@ -335,16 +368,20 @@ def main(args):
         sample_rate=data_cfg.get("sample_rate", 16000),
         process_seconds=data_cfg.get("process_seconds", 4.0),
         num_clips=data_cfg.get("num_clips", 1),
+        num_sentence=data_cfg.get('num_sentence', 0),
+        sentence_eval_stride=data_cfg.get('sentence_eval_stride', 1),
     )
     train_sampler = DistributedSampler(train_dataset, world_size, rank, shuffle=True) if distributed else None
-    val_sampler = DistributedEvaluationSampler(val_dataset, rank, world_size) if distributed else None
-    loader_args = dict(
-        batch_size=data_cfg["batch_size"], num_workers=data_cfg.get("num_workers", 0),
-        pin_memory=data_cfg.get("pin_mem", False),
-        persistent_workers=bool(data_cfg.get("persistent_workers", False) and data_cfg.get("num_workers", 0) > 0),
-    )
-    train_loader = DataLoader(train_dataset, sampler=train_sampler, shuffle=train_sampler is None, **loader_args)
-    val_loader = DataLoader(val_dataset, sampler=val_sampler, shuffle=False, **loader_args)
+    loader_args = _loader_kwargs(data_cfg)
+    LOGGER.info("rank=%d data loader workers=%d context=%s timeout=%s train_samples=%d val_samples=%d",
+                rank, loader_args["num_workers"], loader_args.get("multiprocessing_context", "none"),
+                loader_args.get("timeout", 0), len(train_dataset), len(val_dataset))
+    train_loader = DataLoader(train_dataset, sampler=train_sampler, shuffle=train_sampler is None,
+                              collate_fn=getattr(train_dataset, 'collate_fn', None), **loader_args)
+    # Rank 0 evaluates the complete split. Other ranks do not start a
+    # validation worker pool or run any validation forward passes.
+    val_loader = DataLoader(val_dataset, shuffle=False,
+                            collate_fn=getattr(val_dataset, 'collate_fn', None), **loader_args) if is_main else None
 
     model = AudioFineTuneModel(model_cfg, task, num_class=num_class)
     latest_path = folder / "latest.pt"
@@ -398,6 +435,15 @@ def main(args):
     if distributed:
         model = DistributedDataParallel(model, device_ids=[0] if device.type == "cuda" else None,
                                         find_unused_parameters=False)
+    validation_group = None
+    if distributed:
+        # Waiting on a NCCL collective during rank-0-only validation would
+        # start its watchdog timeout before validation has finished. Use a
+        # separate CPU group for the wait, including reports/checkpoint I/O.
+        validation_timeout = float(meta.get("validation_timeout", 3600))
+        if not math.isfinite(validation_timeout) or validation_timeout <= 0:
+            raise ValueError("meta.validation_timeout must be finite and positive")
+        validation_group = dist.new_group(backend="gloo", timeout=timedelta(seconds=validation_timeout))
     dtype_name = str(meta.get("dtype", "bfloat16")).lower()
     amp_dtype = torch.bfloat16 if dtype_name == "bfloat16" else torch.float16
     mixed = device.type == "cuda" and dtype_name in {"bfloat16", "float16"}
@@ -436,21 +482,22 @@ def main(args):
             grokfast_lambda=grokfast_lambda, grokfast_scope=grokfast_scope,
             grokfast_grads=grokfast_grads,
         )
-        val_result, _ = _run_epoch(
-            model, val_loader, criterion, optimizer, scaler, device,
-            task, False, mixed, amp_dtype, epoch=epoch, epochs=epochs, is_main=is_main,
-        )
+        LOGGER.info("rank=%d epoch=%d gathering training metrics", rank, epoch + 1)
+        gathered = _gather(train_result, distributed, world_size)
+        LOGGER.info("rank=%d epoch=%d gathered training metrics", rank, epoch + 1)
         scheduler.step()
-        gathered = _gather((train_result, val_result), distributed, world_size)
         if is_main:
-            train_loss = sum(item[0][0] for item in gathered) / max(1, sum(item[0][1] for item in gathered))
-            val_loss = sum(item[1][0] for item in gathered) / max(1, sum(item[1][1] for item in gathered))
-            train_paths = sum((item[0][2] for item in gathered), [])
-            train_truth = sum((item[0][3] for item in gathered), [])
-            val_truth = sum((item[1][3] for item in gathered), [])
-            val_paths = sum((item[1][2] for item in gathered), [])
-            train_outputs = np.concatenate(sum((item[0][4] for item in gathered), []), axis=0)
-            val_outputs = np.concatenate(sum((item[1][4] for item in gathered), []), axis=0)
+            val_result, _ = _run_epoch(
+                _raw(model), val_loader, criterion, optimizer, scaler, device,
+                task, False, mixed, amp_dtype, epoch=epoch, epochs=epochs, is_main=True,
+            )
+            train_loss = sum(item[0] for item in gathered) / max(1, sum(item[1] for item in gathered))
+            val_loss = val_result[0] / max(1, val_result[1])
+            train_paths = sum((item[2] for item in gathered), [])
+            train_truth = sum((item[3] for item in gathered), [])
+            val_truth, val_paths = val_result[3], val_result[2]
+            train_outputs = np.concatenate(sum((item[4] for item in gathered), []), axis=0)
+            val_outputs = np.concatenate(val_result[4], axis=0)
             row = {"epoch": epoch + 1, "train_loss": train_loss, "val_loss": val_loss,
                    "backbone_lr": optimizer.param_groups[0]["lr"],
                    "head_lr": optimizer.param_groups[-1]["lr"]}
@@ -564,7 +611,11 @@ def main(args):
                     row["val_mae"], row["val_rmse"], best_score,
                 )
         if distributed:
-            dist.barrier()
+            LOGGER.info("rank=%d epoch=%d waiting for rank 0 validation and checkpoint", rank, epoch + 1)
+            dist.barrier(group=validation_group)
+            LOGGER.info("rank=%d epoch=%d validation complete", rank, epoch + 1)
+    if validation_group is not None:
+        dist.destroy_process_group(validation_group)
     return {
         "latest_checkpoint": latest_path,
         "best_checkpoint": folder / "best.pt",

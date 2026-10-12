@@ -1,15 +1,24 @@
 import torch
 from torch import nn
+from models.instance_aggregator import InstanceAggregator
 
 
 class VAFinetuner(nn.Module):
     def __init__(self, va, num_outputs, cfg):
         super().__init__()
         self.va = va
+        self.instance_enabled = 'instance_aggregator' in cfg
+        if self.instance_enabled:
+            self.instance_aggregators = nn.ModuleDict({mode: InstanceAggregator(va.common_dim, cfg['instance_aggregator'])
+                                                       for mode in va.enabled_modes})
         self.strategy = cfg.get('branch_aggregation', 'separate_logits')
         if self.strategy not in {'separate_logits', 'transformer'}:
             raise ValueError('branch_aggregation must be separate_logits or transformer')
-        self.heads = nn.ModuleDict({mode: nn.Linear(va.common_dim, num_outputs) for mode in va.enabled_modes})
+        self.heads = nn.ModuleDict({mode: (
+            nn.Sequential(nn.LayerNorm(va.common_dim),
+                          nn.Dropout(float(cfg['instance_aggregator'].get('head_dropout', 0))),
+                          nn.Linear(va.common_dim, num_outputs)) if self.instance_enabled
+            else nn.Linear(va.common_dim, num_outputs)) for mode in va.enabled_modes})
         weights = cfg.get('branch_weights', {mode: 1 for mode in va.enabled_modes})
         weight_values = torch.tensor([float(weights.get(mode, 1)) for mode in va.enabled_modes])
         if (weight_values < 0).any() or weight_values.sum() <= 0:
@@ -43,7 +52,18 @@ class VAFinetuner(nn.Module):
         return self
 
     def forward(self, batch):
-        representations = self.va.encode_view(batch['global'])
+        view = batch['global']
+        if self.instance_enabled:
+            if view['video'].ndim == 6:
+                instances, sentences = view['video'].shape[:2]
+                view = {key: value.flatten(0, 1) for key, value in view.items()}
+            else:
+                instances, sentences = view['video'].shape[0], 1
+            encoded = self.va.encode_view(view)
+            representations = {mode: self.instance_aggregators[mode](value.reshape(instances, sentences, -1))
+                               for mode, value in encoded.items()}
+        else:
+            representations = self.va.encode_view(view)
         branches = {mode: self.heads[mode](representations[mode]) for mode in self.va.enabled_modes}
         if len(branches) == 1:
             logits = next(iter(branches.values()))

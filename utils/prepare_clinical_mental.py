@@ -11,6 +11,7 @@ from copy import deepcopy
 from pathlib import Path
 
 import yaml
+from utils.instance_finetune_configs import select_instance_presets
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -92,6 +93,7 @@ def prepare(source):
                 config['yamls'].pop('data', None)
                 config['yamls']['sampling'] = 'CONFIGS/data/finetune/audio-video/sampling/va-6s.yaml'
             config['yamls']['data'] = str(data_path)
+            select_instance_presets(config, data)
             task_path = Path(f'CONFIGS/tasks/finetune/{modality}/mental/{task}.yaml')
             for path, contents in [(data_path, {'data': data}), (task_path, config)]:
                 target = PROJECT_ROOT / path

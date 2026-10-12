@@ -33,3 +33,6 @@ class AVCSVDataset(VALeJEPADataset):
             return item
         item['label'] = torch.as_tensor(self.labels[index], dtype=torch.long if self.task == 'classification' else torch.float32)
         return item
+
+    def get_sentence(self, index):
+        return self[index]

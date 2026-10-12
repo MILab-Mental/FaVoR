@@ -5,6 +5,7 @@ import pytest
 import yaml
 
 from app.main import load_config
+from utils.instance_finetune_configs import is_long_media_task
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -19,7 +20,8 @@ def test_va_task_has_concrete_data_and_matching_targets(source):
     config = load_config(ROOT / f'CONFIGS/tasks/finetune/audio-video/{group}/{task}.yaml')
     data = config['data']
     assert config['app'] == 'finetune_va'
-    assert config['folder'] == f'OUTPUT/finetune_va/{group}/{task}'
+    suffix = '/instance-sentences8' if is_long_media_task(original) else ''
+    assert config['folder'] == f'OUTPUT/finetune_va/{group}/{task}{suffix}'
     assert data['task'] == original['task']
     assert data['label_column'] == original['label_column']
     assert data['num_class'] == original.get('num_class', 1)

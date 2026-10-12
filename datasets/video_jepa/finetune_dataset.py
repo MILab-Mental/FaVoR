@@ -142,6 +142,21 @@ class VideoCSVDataset(VideoDataset):
             index = np.random.randint(len(self.samples))
             sample = self.samples[index]
 
+    def get_sentence(self, index):
+        sample = self.samples[index]
+        item = (self.get_item_image(index) if Path(sample).suffix.lower() in {'.jpg', '.png', '.jpeg'}
+                else self.get_item_video(index))
+        if not item:
+            raise RuntimeError(f'could not decode instance sentence {sample}')
+        clips, label, clip_indices = item
+        if self.task == 'classification':
+            label = int(label)
+        elif self.task == 'multi_label_classification':
+            label = np.asarray(label, dtype=np.float32)
+        else:
+            label = np.float32(label)
+        return clips, label, clip_indices, sample
+
 
 def make_videodataset_finetune_v(
     csv_paths,
@@ -156,6 +171,8 @@ def make_videodataset_finetune_v(
     train_transform=None,
     val_transform=None,
     num_clips=1,
+    num_sentence=0,
+    sentence_eval_stride=1,
 ):
     """Return CSV split-0 training and split-1 validation ``VideoDataset``s."""
     common_kwargs = dict(
@@ -177,4 +194,7 @@ def make_videodataset_finetune_v(
     val_dataset = VideoCSVDataset(
         csv_paths, split=1, transform=val_transform, random_clip_sampling=False, **common_kwargs
     )
-    return train_dataset, val_dataset
+    from datasets.common.instances import as_sentence_instances
+    cfg = dict(num_sentence=num_sentence, sentence_eval_stride=sentence_eval_stride)
+    return (as_sentence_instances(train_dataset, cfg, 'video', True),
+            as_sentence_instances(val_dataset, cfg, 'video', False))

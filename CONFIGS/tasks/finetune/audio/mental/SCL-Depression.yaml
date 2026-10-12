@@ -1,5 +1,5 @@
 app: finetune_a
-folder: OUTPUT/finetune_a/mental/SCL-Depression
+folder: OUTPUT/finetune_a/mental/SCL-Depression/instance-sentences8
 meta:
   dtype: bfloat16
   load_checkpoint: true
@@ -10,6 +10,6 @@ meta:
   min_load_ratio: 0.95
 yamls:
   data: CONFIGS/data/finetune/audio-video/mental/SCL-Depression.yaml
-  sampling: CONFIGS/data/finetune/audio/sampling/audio-4s-4clips.yaml
+  sampling: CONFIGS/data/finetune/audio/sampling/audio-4s-8sentences.yaml
   opt: CONFIGS/optimization/finetune/audio/epochs100-warmup0.yaml
-  model: CONFIGS/models/finetune/audio/emotion2vec-plus-large.yaml
+  model: CONFIGS/models/finetune/audio/emotion2vec-plus-large-instance.yaml

@@ -14,6 +14,7 @@ from pathlib import Path
 import yaml
 
 from datasets.va_lejepa.va_manifest import source_key, validate_identity
+from utils.instance_finetune_configs import select_instance_presets
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -105,6 +106,7 @@ def prepare():
                 model='CONFIGS/models/finetune/audio-video/vitl-emotion2vec.yaml',
                 opt='CONFIGS/optimization/finetune/audio-video/epochs20-warmup0-lr0.001.yaml',
                 data=str(data_path))
+            select_instance_presets(config, original)
             write_yaml(ROOT / f'CONFIGS/tasks/finetune/audio-video/{group}/{fragment.name}', config)
             summary.append(dict(group=group, task=fragment.stem, train=counts['0'], validation=counts['1']))
     report = ROOT / 'DATASET/merged/finetune_va/tasks.csv'
