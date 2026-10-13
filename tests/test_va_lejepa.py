@@ -504,6 +504,28 @@ def test_decoder_crops_common_timeline_and_audio_tokens(tmp_path, monkeypatch, s
     assert output.token_times[0,0] == pytest.approx(center/100)
 
 
+def test_decoder_audio_crop_rounding_never_exceeds_window():
+    import types
+    import numpy as np
+    import datasets.va_lejepa.av_decoder as decoding
+
+    class Reader:
+        def __len__(self): return 250
+        def get_batch(self, indices):
+            return types.SimpleNamespace(asnumpy=lambda: np.zeros((len(indices), 16, 16, 3), dtype=np.uint8))
+
+    decoder = object.__new__(decoding.AVDecoder)
+    decoder.reader = Reader()
+    decoder.fps = 30.
+    decoder.audio_origin = decoder.video_origin = 0.
+    decoder.sample_rate = 16000
+    decoder.waveform = torch.zeros(132000)
+    interval = (1.1249687499999999, 7.12496875)
+    decoded = decoder.decode(interval, 48)
+    assert decoded['audio_lengths'] == 96000
+    assert decoded['audio_sample_range'].tolist() == [17999, 113999]
+
+
 @pytest.mark.parametrize('local_views', [0, 4])
 @pytest.mark.parametrize('mixed_lengths', [False, True])
 def test_batched_locals_preserve_outputs_loss_and_gradients(local_views, mixed_lengths):

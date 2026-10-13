@@ -193,3 +193,26 @@ torchrun --standalone --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/finet
 
 # 历史命令：原配置文件在整理前已缺失，保留记录。
 # torchrun --master_port 12363 --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/finetune/video/classification/MER242526-emotion-drop03.yaml --set folder=OUTPUT/finetune_v/vitl16/MER242526-emotion/FaVoR-112px-64f-16fps-32-38latest-drop03all-grokfast meta.read_checkpoint=OUTPUT/pretrain_v/vitl16/FaVoR-112px-64f16-rankme-32resume/latest.pt data.dataset_fpcs='[64]' data.fps=16
+
+
+for task in RESULT-total RESULT-Depression RESULT-Anxiety; do
+torchrun --standalone --nproc_per_node=2 -m app.main \
+--fname "CONFIGS/tasks/finetune/audio/mental/${task}.yaml" \
+--set \
+  "meta.read_checkpoint=${jepa_ckpt}" \
+  "folder=OUTPUT/finetune_a/mental/${task}/jepa-2to6s-instance8-attention" "data.batch_size=8" \
+  meta.reset_epoch=false \
+|| break
+done
+
+for task in RESULT-total RESULT-Anxiety RESULT-Depression; do
+torchrun --standalone --nproc_per_node=2 -m app.main \
+  --fname "CONFIGS/tasks/finetune/video/mental/${task}.yaml" \
+  --set "meta.read_checkpoint=/home/data/sdd/mental/OUTPUTS/pretrain_v/vitl16/FaVoR-112px-48f/e5.pt"  "data.batch_size=16"
+done
+
+for task in RESULT-total RESULT-Anxiety RESULT-Depression; do
+torchrun --standalone --nproc_per_node=2 -m app.main \
+  --fname "CONFIGS/tasks/finetune/audio-video/mental/${task}.yaml" \
+  --set "finetune.pretrained_checkpoint=/home/data/sdd/mental/OUTPUTS/pretrain_va_lejepa/I3-C1/latest.pt"   "data.batch_size=4"
+done

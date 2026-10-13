@@ -77,7 +77,10 @@ class AVDecoder:
         start, end = interval
         indices, times = frame_indices(start + self.video_origin, end + self.video_origin, frames, self.fps, len(self.reader))
         times = times - self.video_origin
-        begin, finish = round((start + self.audio_origin) * self.sample_rate), round((end + self.audio_origin) * self.sample_rate)
+        begin = round((start + self.audio_origin) * self.sample_rate)
+        # Rounding two absolute timestamps can make a six-second crop one sample too long.
+        finish = min(round((end + self.audio_origin) * self.sample_rate),
+                     begin + round((end - start) * self.sample_rate))
         if begin < 0 or finish > self.waveform.numel() or finish <= begin:
             raise ValueError('audio crop out of bounds; strict mode forbids padding')
         video = torch.from_numpy(self.reader.get_batch(indices.tolist()).asnumpy())

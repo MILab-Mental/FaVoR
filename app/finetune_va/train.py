@@ -6,6 +6,7 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.distributed as dist
+from tqdm import tqdm
 from torch.utils.data import DataLoader, Sampler
 from torch.utils.data.distributed import DistributedSampler
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -20,6 +21,7 @@ from utils.classification_metrics import classification_metrics, multilabel_metr
 from datasets.common.instances import as_sentence_instances
 from datasets.common.instances import sentence_identity
 from utils.instance_evaluation import predict_instance_batch
+from utils.progress import progress_ncols
 
 LOGGER = logging.getLogger(__name__)
 
@@ -61,12 +63,14 @@ def _loss(output, labels, criterion, task, branch_weight=0.0):
 
 
 @torch.no_grad()
-def evaluate(model, loader, device, task, classes):
+def evaluate(model, loader, device, task, classes, epoch_number=None, total_epochs=None):
     model.eval()
     raw = _unwrap(model)
     records = []
     skipped = 0
-    for batch in loader:
+    enabled, rank, world = _state()
+    description = f'val {epoch_number}/{total_epochs}' if epoch_number is not None else 'val'
+    for batch in tqdm(loader, disable=rank != 0, desc=description, ncols=progress_ncols()):
         skipped += len(batch.get('skipped_samples', []))
         if 'instance_samples' in batch:
             if not batch['instance_samples']:
@@ -85,7 +89,6 @@ def evaluate(model, loader, device, task, classes):
             records.append(dict(pair_id=pair_id, video_path=batch['video_path'][i], audio_path=batch['audio_path'][i],
                 truth=batch['label'][i].cpu().tolist(), logits=output['logits'][i].float().cpu().tolist(),
                 branches={mode: value[i].float().cpu().tolist() for mode, value in output['branches'].items()}))
-    enabled, rank, world = _state()
     if skipped:
         LOGGER.warning('VA evaluation rank=%d skipped %d invalid pairs', rank, skipped)
     if enabled:
@@ -170,7 +173,9 @@ def main(args):
         train_dataset.epoch = epoch
         model.train()
         running, count = 0., 0
-        for batch_index, batch in enumerate(train_loader):
+        progress = tqdm(train_loader, disable=rank != 0,
+                        desc=f'train {epoch + 1}/{epochs}', ncols=progress_ncols())
+        for batch_index, batch in enumerate(progress):
             _record_skipped(folder / f'logs/skipped_pairs_rank{rank}.jsonl', batch, epoch, batch_index)
             batch, _ = synchronize_training_batch(batch, device)
             if batch is None:
@@ -192,9 +197,12 @@ def main(args):
             step += 1
             running += float(loss.detach()) * batch['label'].shape[0]
             count += batch['label'].shape[0]
+            if rank == 0:
+                progress.set_postfix(loss=f'{running / count:.4f}')
         if not count:
             raise RuntimeError(f'no usable VA training batches in epoch {epoch}')
-        metrics, records, predictions, probabilities, matrix = evaluate(model, val_loader, device, task, classes)
+        metrics, records, predictions, probabilities, matrix = evaluate(
+            model, val_loader, device, task, classes, epoch + 1, epochs)
         score_key = cfg.get('best_metric', 'mae' if task == 'regression' else 'f1_macro')
         score = metrics[score_key] * (-1 if cfg.get('best_metric_mode', 'min' if task == 'regression' else 'max') == 'min' else 1)
         improved = score > best_score

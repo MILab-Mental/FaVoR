@@ -1,6 +1,6 @@
 data:
   num_sentence: 8
-  sentence_eval_stride: 1
+  sentence_eval_stride: 4
   batch_size: 64
   crop_size: 112
   patch_size: 16
