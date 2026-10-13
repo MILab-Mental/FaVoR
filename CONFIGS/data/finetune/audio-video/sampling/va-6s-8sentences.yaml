@@ -1,6 +1,6 @@
 data:
   num_sentence: 8
-  sentence_eval_stride: 4
+  sentence_eval_stride: -1
   batch_size: 1
   num_workers: 4
   sample_rate: 16000
@@ -9,6 +9,8 @@ data:
   minimum_seconds: 0.1
   global_seconds: 6.0
   video_fps: 8
+  short_video_full_frames: true
+  group_by_lengths: false
   video_frames_global: 48
   video_global_size: 112
   normalize_audio: true

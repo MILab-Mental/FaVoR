@@ -87,8 +87,12 @@ class VALeJEPADataset(Dataset):
         seconds = float(self.cfg.get(f'{mode}_seconds', 2 if local else 6))
         target_frames = int(self.cfg.get(f'video_frames_{mode}', 16 if local else 48))
         duration = interval[1] - interval[0]
-        # Short clips retain their real time axis and are never stretched/repeated.
-        sampling_fps = min(float(self.cfg.get('video_fps', 8)), float(getattr(decoder, 'fps', self.cfg.get('video_fps', 8))))
+        # For short clips, use as many distinct source frames as available up
+        # to the target size; pad only when the source has fewer frames.
+        # Full-length clips retain the configured FPS cap.
+        source_fps = float(getattr(decoder, 'fps', self.cfg.get('video_fps', 8)))
+        use_source_fps = bool(self.cfg.get('short_video_full_frames', False)) and duration < seconds
+        sampling_fps = source_fps if use_source_fps else min(float(self.cfg.get('video_fps', 8)), source_fps)
         frames = min(target_frames, max(1, math.floor(duration * sampling_fps + 1e-8)))
         view = self.transforms(decoder.decode(interval, frames), local=local)
         length = int(view['audio_lengths'])
@@ -103,6 +107,12 @@ class VALeJEPADataset(Dataset):
         view['audio_padding_mask'] = torch.arange(target_samples) >= length
         for key in ('video_frame_times', 'video_frame_indices'):
             view[key] = F.pad(view[key], (0, target_frames - frames))
+        if frames < target_frames:
+            last_time = view['video_frame_times'][frames - 1]
+            end_time = view['end_time'].to(dtype=view['video_frame_times'].dtype)
+            remaining = target_frames - frames
+            fractions = torch.arange(1, remaining + 1, dtype=last_time.dtype) / (remaining + 1)
+            view['video_frame_times'][frames:] = last_time + (end_time - last_time) * fractions
         return view
 
 

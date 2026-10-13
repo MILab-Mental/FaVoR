@@ -15,12 +15,13 @@ LOGGER = logging.getLogger(__name__)
 
 
 class VALeJEPA(nn.Module):
-    def __init__(self, video_encoder, audio_encoder, fusion_cfg, sample_rate=16000, audio_checkpointing=True, batch_local_views=False):
+    def __init__(self, video_encoder, audio_encoder, fusion_cfg, sample_rate=16000, audio_checkpointing=True, batch_local_views=False, group_by_lengths=True):
         super().__init__()
         self.video_encoder, self.audio_encoder = video_encoder, audio_encoder
         self.sample_rate = int(sample_rate)
         self.audio_checkpointing = audio_checkpointing
         self.batch_local_views = bool(batch_local_views)
+        self.group_by_lengths = bool(group_by_lengths)
         enabled = fusion_cfg.get('enabled', ['feature'])
         self.enabled_modes = [enabled] if isinstance(enabled, str) else list(enabled)
         if not self.enabled_modes or len(set(self.enabled_modes)) != len(self.enabled_modes) or set(self.enabled_modes) - {'early', 'feature', 'late'}:
@@ -62,12 +63,14 @@ class VALeJEPA(nn.Module):
             raise ValueError('video_lengths must be [B]')
         if (lengths < 1).any() or (lengths > view['video'].shape[2]).any():
             raise ValueError('invalid video_lengths')
-        # Padding must not enter the video backbone: CLS pooling and attention
-        # would otherwise incorporate zero frames. Group real frame counts first.
+        # Grouping keeps padding out of the video backbone. Fine-tuning may
+        # opt into one fixed-size call per batch for higher throughput.
         results, alignments, indices = [], [], []
         audio_lengths = view['audio_lengths']
         if (audio_lengths < 1).any() or (audio_lengths > view['audio'].shape[1]).any():
             raise ValueError('invalid audio_lengths')
+        if not self.group_by_lengths:
+            return self._encode_valid_view(view, return_alignment, timing)
         groups = torch.stack((lengths, audio_lengths), dim=1).unique(dim=0, sorted=True)
         for length, audio_length in groups.tolist():
             ids = torch.where((lengths == length) & (audio_lengths == audio_length))[0]
@@ -171,7 +174,8 @@ def build_va_lejepa(model_cfg, data_cfg, initialize=True):
     audio = AudioLeEncoder(audio_cfg)
     model = VALeJEPA(video, audio, cfg['fusion'], sample_rate=audio_cfg['audio']['sample_rate'],
                      audio_checkpointing=cfg.get('audio_gradient_checkpointing', True),
-                     batch_local_views=cfg.get('batch_local_views', False))
+                     batch_local_views=cfg.get('batch_local_views', False),
+                     group_by_lengths=data_cfg.get('group_by_lengths', True))
     for module, frozen in ((video, video_cfg.get('freeze', False)), (audio, audio_cfg.get('freeze', False))):
         if frozen:
             module.requires_grad_(False)

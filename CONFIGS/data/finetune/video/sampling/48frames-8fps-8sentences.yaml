@@ -1,15 +1,17 @@
 data:
   num_sentence: 8
-  sentence_eval_stride: 4
+  sentence_eval_stride: -1
   batch_size: 64
+  val_batch_size: 1
   crop_size: 112
   patch_size: 16
   dataset_fpcs:
   - 48
   tubelet_size: 2
   fps: 8
-  num_workers: 8
-  persistent_workers: true
+  num_workers: 2
+  val_num_workers: 0
+  persistent_workers: false
   pin_mem: false
   num_clips: 1
 

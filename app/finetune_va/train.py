@@ -14,6 +14,7 @@ from app.pretrain_audio_lejepa.train import _state, _unwrap, _schedule, _append_
 from app.pretrain_va_lejepa.train import _optimizer, _save_all, _restore_rng, _grad_norm, _record_skipped
 from app.finetune_a.train import _criterion, _regression_metrics
 from datasets.va_lejepa.finetune_dataset import AVCSVDataset
+from datasets.va_lejepa.sync_preflight import prepare_sync_metadata
 from datasets.va_lejepa import collate_va_lejepa, to_device, synchronize_training_batch
 from models.va_lejepa import build_va_lejepa, load_checkpoint
 from models.va_lejepa.finetune import VAFinetuner
@@ -142,6 +143,11 @@ def main(args):
     mixed = device.type == 'cuda'
     scaler = torch.amp.GradScaler('cuda', enabled=False)
     train_dataset, val_dataset = AVCSVDataset(data, 0, True), AVCSVDataset(data, 1, False)
+    count = prepare_sync_metadata((train_dataset, val_dataset), data,
+        folder / 'logs/va_sync_preflight.json', rank=rank,
+        workers=int(data.get('sync_preflight_workers', 8)))
+    if rank == 0:
+        LOGGER.info('VA sync preflight checked %d train/validation pairs', count)
     train_dataset = as_sentence_instances(train_dataset, data, 'audio-video', True)
     val_dataset = as_sentence_instances(val_dataset, data, 'audio-video', False)
     sampler = DistributedSampler(train_dataset, num_replicas=world, rank=rank, shuffle=True)

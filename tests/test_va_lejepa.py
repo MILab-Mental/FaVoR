@@ -15,6 +15,7 @@ from models.va_lejepa.encoders import video_token_output
 from datasets.va_lejepa.va_manifest import read_manifest
 from datasets.va_lejepa.manifest_tools import convert
 from datasets.va_lejepa.av_decoder import validate_sync
+from datasets.va_lejepa.sync_preflight import prepare_sync_metadata
 from datasets.va_lejepa.av_time_sampler import AVTimeSampler, frame_indices
 from datasets.va_lejepa import VALeJEPADataset, collate_va_lejepa
 from app.pretrain_va_lejepa.train import _optimizer, _schedule
@@ -175,6 +176,60 @@ def test_strict_sync_reject(field,value):
     audio[field]=value
     with pytest.raises(ValueError,match='mismatch'):
         validate_sync(video,audio,{'pair_id':'x'}, {})
+
+
+def test_va_sync_preflight_checks_all_pairs_once_and_reuses_cache(tmp_path, monkeypatch):
+    import datasets.va_lejepa.sync_preflight as preflight
+    from types import SimpleNamespace
+
+    rows = []
+    for pair_id in ('train', 'val'):
+        video, audio = tmp_path / f'{pair_id}.mp4', tmp_path / f'{pair_id}.wav'
+        video.write_bytes(b'video')
+        audio.write_bytes(b'audio')
+        rows.append(dict(pair_id=pair_id, video_path=str(video), audio_path=str(audio)))
+    datasets = (SimpleNamespace(rows=[rows[0]]), SimpleNamespace(rows=[rows[1]]))
+    calls = []
+
+    def check(row, sample_rate, sync_cfg, minimum_seconds):
+        calls.append(row['pair_id'])
+        return dict(signature=preflight._signature(row), video={'duration': 6.}, audio={'duration': 6.},
+                    diagnostics={'duration_tolerance_seconds': .5, 'audio_shift_seconds': 0.})
+
+    monkeypatch.setattr(preflight, '_check_pair', check)
+    cache = tmp_path / 'sync.json'
+    assert prepare_sync_metadata(datasets, {}, cache, workers=2) == 2
+    assert set(calls) == {'train', 'val'}
+    assert all('_va_sync_metadata' in row for row in rows)
+    prepare_sync_metadata(datasets, {}, cache, rank=1, workers=2)
+    assert len(calls) == 2
+    (tmp_path / 'val.wav').write_bytes(b'changed audio')
+    prepare_sync_metadata(datasets, {}, cache, workers=2)
+    assert calls.count('val') == 2 and calls.count('train') == 1
+
+
+def test_va_decoder_uses_preflight_metadata_without_reprobing(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+    import datasets.va_lejepa.av_decoder as decoder_module
+
+    class Reader:
+        def __init__(self, *args, **kwargs):
+            pass
+        def get_avg_fps(self):
+            return 8
+        def __len__(self):
+            return 48
+
+    monkeypatch.setitem(sys.modules, 'decord', SimpleNamespace(VideoReader=Reader, cpu=lambda _: None))
+    monkeypatch.setattr(decoder_module, 'load_audio', lambda *args: torch.zeros(96000))
+    monkeypatch.setattr(decoder_module, 'probe_media', lambda *args: pytest.fail('unexpected ffprobe'))
+    monkeypatch.setattr(decoder_module, 'validate_sync', lambda *args: pytest.fail('unexpected sync check'))
+    row = dict(video_path='video.mp4', audio_path='audio.wav',
+               _va_sync_metadata=dict(video={'duration': 6.}, audio={'duration': 6.},
+                   diagnostics={'duration_tolerance_seconds': .5, 'audio_shift_seconds': 0.}))
+    decoder = decoder_module.AVDecoder(row, 16000, {})
+    assert decoder.video_duration == 6.
 
 
 def test_sampler_and_real_fps():
@@ -427,8 +482,31 @@ def test_padded_mixed_lengths_encode_and_backward_ignore_padding():
     assert model.audio_encoder.backbone.feature_extractor.conv_blocks[0].conv.weight.grad is not None
 
 
+def test_fixed_size_va_batch_encodes_once_without_length_groups():
+    import torch.nn.functional as F
+    model = tiny_va(('feature',))
+    model.group_by_lengths = False
+    long = view(1)
+    short = view(1, 2, 1.)
+    short['video'] = F.pad(short['video'], (0, 0, 0, 0, 0, 2))
+    short['audio'] = F.pad(short['audio'], (0, 100))
+    short['video_frame_times'] = torch.tensor([[0., .5, .75, .875]], dtype=torch.float64)
+    short['video_frame_indices'] = F.pad(short['video_frame_indices'], (0, 2))
+    mixed = {key: torch.cat([long[key], short[key]], 0) for key in long}
+    mixed['video_lengths'] = torch.tensor([4, 2])
+    mixed['video_padding_mask'] = torch.tensor([[False] * 4, [False, False, True, True]])
+    calls = []
+    model.video_encoder.register_forward_hook(lambda *_: calls.append(1))
+    output = model.encode_view(mixed)['feature']
+    assert output.shape == (2, model.common_dim)
+    assert torch.isfinite(output).all()
+    assert len(calls) == 1
+    output.sum().backward()
+    assert model.video_encoder.patch_embed.proj.weight.grad is not None
 
-@pytest.mark.parametrize('audio_seconds,source_fps', [(1.5,16), (1.53,16), (1.3,16), (1.5,4)])
+
+
+@pytest.mark.parametrize('audio_seconds,source_fps', [(1.5,16), (1.53,16), (1.3,16), (1.5,4), (1.5,40)])
 def test_real_short_media_decode_zero_padding(tmp_path, audio_seconds, source_fps):
     import shutil
     import subprocess
@@ -443,17 +521,20 @@ def test_real_short_media_decode_zero_padding(tmp_path, audio_seconds, source_fp
                     str(audio)], check=True)
     manifest = tmp_path / 'pairs.csv'
     manifest.write_text(f'pair_id,source_id,video_path,audio_path\nshort,short,{video},{audio}\n')
-    dataset = VALeJEPADataset(dict(manifests=[str(manifest)],local_views=0,video_global_size=16),training=False)
+    dataset = VALeJEPADataset(dict(manifests=[str(manifest)],local_views=0,video_global_size=16,
+                                  short_video_full_frames=True),training=False)
     sample = dataset[0]
     view_ = sample['global']
     common_seconds = min(1.5, audio_seconds)
-    frames = int(common_seconds * min(8, source_fps))
+    frames = min(48, int(common_seconds * source_fps))
     samples = round(common_seconds * 16000)
     assert view_['video_lengths'] == frames and view_['audio_lengths'] == samples
     assert view_['audio'].shape == (96000,)
     assert torch.count_nonzero(view_['audio'][samples:]) == 0
     assert torch.count_nonzero(view_['video'][:,frames:]) == 0
     assert view_['end_time'] == pytest.approx(common_seconds)
+    assert (torch.diff(view_['video_frame_times']) > 0).all()
+    assert view_['video_frame_times'][-1] < view_['end_time']
     assert sample['sync_diagnostics']['padded']
 
 

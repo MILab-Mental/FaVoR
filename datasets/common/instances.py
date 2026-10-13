@@ -29,6 +29,11 @@ def sentence_windows(indices, count, stride=1):
     return [list(indices[start:start + count]) for start in starts]
 
 
+def sample_sentence_indices(group, count):
+    selected = sorted(random.sample(group, count)) if len(group) > count else list(group)
+    return selected + [selected[-1]] * (count - len(selected))
+
+
 def combine_sentences(sentences, modality, instance_id):
     """Add an explicit sentence axis, preserving each modality's inner views."""
     if modality == "audio-video":
@@ -79,8 +84,8 @@ class SentenceInstanceDataset(Dataset):
     def __init__(self, dataset, num_sentence, modality, training, eval_stride=1):
         self.dataset, self.modality, self.training = dataset, modality, bool(training)
         self.num_sentence, self.eval_stride = int(num_sentence), int(eval_stride)
-        if self.num_sentence < 1 or self.eval_stride < 1:
-            raise ValueError('num_sentence and sentence_eval_stride must be positive')
+        if self.num_sentence < 1 or (self.eval_stride != -1 and self.eval_stride < 1):
+            raise ValueError('num_sentence must be positive; sentence_eval_stride must be -1 or positive')
         paths = ([row['video_path'] for row in dataset.rows]
                  if modality == 'audio-video' else dataset.samples)
         groups = OrderedDict()
@@ -119,18 +124,23 @@ class SentenceInstanceDataset(Dataset):
     def __getitem__(self, index):
         group, identity = self.groups[index], self.samples[index]
         if self.training:
-            selected = (sorted(random.sample(group, self.num_sentence))
-                        if len(group) > self.num_sentence else list(group))
-            selected += [selected[-1]] * (self.num_sentence - len(selected))
+            selected = sample_sentence_indices(group, self.num_sentence)
             decoded = {i: self._sentence(i) for i in set(selected)}
             return combine_sentences([decoded[i] for i in selected], self.modality, identity)
-        sentences = [self._sentence(i) for i in group]
+        if self.eval_stride == -1:
+            selected = sample_sentence_indices(group, self.num_sentence)
+            decoded = {i: self._sentence(i) for i in set(selected)}
+            sentences = [decoded[i] for i in selected]
+            windows = [list(range(self.num_sentence))]
+        else:
+            sentences = [self._sentence(i) for i in group]
+            windows = sentence_windows(list(range(len(group))), self.num_sentence, self.eval_stride)
         if self.modality == 'audio-video':
             errors = [s['decode_error'] for s in sentences if 'decode_error' in s]
             if errors:
                 return {'decode_error': dict(errors[0], instance_id=identity)}
         return {'sentences': sentences,
-                'windows': sentence_windows(list(range(len(group))), self.num_sentence, self.eval_stride),
+                'windows': windows,
                 'label': torch.as_tensor(self.labels[index]), 'instance_id': identity, 'modality': self.modality}
 
 

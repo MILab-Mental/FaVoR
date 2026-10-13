@@ -15,8 +15,11 @@ def video_token_output(encoder, view):
     times = view['video_frame_times'].to(device=tokens.device, dtype=torch.float64) - view['start_time'].to(tokens.device)[:, None]
     if times.shape != (clips.shape[0], temporal):
         raise ValueError('video timestamps do not match frame count')
+    padding_mask = view.get('video_padding_mask')
+    if padding_mask is None:
+        padding_mask = torch.zeros_like(times, dtype=torch.bool)
     return TemporalTokenOutput(tokens[:, 1:].reshape(clips.shape[0], temporal, spatial, -1), times,
-                               torch.zeros_like(times, dtype=torch.bool), tokens[:, 0], temporal, spatial)
+                               padding_mask, tokens[:, 0], temporal, spatial)
 
 
 def audio_token_output(encoder, view, sample_rate, checkpointing=False):

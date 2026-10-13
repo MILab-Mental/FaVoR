@@ -52,15 +52,21 @@ class AVDecoder:
         from decord import VideoReader, cpu
         self.reader = VideoReader(row['video_path'], ctx=cpu(0), num_threads=1)
         self.fps = float(self.reader.get_avg_fps())
-        video_meta = probe_media(row['video_path'], 'video')
-        video_meta['fps'] = self.fps
-        audio_meta = probe_media(row['audio_path'], 'audio')
-        self.diagnostics = validate_sync(video_meta, audio_meta, row, sync_cfg)
+        checked = row.get('_va_sync_metadata')
+        if checked is None:
+            video_meta = probe_media(row['video_path'], 'video')
+            video_meta['fps'] = self.fps
+            audio_meta = probe_media(row['audio_path'], 'audio')
+            self.diagnostics = validate_sync(video_meta, audio_meta, row, sync_cfg)
+        else:
+            video_meta = checked['video']
+            audio_meta = checked['audio']
+            self.diagnostics = dict(checked['diagnostics'])
         self.diagnostics['video_fps'] = self.fps
         self.waveform = load_audio(row['audio_path'], sample_rate)
         self.sample_rate = sample_rate
         decoded_audio_duration = self.waveform.numel() / sample_rate
-        if abs(decoded_audio_duration - audio_meta['duration']) > self.diagnostics['duration_tolerance_seconds']:
+        if checked is None and abs(decoded_audio_duration - audio_meta['duration']) > self.diagnostics['duration_tolerance_seconds']:
             raise ValueError('decoded audio length differs from probed duration')
         # Positive shift means audio begins later on the video's time axis.
         shift = self.diagnostics['audio_shift_seconds']

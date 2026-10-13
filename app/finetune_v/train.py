@@ -216,6 +216,10 @@ def main(args):
     num_workers = cfgs_data.get("num_workers", 0)
     pin_mem = cfgs_data.get("pin_mem", False)
     persistent_workers = cfgs_data.get("persistent_workers", False)
+    val_batch_size = int(cfgs_data.get("val_batch_size", batch_size))
+    val_num_workers = int(cfgs_data.get("val_num_workers", num_workers))
+    if val_batch_size < 1 or val_num_workers < 0:
+        raise ValueError("data.val_batch_size must be positive and data.val_num_workers non-negative")
 
     # -- DATA AUGMENTATION
     cfgs_data_aug = args.get("data_aug", {})
@@ -270,8 +274,11 @@ def main(args):
     )
     train_loader = DataLoader(train_dataset, sampler=train_sampler, shuffle=train_sampler is None, drop_last=False,
                               collate_fn=getattr(train_dataset, 'collate_fn', None), **loader_kwargs)
+    val_loader_kwargs = dict(loader_kwargs)
+    val_loader_kwargs.update(batch_size=val_batch_size, num_workers=val_num_workers,
+                             persistent_workers=bool(persistent_workers and val_num_workers > 0))
     val_loader = DataLoader(val_dataset, sampler=val_sampler, shuffle=False, drop_last=False,
-                            collate_fn=getattr(val_dataset, 'collate_fn', None), **loader_kwargs)
+                            collate_fn=getattr(val_dataset, 'collate_fn', None), **val_loader_kwargs)
     if not len(train_loader):
         raise ValueError("Training DataLoader is empty; reduce data.batch_size or add training samples")
     iterations_per_epoch = len(train_loader)
@@ -466,6 +473,8 @@ def main(args):
             train_truth.extend(labels.detach().cpu().tolist())
             train_outputs.append(outputs.detach().float().cpu().numpy())
 
+        del clips, labels, outputs, loss
+
         if distributed:
             dist.all_reduce(train_stats, op=dist.ReduceOp.SUM)
         should_evaluate = (epoch + 1) % eval_freq == 0 or epoch + 1 == num_epochs
@@ -475,7 +484,12 @@ def main(args):
             val_stats = torch.zeros(2, dtype=torch.float64, device=device)
             val_paths, val_truth, val_outputs = [], [], []
             with torch.no_grad():
-                for batch in val_loader:
+                for batch in tqdm(
+                    val_loader,
+                    disable=not is_main,
+                    desc=f"val {epoch + 1}/{num_epochs}",
+                    ncols=progress_ncols(),
+                ):
                     with torch.autocast(device_type=device.type, dtype=amp_dtype, enabled=mixed_precision):
                         if isinstance(batch, dict) and 'instance_samples' in batch:
                             outputs, labels, paths = predict_instance_batch(batch, lambda window: _task_outputs(
@@ -490,6 +504,8 @@ def main(args):
                     val_paths.extend(paths)
                     val_truth.extend(labels.cpu().tolist())
                     val_outputs.append(outputs.float().cpu().numpy())
+            if len(val_loader):
+                del batch, outputs, labels, loss
             if distributed:
                 dist.all_reduce(val_stats, op=dist.ReduceOp.SUM)
                 gathered = _gather_object(

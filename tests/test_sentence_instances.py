@@ -107,6 +107,22 @@ def test_instance_batch_shape_selection_and_last_sentence_repetition(modality):
     assert validation.dataset.calls == list(range(13))  # no repeated decoding for overlapping windows
 
 
+@pytest.mark.parametrize('modality', ['audio', 'video', 'audio-video'])
+def test_random_validation_decodes_only_one_training_style_window(modality):
+    data = Sentences(modality)
+    validation = SentenceInstanceDataset(data, 8, modality, False, eval_stride=-1)
+    random.seed(7)
+    expected = sorted(random.sample(range(10), 8))
+    random.seed(7)
+    first = validation[0]
+    assert data.calls == expected
+    assert first['windows'] == [list(range(8))]
+    second = validation[1]
+    assert data.calls[8:] == [10, 11, 12]
+    assert second['windows'] == [list(range(8))]
+    assert second['sentences'][2] is second['sentences'][7]
+
+
 def test_sentence_decode_failure_never_changes_instance():
     data = Sentences('audio')
     def fail(index):
