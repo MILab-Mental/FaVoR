@@ -1,0 +1,20 @@
+app: pretrain_va_lejepa
+folder: /home/data/sdd/mental/OUTPUTS/pretrain_va_lejepa/JEPA-e5-latest-C1
+meta:
+  seed: 0
+  dtype: bfloat16
+  auto_resume: true
+  read_checkpoint: null
+  log_every_steps: 10
+  save_every_steps: 5000
+  save_intermediate_checkpoints: true
+ema:
+  enabled: true
+  decay: 0.9999
+  update_every: 32
+  device: cpu
+yamls:
+  data: CONFIGS/data/pretrain/audio-video/lejepa/va-global6s-local2s.yaml
+  model: CONFIGS/models/finetune/audio-video/vitl-emotion2vec-instance-jepa-e5-latest.yaml
+  opt: CONFIGS/optimization/pretrain/audio-video/lejepa/steps100000-warmup10000.yaml
+  loss: CONFIGS/losses/audio-video-lejepa.yaml

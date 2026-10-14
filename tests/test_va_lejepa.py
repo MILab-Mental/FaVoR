@@ -157,6 +157,24 @@ def test_raw_loader_routing(monkeypatch):
     assert calls==['v','a']
 
 
+def test_audio_jepa_backbone_initialization_is_complete(tmp_path):
+    model = tiny_va()
+    state = {key: value + 1 for key, value in model.audio_encoder.backbone.state_dict().items()}
+    path = tmp_path / 'audio_jepa.pt'
+    torch.save({'encoder': {'module.' + key: value for key, value in state.items()},
+                'predictor': {'unused': torch.ones(1)}}, path)
+    cfg = {'init_source': 'audio_jepa', 'audio_jepa_checkpoint': str(path)}
+    report = load_audio_encoder_init(model.audio_encoder, cfg)
+    assert report['loaded_ratio'] == 1.
+    assert report['init_source'] == 'audio_jepa'
+    for key, value in model.audio_encoder.backbone.state_dict().items():
+        assert torch.equal(value, state[key])
+    state.pop(next(iter(state)))
+    torch.save({'encoder': state}, path)
+    with pytest.raises(ValueError, match='incompatible AudioJEPA'):
+        load_audio_encoder_init(model.audio_encoder, cfg)
+
+
 def test_manifest_convert_spaces_and_reject_identity(tmp_path):
     legacy=tmp_path/'legacy.txt'
     legacy.write_text('/a space/x.mp4 /b space/x.wav 0\n/a/y.mp4 /b/z.wav 1\n')
@@ -179,6 +197,7 @@ def test_strict_sync_reject(field,value):
 
 
 def test_va_sync_preflight_checks_all_pairs_once_and_reuses_cache(tmp_path, monkeypatch):
+    import json
     import datasets.va_lejepa.sync_preflight as preflight
     from types import SimpleNamespace
 
@@ -197,8 +216,10 @@ def test_va_sync_preflight_checks_all_pairs_once_and_reuses_cache(tmp_path, monk
                     diagnostics={'duration_tolerance_seconds': .5, 'audio_shift_seconds': 0.})
 
     monkeypatch.setattr(preflight, '_check_pair', check)
-    cache = tmp_path / 'sync.json'
+    cache = tmp_path / 'new' / 'nested' / 'sync.json'
+    assert not cache.exists()
     assert prepare_sync_metadata(datasets, {}, cache, workers=2) == 2
+    assert cache.is_file()
     assert set(calls) == {'train', 'val'}
     assert all('_va_sync_metadata' in row for row in rows)
     prepare_sync_metadata(datasets, {}, cache, rank=1, workers=2)
@@ -206,6 +227,66 @@ def test_va_sync_preflight_checks_all_pairs_once_and_reuses_cache(tmp_path, monk
     (tmp_path / 'val.wav').write_bytes(b'changed audio')
     prepare_sync_metadata(datasets, {}, cache, workers=2)
     assert calls.count('val') == 2 and calls.count('train') == 1
+    # A different task uses only part of the shared dataset, with new settings.
+    # Updating its entry must preserve records belonging to other tasks.
+    prepare_sync_metadata([datasets[0]], {'sample_rate': 8000}, cache, workers=2)
+    payload = json.loads(cache.read_text())
+    assert payload['version'] == 2
+    assert set(payload['pairs']) == {'train', 'val'}
+    assert payload['pairs']['train']['settings']['sample_rate'] == 8000
+    assert payload['pairs']['val']['settings']['sample_rate'] == 16000
+    prepare_sync_metadata([datasets[1]], {}, cache, workers=2)
+    assert calls.count('val') == 2
+    # Adding an unseen pair extends the file, retaining both existing pairs.
+    extra = dict(pair_id='extra', video_path=rows[0]['video_path'], audio_path=rows[0]['audio_path'])
+    prepare_sync_metadata([SimpleNamespace(rows=[extra])], {}, cache, workers=2)
+    assert calls.count('extra') == 1
+    assert set(json.loads(cache.read_text())['pairs']) == {'train', 'val', 'extra'}
+
+
+def test_va_sync_preflight_reuses_legacy_shared_file(tmp_path, monkeypatch):
+    import json
+    from types import SimpleNamespace
+    import datasets.va_lejepa.sync_preflight as preflight
+
+    video, audio = tmp_path / 'x.mp4', tmp_path / 'x.wav'
+    video.write_bytes(b'video')
+    audio.write_bytes(b'audio')
+    row = dict(pair_id='x', video_path=str(video), audio_path=str(audio))
+    entry = dict(signature=preflight._signature(row), video={'duration': 6.}, audio={'duration': 6.},
+                 diagnostics={'av_offset_seconds': 0.})
+    cache = tmp_path / 'legacy.json'
+    cache.write_text(json.dumps(dict(version=1, sample_rate=16000, sync={}, minimum_seconds=.1,
+                                    pairs={'x': entry, 'another_task': entry})))
+    monkeypatch.setattr(preflight, '_check_pair', lambda *args: pytest.fail('legacy cache must be reused'))
+    prepare_sync_metadata([SimpleNamespace(rows=[row])], {}, cache)
+    assert row['_va_sync_metadata']['video']['duration'] == 6.
+    assert set(json.loads(cache.read_text())['pairs']) == {'x', 'another_task'}
+    assert not preflight._matches(row['_va_sync_metadata'], dict(row, av_offset_seconds=.01),
+                                  preflight._signature(row), preflight._settings(16000, {}, .1))
+
+
+def test_va_sync_preflight_file_override_and_mental_default(tmp_path, monkeypatch):
+    from datasets.va_lejepa.sync_preflight import sync_preflight_path
+
+    monkeypatch.chdir(tmp_path)
+    assert sync_preflight_path({'sync_preflight_file': 'OUTPUT/finetune_va/mental/va_sync_preflight.json'},
+                               'OUTPUT/finetune_va/mental/RESULT-total/instance-sentences8') == (
+        tmp_path / 'OUTPUT/finetune_va/mental/va_sync_preflight.json')
+    assert sync_preflight_path({'sync_preflight_file': str(tmp_path / 'custom.json')},
+                              'OUTPUT/finetune_va/mental/RESULT-total') == tmp_path / 'custom.json'
+    assert sync_preflight_path({}, 'OUTPUT/finetune_va/classification/task') == (
+        tmp_path / 'OUTPUT/finetune_va/classification/task/va_sync_preflight.json')
+
+
+@pytest.mark.parametrize('cfg', [{}, {'sync_preflight_file': None}, {'sync_preflight_file': ''},
+                                 {'sync_preflight_file': '   '}])
+def test_va_sync_preflight_empty_path_uses_task_output(tmp_path, monkeypatch, cfg):
+    from datasets.va_lejepa.sync_preflight import sync_preflight_path
+
+    monkeypatch.chdir(tmp_path)
+    assert sync_preflight_path(cfg, 'OUTPUT/finetune_va/mental/RESULT-total/instance-sentences8') == (
+        tmp_path / 'OUTPUT/finetune_va/mental/RESULT-total/instance-sentences8/va_sync_preflight.json')
 
 
 def test_va_decoder_uses_preflight_metadata_without_reprobing(monkeypatch):
@@ -303,7 +384,8 @@ def test_dataset_pair_owner_and_decode_failure(tmp_path):
 
 
 @pytest.mark.parametrize('profile_steps', [0, 2])
-def test_pretrain_entry_accumulation_and_full_resume(tmp_path,monkeypatch,caplog,profile_steps):
+@pytest.mark.parametrize('save_intermediate', [False, True])
+def test_pretrain_entry_accumulation_and_full_resume(tmp_path,monkeypatch,caplog,profile_steps,save_intermediate):
     caplog.set_level('INFO', logger='app.pretrain_va_lejepa.train')
     import app.pretrain_va_lejepa.train as train
     from torch.utils.data import DataLoader, Dataset
@@ -323,7 +405,7 @@ def test_pretrain_entry_accumulation_and_full_resume(tmp_path,monkeypatch,caplog
     monkeypatch.setattr(train,'make_va_lejepa_loader',lambda *args:(None,DataLoader(Samples(),batch_size=1,collate_fn=collate_va_lejepa),Sampler()))
     cfg=dict(folder=str(tmp_path),model={},data={},optimization=dict(total_steps=2,warmup_steps=1,grad_accum_steps=2,
         lr_video_pretrained=1e-4,lr_audio_pretrained=2e-4,lr_new=1e-3),meta=dict(auto_resume=True,log_every_steps=1,save_every_steps=1,
-            profile_steps=profile_steps,profile_save_checkpoint=True),
+            profile_steps=profile_steps,profile_save_checkpoint=True,save_intermediate_checkpoints=save_intermediate),
         ema=dict(enabled=True,update_every=1),loss={'sigreg':{'num_proj':4,'knots':3}})
     train.main(cfg)
     # Emulate history written before the timing column was introduced.
@@ -340,6 +422,14 @@ def test_pretrain_entry_accumulation_and_full_resume(tmp_path,monkeypatch,caplog
     state=torch.load(tmp_path/'latest.pt',weights_only=False)
     assert state['step']==3 and state['optimizer'] and state['ema']
     assert len(state['rng_states'])==1
+    for step in (1, 2, 3):
+        path = tmp_path / f'step-{step}.pt'
+        assert path.exists() == save_intermediate
+        if save_intermediate:
+            saved = torch.load(path, weights_only=False)
+            assert saved['step'] == step and saved['optimizer'] and saved['ema']
+            assert len(saved['rng_states']) == 1
+            assert saved['batch_offset'] > 0
     rows=list(csv.DictReader((tmp_path/'logs/history.csv').open()))
     assert [int(r['step']) for r in rows]==[1,2,3]
     assert rows[0]['step_seconds'] == '' and float(rows[-1]['step_seconds']) > 0

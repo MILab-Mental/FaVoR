@@ -168,6 +168,49 @@ torchrun --nproc_per_node=2 -m app.main \
 `OUTPUT/pretrain_va_lejepa/I3-C1/latest.pt`，需要先完成 VA 预训练或指定已有兼容 checkpoint；
 单模态 checkpoint 不能直接替代。生成过程验证清单和目标值，不执行全量媒体解码 / 同步校验。
 
+VA 微调会在训练前检查当前任务全部训练 / 验证配对，并显示同步检查进度条。
+mental 任务默认共用 `OUTPUT/finetune_va/mental/va_sync_preflight.json`，也可通过
+`--set "data.sync_preflight_file=/实际路径/va_sync_preflight.json"` 指定共享同步文件。
+共享路径统一写在 `CONFIGS/data/finetune/audio-video/sampling/va-6s-8sentences.yaml`
+的 `data.sync_preflight_file` 中，各任务继承该采样配置。如果不配置该字段，或通过
+`--set "data.sync_preflight_file="` 将其设为空，则使用当前训练输出目录下的
+`va_sync_preflight.json`。非空指定路径的文件不存在时，会创建父目录并在该路径生成缓存。
+文件中已有且媒体路径、大小、修改时间、同步设置和音视频偏移仍匹配的配对直接复用；
+缺失或失效的配对重新检查并合并写入，保留其他任务的记录。旧版同步文件仍可复用，
+新增记录时自动升级格式。多个任务同时更新时使用文件锁，训练和验证阶段不再重复探测。
+`data.sync_preflight_workers` 控制首次 / 增量探测并发数，默认 8。
+
+也可用两个单模态 JEPA checkpoint 直接初始化 VA 骨干：将
+`finetune.pretrained_checkpoint=null`，设置视频 `model.video.init_source=vjepa` 与
+`model.video.vjepa_checkpoint`，音频 `model.audio.init_source=audio_jepa` 与
+`model.audio.audio_jepa_checkpoint`。音频要求骨干完整匹配；视频复用 V-JEPA 加载适配。
+此时融合层、实例聚合器和分类头重新初始化。首次实验使用新的输出目录，设置
+`meta.read_checkpoint=null` 和 `meta.auto_resume=false` 可确保从指定单模态权重重新开始。
+
+已配置两个使用视频 JEPA `FaVoR-112px-48f/e5.pt` 和音频 JEPA `FaVoR-2to6s/latest.pt`
+的入口，共用 `CONFIGS/models/finetune/audio-video/vitl-emotion2vec-instance-jepa-e5-latest.yaml`，
+模型结构与两个骨干的初始化路径直接放在同一份 model 配置中：
+
+```bash
+# RESULT-total 监督微调：两个骨干参与训练，融合层与任务层重新初始化。
+torchrun --standalone --nproc_per_node=2 -m app.main \
+  --fname CONFIGS/tasks/finetune/audio-video/mental/RESULT-total-jepa-backbones.yaml \
+  --set data.batch_size=4
+
+# VA-LeJEPA 无监督联合预训练：两个骨干参与训练，融合层与投影头重新初始化。
+torchrun --standalone --nproc_per_node=2 -m app.main \
+  --fname CONFIGS/tasks/pretrain/audio-video/lejepa/jepa-e5-latest.yaml \
+  --set data.batch_size=8
+```
+
+两者输出分别为 `OUTPUT/finetune_va/mental/RESULT-total/instance-sentences8-jepa-backbones/`
+和 `/home/data/sdd/mental/OUTPUTS/pretrain_va_lejepa/JEPA-e5-latest-C1/`，同目录再次启动默认自动续训。
+该联合预训练入口设置 `meta.save_every_steps=5000` 和
+`meta.save_intermediate_checkpoints=true`，每 5000 步以及训练结束时更新 `latest.pt`，
+并保留对应的 `step-<步数>.pt` 完整 checkpoint（包含模型、优化器、EMA 和续训状态）。
+联合预训练沿用现有数据、feature 融合和损失设置，实际默认总步数为 1000000、warmup 为
+10000 步；可通过 `optimization.total_steps` 等命令行参数覆盖。
+
 ## 2. 配置加载与合并机制
 
 入口在 `app/main.py::load_config`：

@@ -280,6 +280,8 @@ def main(args):
             if save_allowed and ((save_every and step % save_every == 0) or step == total):
                 with timing.phase('checkpoint'):
                     _save_all(folder / 'latest.pt', model, optimizer, scaler, ema, step, epoch, args, batch_index + 1)
+                    if meta.get('save_intermediate_checkpoints', False):
+                        _save_all(folder / f'step-{step}.pt', model, optimizer, scaler, ema, step, epoch, args, batch_index + 1)
                     if rank == 0:
                         _write_curves(history, folder / 'logs/metrics_curves.png')
             if timing.enabled:

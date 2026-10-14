@@ -191,6 +191,8 @@ def _coerce_override_value(raw):
         parsed = yaml.safe_load(raw)
     except yaml.YAMLError:
         return raw
+    if parsed is None and raw.strip().lower() in {'null', '~'}:
+        return None
     if isinstance(parsed, (bool, int, float, list, dict)):
         return parsed
     return raw

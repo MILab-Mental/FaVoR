@@ -5,6 +5,7 @@ from pathlib import Path
 import torch
 from models.video_lejepa import load_vjepa_encoder
 from models.audio_lejepa import load_emotion2vec_encoder
+from utils.audio_checkpoint import audio_backbone_state
 
 LOGGER = logging.getLogger(__name__)
 SCHEMA = 'favor.va_lejepa.v1'
@@ -31,6 +32,10 @@ def _load_lejepa(target, path, schema, prefix, weight_source):
         if set(overrides) != expected:
             raise ValueError(f'EMA encoder prefix {prefix!r} is incomplete or incompatible')
         state.update(overrides)
+    return _load_encoder_state(target, state, path, schema, weight_source)
+
+
+def _load_encoder_state(target, state, path, schema, weight_source='encoder'):
     expected = target.state_dict()
     missing = sorted(set(expected) - set(state))
     unexpected = sorted(set(state) - set(expected))
@@ -67,6 +72,14 @@ def load_video_encoder_init(encoder, cfg):
 
 def load_audio_encoder_init(encoder, cfg):
     source = cfg.get('init_source', 'audio_lejepa')
+    if source == 'audio_jepa':
+        if cfg.get('weight_source', 'encoder') != 'encoder':
+            raise ValueError('AudioJEPA initialization requires weight_source=encoder')
+        path = cfg['audio_jepa_checkpoint']
+        checkpoint = torch.load(path, map_location='cpu', weights_only=False, mmap=True)
+        state = strip_ddp(audio_backbone_state(checkpoint))
+        report = _load_encoder_state(encoder.backbone, state, path, 'AudioJEPA')
+        return dict(report, init_source=source)
     if source == 'emotion2vec':
         if cfg.get('weight_source', 'encoder') != 'encoder':
             raise ValueError('emotion2vec init does not support LeJEPA EMA extraction')

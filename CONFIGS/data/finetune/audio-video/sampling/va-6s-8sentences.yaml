@@ -1,7 +1,8 @@
 data:
+  sync_preflight_file: OUTPUT/finetune_va/mental/va_sync_preflight.json
   num_sentence: 8
   sentence_eval_stride: -1
-  batch_size: 1
+  batch_size: 4
   num_workers: 4
   sample_rate: 16000
   # Short paired media is zero-padded; sync remains strict.
