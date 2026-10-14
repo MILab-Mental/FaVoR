@@ -31,6 +31,22 @@ from utils.progress import progress_ncols
 LOGGER = logging.getLogger(__name__)
 
 
+def _configure_file_logging(folder, rank):
+    log_path = (folder / ('train.log' if rank == 0 else f'train-rank{rank}.log')).resolve()
+    for handler in list(LOGGER.handlers):
+        if isinstance(handler, logging.FileHandler):
+            if Path(handler.baseFilename).resolve() == log_path:
+                break
+            LOGGER.removeHandler(handler)
+            handler.close()
+    else:
+        handler = logging.FileHandler(log_path, encoding='utf-8')
+        handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'))
+        LOGGER.addHandler(handler)
+    LOGGER.setLevel(logging.INFO)
+    LOGGER.propagate = rank == 0
+
+
 class EvaluationSampler(Sampler):
     """Evaluate each sample exactly once, without DistributedSampler padding."""
     def __init__(self, dataset, rank, world):
@@ -196,7 +212,10 @@ def main(args):
         torch.cuda.set_device(device)
     folder = Path(args['folder'])
     (folder / 'logs').mkdir(parents=True, exist_ok=True)
+    _configure_file_logging(folder, rank)
     resume = meta.get('read_checkpoint') or (folder / 'latest.pt' if meta.get('auto_resume', True) and (folder / 'latest.pt').exists() else None)
+    LOGGER.info('VA finetune rank=%d/%d task=%s output=%s resume=%s pretrained_checkpoint=%s',
+                rank, world, task, folder, resume, cfg.get('pretrained_checkpoint'))
     va = _initialize_va(args['model'], data, cfg, resume, rank)
     model = VAFinetuner(va, 1 if task == 'regression' else classes, cfg).to(device)
     if distributed:

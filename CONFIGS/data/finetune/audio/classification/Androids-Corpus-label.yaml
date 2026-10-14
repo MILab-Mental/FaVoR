@@ -1,7 +1,7 @@
 # 3_Androids-Corpus_LA.csv :: label :: classification
 data:
   datasets:
-    - DATASET/splits-0901/3_Androids-Corpus_LA.csv
+    - DATASET/splits-0901/csvs/3_Androids-Corpus_LA.csv
   task: classification
   num_class: 2
   label_column: label

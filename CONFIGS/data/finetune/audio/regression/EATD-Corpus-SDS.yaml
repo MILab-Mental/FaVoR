@@ -1,6 +1,6 @@
 # 3_EATD-Corpus_SA.csv :: SDS :: regression
 data:
   datasets:
-    - DATASET/splits-0901/3_EATD-Corpus_SA.csv
+    - DATASET/splits-0901/csvs/3_EATD-Corpus_SA.csv
   task: regression
   label_column: SDS

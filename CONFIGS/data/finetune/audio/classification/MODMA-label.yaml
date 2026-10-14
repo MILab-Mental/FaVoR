@@ -1,7 +1,7 @@
 # 3_MODMA_SA.csv :: label :: classification
 data:
   datasets:
-    - DATASET/splits-0901/3_MODMA_SA.csv
+    - DATASET/splits-0901/csvs/3_MODMA_SA.csv
   task: classification
   num_class: 2
   label_column: label

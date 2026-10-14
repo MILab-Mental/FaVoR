@@ -244,6 +244,16 @@ def test_va_sync_preflight_checks_all_pairs_once_and_reuses_cache(tmp_path, monk
     assert set(json.loads(cache.read_text())['pairs']) == {'train', 'val', 'extra'}
 
 
+@pytest.mark.parametrize('rank', [0, 1])
+def test_va_sync_preflight_missing_media_fails_on_every_rank(tmp_path, rank):
+    from types import SimpleNamespace
+
+    row = dict(pair_id='missing', video_path=str(tmp_path / 'missing.mp4'),
+               audio_path=str(tmp_path / 'missing.wav'))
+    with pytest.raises(RuntimeError, match='pair_id=missing.*missing.mp4'):
+        prepare_sync_metadata([SimpleNamespace(rows=[row])], {}, tmp_path / 'cache.json', rank=rank)
+
+
 def test_va_sync_preflight_reuses_legacy_shared_file(tmp_path, monkeypatch):
     import json
     from types import SimpleNamespace

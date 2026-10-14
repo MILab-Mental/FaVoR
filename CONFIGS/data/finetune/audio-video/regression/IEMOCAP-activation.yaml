@@ -3,6 +3,6 @@ data:
   label_column: activation
   num_class: 1
   datasets:
-  - DATASET/splits-0901/2_IEMOCAP_SV.csv
+  - DATASET/splits-0901/csvs/2_IEMOCAP_SV.csv
   datasets_weights:
   - 1

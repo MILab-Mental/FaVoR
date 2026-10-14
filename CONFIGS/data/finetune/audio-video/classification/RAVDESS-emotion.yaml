@@ -3,6 +3,6 @@ data:
   label_column: emotion
   num_class: 8
   datasets:
-  - DATASET/splits-0901/2_RAVDESS_SV.csv
+  - DATASET/splits-0901/csvs/2_RAVDESS_SV.csv
   datasets_weights:
   - 1

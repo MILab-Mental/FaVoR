@@ -280,7 +280,12 @@ def process_main(rank, fname, world_size, devices, local_rank=None, overrides=No
     # Launch the app with loaded config
     try:
         app_main(params["app"], args=params)
-    finally:
+    except BaseException:
+        # Let torchrun terminate peer ranks on failure. Collective cleanup can
+        # hang if a peer is waiting for preprocessing or a cache update.
+        logger.exception("Application failed (rank=%s): %s", rank, params["app"])
+        raise
+    else:
         # 干净退出分布式进程组，消除 NCCL 的 destroy_process_group 警告。
         import torch.distributed as dist
 

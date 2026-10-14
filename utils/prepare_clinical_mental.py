@@ -16,7 +16,7 @@ from utils.instance_finetune_configs import select_instance_presets
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SOURCE = Path('/home/data/sdb/基座模型数据集/3心理数据集/临床/split-0901.csv')
-SPLIT = Path('DATASET/splits-0901/3_私有临床数据_LV.csv')
+SPLIT = Path('DATASET/splits-0901/csvs/3_私有临床数据_LV.csv')
 PAIRED = Path('DATASET/merged/mental/clinical_canonical.csv')
 
 

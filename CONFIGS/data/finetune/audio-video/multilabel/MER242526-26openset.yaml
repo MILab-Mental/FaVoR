@@ -3,6 +3,6 @@ data:
   label_column: 26openset
   num_class: 23
   datasets:
-  - DATASET/splits-0901/2_MER242526_SV.csv
+  - DATASET/splits-0901/csvs/2_MER242526_SV.csv
   datasets_weights:
   - 1

@@ -1,6 +1,6 @@
 # 2_CNSCED_SA.csv :: intensity :: regression
 data:
   datasets:
-    - DATASET/splits-0901/2_CNSCED_SA.csv
+    - DATASET/splits-0901/csvs/2_CNSCED_SA.csv
   task: regression
   label_column: intensity

@@ -1,6 +1,6 @@
 # 3_CMDC_LA.csv :: PHQ :: regression
 data:
   datasets:
-    - DATASET/splits-0901/3_CMDC_LA.csv
+    - DATASET/splits-0901/csvs/3_CMDC_LA.csv
   task: regression
   label_column: PHQ

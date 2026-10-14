@@ -236,7 +236,7 @@ GPU；rank 崩溃会立即报错并终止整组，不用再干等 NCCL 默认 60
 四种 backbone 初始化，以及分类、回归和多标签微调。
 
 配置入口位于 `CONFIGS/tasks/pretrain/audio-video/lejepa/` 和 `CONFIGS/tasks/finetune/audio-video/`。
-音视频预训练继续使用带表头的 canonical paired manifest。微调的三种模态统一通过 `data.datasets` 指定 `DATASET/splits-0901/xxx.csv`；媒体根目录按文件路径从 `CONFIGS/datasets.csv` 查询，无需填写 `rootpaths`。下游分类标签沿用 FAVOR 的 one-based 约定。
+音视频预训练继续使用带表头的 canonical paired manifest。微调的三种模态统一通过 `data.datasets` 指定 `DATASET/splits-0901/csvs/xxx.csv`；媒体根目录按文件路径从 `CONFIGS/datasets.csv` 查询，无需填写 `rootpaths`。下游分类标签沿用 FAVOR 的 one-based 约定。
 默认主配置需要已训练的 VIDEO-LeJEPA/AUDIO-LeJEPA 权重；I0 配置使用官方 V-JEPA/emotion2vec。
 
 微调数据片段集中在 `CONFIGS/data/finetune/audio-video/`，供 audio、video、audio-video 共用；

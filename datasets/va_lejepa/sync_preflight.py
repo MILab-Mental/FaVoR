@@ -149,9 +149,7 @@ def prepare_sync_metadata(datasets, data_cfg, cache_path, rank=0, workers=8):
             try:
                 signature = _signature(row)
             except OSError as error:
-                if rank != 0:
-                    stale.append(pair_id)
-                    continue
+                LOGGER.error('VA sync preflight pair_id=%s: %s', pair_id, error)
                 raise RuntimeError(f'VA sync preflight pair_id={pair_id}: {error}') from error
             signatures[pair_id] = signature
             entry = cached.get(pair_id)

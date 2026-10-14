@@ -93,7 +93,7 @@ DDP 每个 batch 取各 rank 有效样本数的最小值；任一 rank 没有有
 ### 临床 mental 微调任务
 
 临床数据源为 `/home/data/sdb/基座模型数据集/3心理数据集/临床/split-0901.csv`，
-项目内保留文件名 `DATASET/splits-0901/3_私有临床数据_LV.csv`，内容已替换为新数据源。
+项目内保留文件名 `DATASET/splits-0901/csvs/3_私有临床数据_LV.csv`，内容已替换为新数据源。
 `CONFIGS/datasets.csv` 中的 `original_csv_path` 同时指向该新文件。
 
 38 个任务分别提供 audio、video、audio-video 三种入口，共 114 份任务配置，共用 38 份数据片段：
@@ -146,7 +146,7 @@ torchrun --nproc_per_node=2 -m app.main \
 旧路径通过 `path-mapping.csv` 分别兼容映射到 RAVDESS-emotion、MER242526-26openset、
 AVEC2014-PHQ；更早的 `vafinetune` 路径也直接映射到对应具体任务。
 
-三种模态的数据片段统一使用 `datasets: [DATASET/splits-0901/xxx.csv]`。
+三种模态的数据片段统一使用 `datasets: [DATASET/splits-0901/csvs/xxx.csv]`。
 `CONFIGS/datasets.csv` 第一列 `split_csv` 保存同样的完整项目相对路径，第二列
 `root_path` 指定媒体根目录。移动媒体目录只需修改第二列；移动 split 文件时同步修改
 第一列和数据片段中的 `datasets`。audio-video 在加载原始 split 时保留标签和划分列，
@@ -167,6 +167,9 @@ torchrun --nproc_per_node=2 -m app.main \
 需运行生成命令。默认 checkpoint 仍为 VA 预训练入口产出的
 `OUTPUT/pretrain_va_lejepa/I3-C1/latest.pt`，需要先完成 VA 预训练或指定已有兼容 checkpoint；
 单模态 checkpoint 不能直接替代。生成过程验证清单和目标值，不执行全量媒体解码 / 同步校验。
+
+VA 微调在输出目录写入 `train.log`，记录初始化 / 续训来源、同步检查摘要和每轮训练 / 验证指标。
+非主进程写入各自的 `train-rank<rank>.log`；续训追加日志，主进程仍在终端输出日志。
 
 VA 微调会在训练前检查当前任务全部训练 / 验证配对，并显示同步检查进度条。
 mental 任务默认共用 `OUTPUT/finetune_va/mental/va_sync_preflight.json`，也可通过
@@ -482,7 +485,7 @@ flash / memory-efficient attention **没有二阶导**，故该 pass 会临时�
 
 ## 8. 微调任务总览（tasks/）
 
-`DATASET/splits-0901/tasks.json` 定义了 **33 条**下游任务，覆盖 **20 个**数据集。本节为全部
+`DATASET/splits-0901/csvs/tasks.json` 定义了 **33 条**下游任务，覆盖 **20 个**数据集。本节为全部
 33 个语义任务都建立了音频入口；其中 15 条同时具有视频入口。
 
 - **视频（15 条）** → `tasks/finetune/video/{classification,regression,multilabel}/<任务名>.yaml`（`app: finetune_v`，已实现）

@@ -3,6 +3,6 @@ data:
   num_class: 2
   label_column: SCL-ParanoidIdeation
   datasets:
-  - DATASET/splits-0901/3_私有临床数据_LV.csv
+  - DATASET/splits-0901/csvs/3_私有临床数据_LV.csv
   datasets_weights:
   - 1

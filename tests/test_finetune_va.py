@@ -5,6 +5,34 @@ from models.va_lejepa.finetune import VAFinetuner
 from app.finetune_va.train import _loss, _epoch_summary, task_metrics, EvaluationSampler
 
 
+@pytest.mark.parametrize('rank', [0, 1])
+def test_file_logging_appends_without_duplicates_and_switches_output(tmp_path, monkeypatch, rank):
+    import logging
+    import app.finetune_va.train as train
+
+    logger = logging.Logger('va-file-test')
+    monkeypatch.setattr(train, 'LOGGER', logger)
+    filename = 'train.log' if rank == 0 else 'train-rank1.log'
+    try:
+        train._configure_file_logging(tmp_path, rank)
+        logger.info('first run')
+        train._configure_file_logging(tmp_path, rank)
+        logger.info('resumed run')
+        text = (tmp_path / filename).read_text()
+        assert text.count('first run') == text.count('resumed run') == 1
+        assert logger.propagate == (rank == 0)
+        other = tmp_path / 'other'
+        other.mkdir()
+        train._configure_file_logging(other, rank)
+        logger.info('other experiment')
+        assert 'other experiment' not in (tmp_path / filename).read_text()
+        assert 'other experiment' in (other / filename).read_text()
+    finally:
+        for handler in list(logger.handlers):
+            logger.removeHandler(handler)
+            handler.close()
+
+
 @pytest.mark.parametrize('task,expected', [
     ('classification', 'epoch=2 train_loss=0.1000 val_loss=0.2000 train_acc=0.9000 val_acc=0.8000 train_f1=0.7000 val_f1=0.6000 best=0.5000'),
     ('multi_label_classification', 'epoch=2 train_loss=0.1000 val_loss=0.2000 train_subset_acc=0.9000 val_subset_acc=0.8000 train_f1=0.7000 val_f1=0.6000 val_hamming=0.3000 best=0.5000'),
@@ -105,6 +133,9 @@ def test_finetune_entry_best_latest_predictions_resume(tmp_path,monkeypatch,task
     state=torch.load(tmp_path/'ft/latest.pt',weights_only=False)
     assert state['epoch']==2 and state['step']==2
     assert (tmp_path/'ft/best.pt').exists() and (tmp_path/'ft/logs/predictions.csv').exists()
+    text = (tmp_path / 'ft/train.log').read_text()
+    assert text.count('epoch=1 ') == text.count('epoch=2 ') == 1
+    assert 'VA finetune rank=0/1' in text
     assert all('val_loss' in row and ('train_mae' if task=='regression' else 'train_f1_macro') in row
                for row in state['history'])
     logs = tmp_path/'ft/logs'

@@ -1,7 +1,7 @@
 # 2_EMNS_SA.csv :: emotion :: classification
 data:
   datasets:
-    - DATASET/splits-0901/2_EMNS_SA.csv
+    - DATASET/splits-0901/csvs/2_EMNS_SA.csv
   task: classification
   num_class: 8
   label_column: emotion

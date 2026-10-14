@@ -1,7 +1,7 @@
 """Prepare paired manifests and concrete configurations for all VA downstream tasks.
 
 Run from the repository root: python -m utils.prepare_va_finetune
-Requires the existing DATASET/splits-0901 CSVs (refresh clinical data first with
+Requires the existing DATASET/splits-0901/csvs CSVs (refresh clinical data first with
 python -m utils.prepare_clinical_mental when needed).
 """
 import csv
