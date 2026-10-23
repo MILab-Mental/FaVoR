@@ -1,0 +1,165 @@
+data:
+  sync_preflight_file: /home/data/sdc/FAVOR/autoresearch/oct15/va_sync_preflight.json
+  num_sentence: 8
+  sentence_eval_stride: -1
+  batch_size: 10
+  num_workers: 4
+  sample_rate: 16000
+  short_policy: zero_pad
+  minimum_seconds: 0.1
+  global_seconds: 6.0
+  video_fps: 8
+  short_video_full_frames: true
+  group_by_lengths: false
+  video_frames_global: 48
+  video_global_size: 112
+  normalize_audio: true
+  on_decode_error: error
+  sync:
+    strict: true
+    require_same_source_id: true
+    require_same_start: true
+    require_same_duration: true
+    duration_tolerance_seconds: 0.5
+    duration_tolerance_frames: 2
+    offset_tolerance_seconds: 0.1
+    on_mismatch: error
+  task: classification
+  num_class: 2
+  label_column: RESULT-total
+  datasets:
+  - "DATASET/splits-0901/csvs/3_\u79C1\u6709\u4E34\u5E8A\u6570\u636E_LV.csv"
+  datasets_weights:
+  - 1
+model:
+  video:
+    name: vit_large
+    patch_size: 16
+    tubelet_size: 1
+    token_drop_rate: 0.0
+    attn_mode: block_causal
+    use_rope: true
+    use_sdpa: true
+    use_activation_checkpointing: true
+    init_source: vjepa
+    weight_source: encoder
+    vjepa_checkpoint: /home/data/sdd/mental/OUTPUTS/pretrain_v/vitl16/FaVoR-112px-48f/e5.pt
+  audio:
+    backbone:
+      mode: emotion2vec
+      conv_pos_depth: 5
+      conv_pos_width: 95
+      conv_pos_groups: 16
+      prenet_depth: 4
+      num_extra_tokens: 10
+      learned_alibi_scale: false
+    extractor:
+      conv_layers:
+      - - 512
+        - 10
+        - 5
+      - - 512
+        - 3
+        - 2
+      - - 512
+        - 3
+        - 2
+      - - 512
+        - 3
+        - 2
+      - - 512
+        - 3
+        - 2
+      - - 512
+        - 2
+        - 2
+      - - 512
+        - 2
+        - 2
+      mode: layer_norm
+      conv_bias: false
+      dropout: 0.0
+    encoder:
+      depth: 8
+      d_model: 1024
+      nhead: 16
+      dim_feedforward: 4096
+      dropout: 0.0
+      attention_dropout: 0.0
+      activation_dropout: 0.0
+      post_mlp_dropout: 0.0
+      qkv_bias: true
+      layer_norm_first: false
+      norm_eps: 1.0e-06
+      ffn_targets: true
+    pooling:
+      type: extra_token
+      index: 0
+    init_source: audio_jepa
+    weight_source: encoder
+    audio_jepa_checkpoint: /home/data/sdd/mental/OUTPUTS/pretrain_a/emotion2vec-plus-large/FaVoR-2to6s/latest.pt
+  audio_gradient_checkpointing: true
+  fusion:
+    enabled:
+    - feature
+    bridge: concat_transformer
+    common_dim: 768
+    projection_dim: 256
+    projector_hidden_dim: 2048
+    modality_embedding: true
+    temporal_embedding: sincos
+    fuse_token: true
+    input_adapter:
+      hidden_dim: 1536
+    early:
+      depth: 4
+      nhead: 12
+      max_video_tokens_per_time: 16
+      max_audio_tokens_per_time: 4
+      loss_weight: 1.0
+      gradient_checkpointing: true
+    feature:
+      depth: 4
+      nhead: 12
+      loss_weight: 1.0
+      gradient_checkpointing: true
+    late:
+      depth: 2
+      nhead: 12
+      loss_weight: 1.0
+      gradient_checkpointing: true
+  instance_aggregator:
+    pooling: attention
+    hidden_dim: 256
+    dropout: 0.0
+    head_dropout: 0.0
+optimization:
+  epochs: 5
+  lr: 0.00025
+  warmup_steps: 0
+  weight_decay: 0.04
+  clip_grad_norm: 1.0
+  loss: {}
+  betas:
+  - 0.9
+  - 0.999
+app: finetune_va
+folder: /home/data/sdc/FAVOR/autoresearch/oct15/init40k-bestcfg-total/total
+meta:
+  seed: 0
+  auto_resume: false
+  read_checkpoint: null
+finetune:
+  pretrained_checkpoint: /home/data/sdd/mental/OUTPUTS/pretrain_va_lejepa/JEPA-e5-latest-C1/step-40000.pt
+  branch_aggregation: separate_logits
+  freeze_video_encoder: false
+  freeze_audio_encoder: false
+  freeze_fusion_adapter: false
+  video_lr_scale: 0.05
+  audio_lr_scale: 0.04
+  fusion_lr_scale: 0.2
+  head_lr_scale: 1.0
+  early_stopping_patience: 2
+  best_metric: f1_macro
+  best_metric_mode: max
+  branch_loss_weight: 0.0
