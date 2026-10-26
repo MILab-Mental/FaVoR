@@ -26,6 +26,7 @@ from utils.classification_metrics import (
 from datasets.common.instances import as_sentence_instances
 from datasets.common.instances import sentence_identity
 from utils.instance_evaluation import predict_instance_batch
+from utils.early_stopping import early_stopping_patience
 from utils.progress import progress_ncols
 
 LOGGER = logging.getLogger(__name__)
@@ -195,6 +196,7 @@ def _initialize_va(model_cfg, data_cfg, cfg, resume=None, rank=0):
 def main(args):
     distributed, rank, world = _state()
     data, cfg, opt = dict(args['data']), dict(args.get('finetune', {})), dict(args['optimization'])
+    patience = early_stopping_patience(args)
     if 'instance_aggregator' in args['model']:
         cfg['instance_aggregator'] = args['model']['instance_aggregator']
     if int(data.get('num_sentence', 0)) > 0 and 'instance_aggregator' not in cfg:
@@ -261,6 +263,9 @@ def main(args):
         if checkpoint.get('rng_states'):
             _restore_rng(checkpoint['rng_states'][rank])
     for epoch in range(start_epoch, epochs):
+        if patience > 0 and stale >= patience:
+            LOGGER.info("Early stopping: %d consecutive validation evaluations without improvement (patience=%d)", stale, patience)
+            break
         sampler.set_epoch(epoch)
         train_dataset.epoch = epoch
         model.train()
@@ -351,8 +356,8 @@ def main(args):
         _save_all(folder / 'latest.pt', model, optimizer, scaler, None, step, epoch + 1, args, 0, **extra)
         if improved:
             _save_all(folder / 'best.pt', model, optimizer, scaler, None, step, epoch + 1, args, 0, **extra)
-        patience = int(cfg.get('early_stopping_patience', 0))
         if patience > 0 and stale >= patience:
+            LOGGER.info("Early stopping: %d consecutive validation evaluations without improvement (patience=%d)", stale, patience)
             break
     if distributed:
         dist.barrier()

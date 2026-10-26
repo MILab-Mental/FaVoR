@@ -42,3 +42,6 @@ Thumbs.db
 
 # ---- 日志 ----
 *.log
+
+# autoresearch 相关文件
+autoresearch/

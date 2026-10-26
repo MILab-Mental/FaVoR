@@ -41,7 +41,7 @@ def _train_worker(rank, backend, init_file, folder, manifest):
                       sample_rate=100, process_seconds=2, num_clips=1,
                       num_sentence=8, sentence_eval_stride=1, batch_size=1,
                       num_workers=1, persistent_workers=True, loader_timeout=60),
-            optimization=dict(epochs=2, head_lr=.001, backbone_lr=.001, final_lr=0),
+            optimization=dict(early_stopping_patience=1, epochs=4, head_lr=.001, backbone_lr=.001, final_lr=0),
             model=dict(
                 backbone=dict(mode='emotion2vec', conv_pos_depth=1, conv_pos_width=3,
                               conv_pos_groups=2, prenet_depth=1, num_extra_tokens=2),
@@ -53,6 +53,12 @@ def _train_worker(rank, backend, init_file, folder, manifest):
         # This fixture starts from random weights; checkpoint loading is
         # covered separately by the existing fine-tuning tests.
         train.load_audio_backbone = lambda *a, **k: None
+        original_metrics = train.classification_metrics
+        def constant_score(*args, **kwargs):
+            result = original_metrics(*args, **kwargs)
+            result[0]['f1_macro'] = .5
+            return result
+        train.classification_metrics = constant_score
         original_run_epoch = train._run_epoch
         original_gather = train._gather
         def run_epoch(model, loader, criterion, optimizer, scaler, device, task, training, *args, **kwargs):
@@ -94,6 +100,7 @@ def test_two_rank_audio_workers_training_validation_and_gather(tmp_path, backend
     mp.spawn(_train_worker, args=(backend, str(tmp_path / 'init'), str(folder), str(manifest)),
              nprocs=2, join=True)
     checkpoint = torch.load(folder / 'latest.pt', map_location='cpu', weights_only=False)
+    assert checkpoint['stale_epochs'] == 1
     assert checkpoint['epoch'] == 2
     assert len(checkpoint['history']) == 2
     with (folder / 'logs/eval_best_predict.csv').open() as handle:

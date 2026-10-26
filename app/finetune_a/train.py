@@ -34,6 +34,7 @@ from utils.classification_metrics import (
     write_predictions_csv,
     write_regression_best_reports,
 )
+from utils.early_stopping import early_stopping_patience, stale_epochs_from_history
 from utils.progress import progress_ncols
 from utils.instance_evaluation import predict_instance_batch
 from torch.utils.data import default_collate
@@ -235,13 +236,13 @@ def _regression_metrics(predictions, targets):
 
 
 def _checkpoint(path, model, optimizer, scheduler, epoch, best_score, history, args,
-                grokfast_grads=None):
+                grokfast_grads=None, stale_epochs=0):
     torch.save({
         "schema_version": 2, "modality": "audio", "stage": "finetune",
         "epoch": epoch, "encoder": _raw(model).backbone.state_dict(),
         "task_head": _raw(model).head.state_dict(), "optimizer": optimizer.state_dict(),
         "scheduler": scheduler.state_dict(), "best_score": best_score,
-        "history": history, "grokfast_grads": grokfast_grads, "args": args,
+        "history": history, "stale_epochs": stale_epochs, "grokfast_grads": grokfast_grads, "args": args,
     }, path)
 
 
@@ -410,6 +411,8 @@ def main(args):
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizer, T_max=max(1, epochs), eta_min=float(opt_cfg.get("final_lr", 0.0))
     )
+    patience = early_stopping_patience(args)
+    stale = 0
     start_epoch = 0
     higher_is_better = task != "regression"
     best_score = -math.inf if higher_is_better else math.inf
@@ -420,6 +423,8 @@ def main(args):
         start_epoch = int(checkpoint["epoch"])
         best_score = float(checkpoint.get("best_score", best_score))
         history = checkpoint.get("history", [])
+        stale = int(checkpoint.get("stale_epochs", stale_epochs_from_history(
+            history, "val_f1_macro" if higher_is_better else "val_rmse", higher_is_better)))
         if grokfast_enabled:
             grokfast_grads = _grokfast_state_for_scope(
                 checkpoint.get("grokfast_grads"), grokfast_scope,
@@ -473,6 +478,9 @@ def main(args):
         )
 
     for epoch in range(start_epoch, epochs):
+        if patience > 0 and stale >= patience:
+            LOGGER.info("Early stopping: %d consecutive validation evaluations without improvement (patience=%d)", stale, patience)
+            break
         if train_sampler is not None:
             train_sampler.set_epoch(epoch)
         train_result, grokfast_grads = _run_epoch(
@@ -535,6 +543,7 @@ def main(args):
                 score = row["val_rmse"]
                 probabilities = predictions
             improved = score > best_score if higher_is_better else score < best_score
+            stale = 0 if improved else stale + 1
             if improved:
                 best_score = score
                 if task == "classification":
@@ -581,11 +590,11 @@ def main(args):
             if improved:
                 _checkpoint(
                     folder / "best.pt", model, optimizer, scheduler,
-                    epoch + 1, best_score, history, args, grokfast_grads=grokfast_grads,
+                    epoch + 1, best_score, history, args, grokfast_grads=grokfast_grads, stale_epochs=stale,
                 )
             _checkpoint(
                 latest_path, model, optimizer, scheduler,
-                epoch + 1, best_score, history, args, grokfast_grads=grokfast_grads,
+                epoch + 1, best_score, history, args, grokfast_grads=grokfast_grads, stale_epochs=stale,
             )
             if task == "classification":
                 LOGGER.info(
@@ -612,6 +621,9 @@ def main(args):
                 )
         if distributed:
             LOGGER.info("rank=%d epoch=%d waiting for rank 0 validation and checkpoint", rank, epoch + 1)
+            stop_state = [stale if is_main else None]
+            dist.broadcast_object_list(stop_state, src=0, group=validation_group)
+            stale = stop_state[0]
             dist.barrier(group=validation_group)
             LOGGER.info("rank=%d epoch=%d validation complete", rank, epoch + 1)
     if validation_group is not None:

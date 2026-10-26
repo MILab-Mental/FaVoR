@@ -35,6 +35,7 @@ from utils.classification_metrics import (
     write_predictions_csv,
     write_regression_best_reports,
 )
+from utils.early_stopping import early_stopping_patience, stale_epochs_from_history
 from utils.progress import progress_ncols
 from utils.instance_evaluation import predict_instance_batch
 
@@ -102,7 +103,7 @@ def _restore_checkpoint(path, encoder, task_head, optimizer, scaler, scheduler, 
 
 
 def _save_checkpoint(path, epoch, encoder, task_head, optimizer, scaler, scheduler, wd_scheduler,
-                     best_score, history, args, grokfast_grads=None):
+                     best_score, history, args, grokfast_grads=None, stale_epochs=0):
     state = {
         "epoch": epoch,
         "encoder": _unwrap(encoder).state_dict(),
@@ -112,7 +113,7 @@ def _save_checkpoint(path, epoch, encoder, task_head, optimizer, scaler, schedul
         "scheduler_step": scheduler._step,
         "wd_scheduler_step": wd_scheduler._step,
         "best_score": best_score,
-        "history": history,
+        "history": history, "stale_epochs": stale_epochs,
         "grokfast_grads": grokfast_grads,
         "args": args,
     }
@@ -354,6 +355,8 @@ def main(args):
 
     latest_path = folder / "latest.pt"
     higher_is_better = task in {"classification", "multi_label_classification"}
+    patience = early_stopping_patience(args)
+    stale = 0
     start_epoch, best_score, history = 0, float("-inf") if higher_is_better else float("inf"), []
     grokfast_grads = None
     if cfgs_meta.get("load_checkpoint", True) and latest_path.is_file() and not cfgs_meta.get("reset_epoch", False):
@@ -361,6 +364,8 @@ def main(args):
         start_epoch = int(checkpoint["epoch"])
         best_score = float(checkpoint.get("best_score", best_score))
         history = checkpoint.get("history", [])
+        stale = int(checkpoint.get("stale_epochs", stale_epochs_from_history(
+            history, "val_f1_macro" if higher_is_better else "val_rmse", higher_is_better)))
         if grokfast_enabled:
             grokfast_grads = checkpoint.get("grokfast_grads")
         if is_main:
@@ -427,6 +432,9 @@ def main(args):
     eval_freq = max(1, int(cfgs_meta.get("eval_freq", 1)))
     save_every_freq = int(cfgs_meta.get("save_every_freq", -1))
     for epoch in range(start_epoch, num_epochs):
+        if patience > 0 and stale >= patience:
+            LOGGER.info("Early stopping: %d consecutive validation evaluations without improvement (patience=%d)", stale, patience)
+            break
         if train_sampler is not None:
             train_sampler.set_epoch(epoch)
         if frozen_encoder:
@@ -590,6 +598,7 @@ def main(args):
                              "val_mae": epoch_metrics["val_mae"], "val_rmse": epoch_metrics["val_rmse"],
                              "val_r2": val_r2, "val_adjusted_r2": val_adjusted_r2},
                         )
+                stale = 0 if improved else stale + 1
                 history.append(epoch_metrics)
                 write_history_csv(history, logs_dir / "history.csv")
                 save_metric_curves(history, logs_dir / "metrics_curves.png")
@@ -597,7 +606,7 @@ def main(args):
                     best_score = score
                     _save_checkpoint(folder / "best.pt", epoch + 1, encoder, task_head, optimizer, scaler,
                                      scheduler, wd_scheduler, best_score, history, args,
-                                     grokfast_grads=grokfast_grads)
+                                     grokfast_grads=grokfast_grads, stale_epochs=stale)
                 if task == "classification":
                     LOGGER.info(
                         "epoch=%d train_loss=%.4f val_loss=%.4f train_acc=%.4f val_acc=%.4f train_f1=%.4f val_f1=%.4f best=%.4f",
@@ -631,12 +640,15 @@ def main(args):
         if is_main:
             _save_checkpoint(latest_path, epoch + 1, encoder, task_head, optimizer, scaler, scheduler,
                              wd_scheduler, best_score, history, args,
-                             grokfast_grads=grokfast_grads)
+                             grokfast_grads=grokfast_grads, stale_epochs=stale)
             if save_every_freq > 0 and (epoch + 1) % save_every_freq == 0:
                 _save_checkpoint(folder / f"e{epoch + 1}.pt", epoch + 1, encoder, task_head,
                                  optimizer, scaler, scheduler, wd_scheduler, best_score, history, args,
-                                 grokfast_grads=grokfast_grads)
+                                 grokfast_grads=grokfast_grads, stale_epochs=stale)
         if distributed:
+            stop_state = torch.tensor(stale if is_main else 0, device=device, dtype=torch.long)
+            dist.broadcast(stop_state, src=0)
+            stale = int(stop_state.item())
             dist.barrier()
 
     return {

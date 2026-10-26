@@ -286,8 +286,9 @@ def test_two_rank_training_and_unequal_window_evaluation(tmp_path):
             assert identities == ['/media/first', '/media/second']
 
 
+@pytest.mark.parametrize('early_stop', [False, True])
 @pytest.mark.parametrize('modality', ['audio', 'video', 'audio-video'])
-def test_training_entry_instance_reports_checkpoint_and_resume(tmp_path, monkeypatch, modality):
+def test_training_entry_instance_reports_checkpoint_and_resume(tmp_path, monkeypatch, modality, early_stop):
     import app.finetune_a.train as audio
     import app.finetune_v.train as video
     import app.finetune_va.train as va
@@ -318,6 +319,15 @@ def test_training_entry_instance_reports_checkpoint_and_resume(tmp_path, monkeyp
         config['finetune'] = dict(pretrained_checkpoint=str(pretrained))
         monkeypatch.setattr(train, 'build_va_lejepa', lambda *a, **k: tiny_va())
         monkeypatch.setattr(train, 'AVCSVDataset', lambda cfg, split, training: Sentences('audio-video'))
+        monkeypatch.setattr(train, 'prepare_sync_metadata', lambda *a, **k: 0)
+    if early_stop:
+        config['optimization']['early_stopping_patience'] = 1
+        original_metrics = train.classification_metrics
+        def constant_score(*args, **kwargs):
+            result = original_metrics(*args, **kwargs)
+            result[0]['f1_macro'] = .5
+            return result
+        monkeypatch.setattr(train, 'classification_metrics', constant_score)
     train.main(config)
     state = torch.load(folder / 'latest.pt', weights_only=False)
     assert (folder / 'best.pt').is_file()
@@ -327,10 +337,14 @@ def test_training_entry_instance_reports_checkpoint_and_resume(tmp_path, monkeyp
     assert len(rows) == 2  # two instances, not thirteen sentences or four windows
     weights = state['model'] if modality == 'audio-video' else state['task_head']
     assert any('instance_aggregator' in key for key in weights)
-    config['optimization']['epochs'] = 2
+    config['optimization']['epochs'] = 5 if early_stop else 2
     train.main(config)
     resumed = torch.load(folder / 'latest.pt', weights_only=False)
     assert resumed['epoch'] == 2
+    if early_stop:
+        assert resumed['stale_epochs'] == 1
+        train.main(config)
+        assert torch.load(folder / 'latest.pt', weights_only=False)['epoch'] == 2
 
 
 def test_all_long_tasks_select_instance_presets_and_full_finetuning():

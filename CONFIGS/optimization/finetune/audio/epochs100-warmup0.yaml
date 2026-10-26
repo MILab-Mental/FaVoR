@@ -1,4 +1,5 @@
 optimization:
+  early_stopping_patience: 10
   epochs: 100
   backbone_lr: 2.0e-5
   head_lr: 1.0e-3

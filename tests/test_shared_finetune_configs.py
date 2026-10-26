@@ -22,6 +22,8 @@ def test_three_modalities_share_task_data(fragment):
         assert f'/finetune/{modality}/sampling/' in raw['yamls']['sampling']
         merged = load_config(task)
         assert merged['app'] == app
+        assert merged['optimization']['early_stopping_patience'] == 10
+        assert 'early_stopping_patience' not in raw.get('finetune', {})
         for key, value in expected.items():
             assert merged['data'][key] == value
 

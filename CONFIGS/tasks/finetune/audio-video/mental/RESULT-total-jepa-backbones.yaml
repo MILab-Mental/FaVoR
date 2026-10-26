@@ -15,7 +15,6 @@ finetune:
   audio_lr_scale: 0.05
   fusion_lr_scale: 0.2
   head_lr_scale: 1.0
-  early_stopping_patience: 10
   best_metric: f1_macro
   best_metric_mode: max
   branch_loss_weight: 0.0

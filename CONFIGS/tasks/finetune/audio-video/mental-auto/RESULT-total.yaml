@@ -1,0 +1,34 @@
+# Best parameters transferred from autoresearch; shared fragments remain reusable.
+app: finetune_va
+folder: OUTPUT/finetune_va/mental/RESULT-total/autoresearch-1026
+meta:
+  seed: 0
+  auto_resume: true
+  read_checkpoint: null
+data:
+  batch_size: 10
+  sync_preflight_file: OUTPUT/finetune_va/mental-transfer/va_sync_preflight.json
+optimization:
+  epochs: 5
+  lr: 0.00025
+  betas:
+  - 0.9
+  - 0.999
+finetune:
+  pretrained_checkpoint: /home/data/sdd/mental/OUTPUTS/pretrain_va_lejepa/JEPA-e5-latest-C1/step-5000.pt
+  branch_aggregation: separate_logits
+  freeze_video_encoder: false
+  freeze_audio_encoder: false
+  freeze_fusion_adapter: false
+  video_lr_scale: 0.05
+  audio_lr_scale: 0.04
+  fusion_lr_scale: 0.2
+  head_lr_scale: 1.0
+  best_metric: f1_macro
+  best_metric_mode: max
+  branch_loss_weight: 0.0
+yamls:
+  sampling: CONFIGS/data/finetune/audio-video/sampling/va-6s-8sentences.yaml
+  model: CONFIGS/models/finetune/audio-video/vitl-emotion2vec-instance-jepa-e5-latest.yaml
+  opt: CONFIGS/optimization/finetune/audio-video/epochs20-warmup0-lr0.001.yaml
+  data: CONFIGS/data/finetune/audio-video/mental/RESULT-total.yaml

@@ -1,4 +1,5 @@
 optimization:
+  early_stopping_patience: 10
   ema:
   - 0.99925
   - 0.99925

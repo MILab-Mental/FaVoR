@@ -252,3 +252,25 @@ GPU；rank 崩溃会立即报错并终止整组，不用再干等 NCCL 默认 60
 完整数据准备、启动与恢复说明见 [VA-LeJEPA 实现说明](docs/lejepa/VA-LeJEPA-implementation.md)，
 两张 RTX PRO 6000 的实际峰值、paired 时间诊断与测试结果见
 [VA-LeJEPA 验证记录](docs/lejepa/VA-LeJEPA-validation.md)。
+
+### 微调 Early stopping
+
+`finetune_a`、`finetune_v`、`finetune_va` 默认启用早停：
+
+```yaml
+optimization:
+  early_stopping_patience: 10
+```
+
+连续 10 次验证指标没有严格改善时停止；设为 `0` 可关闭。音频、视频的分类和多标签任务
+监控验证集 Macro-F1（越高越好），回归监控 RMSE（越低越好）；音视频使用
+`finetune.best_metric` / `best_metric_mode`，默认分类 Macro-F1、回归 MAE。
+视频若设置 `meta.eval_freq > 1`，只在实际验证时累计未改善次数。
+停止前保留最佳模型并保存最新状态，多卡同步退出。a/v 的旧 checkpoint 可从历史指标恢复
+未改善次数；新 checkpoint 显式保存 `stale_epochs`。已经达到 patience 的 checkpoint
+续训时不会继续训练，可调大 patience 或设为 0 后续训。
+代码和配置更新对新启动的任务生效，已运行的进程需重新启动才能使用新逻辑。
+
+早停默认值集中放在 `CONFIGS/optimization/finetune/` 的共享优化配置中，任务入口无需重复声明。
+命令行覆盖使用 `--set optimization.early_stopping_patience=10`（设为 0 关闭）。
+旧的独立实验仍兼容 `finetune.early_stopping_patience`；两处同时存在时以 optimization 为准。

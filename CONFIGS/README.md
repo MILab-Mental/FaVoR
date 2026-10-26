@@ -968,3 +968,52 @@ torchrun --standalone --nproc_per_node=2 -m app.main \
 
 保留 instance batch size 后，每步需要编码 8 倍的单段输入；这里没有根据显存自动缩小
 batch size。实际完整模型训练的显存与吞吐需在目标 GPU 上测量。
+
+## Mental VA 最优参数迁移
+
+入口统一放在 `CONFIGS/tasks/finetune/audio-video/mental-auto/`：
+
+- `RESULT-total.yaml`、`RESULT-Anxiety.yaml`、`RESULT-Depression.yaml`：各自的最优参数。
+- 其余 35 个任务各三种配置，例如 `DSM-Anger-auto-anxiety-best.yaml`、
+  `DSM-Anger-auto-depression-best.yaml`、`DSM-Anger-auto-total-best.yaml`。
+
+全部入口复用现有采样、JEPA 骨干模型、优化和任务数据配置，只覆盖需要修改的字段。
+没有展开模型定义。各任务类别数和标签来自对应的共享数据 YAML。
+原来的 `mental-{total,anxiety,depression}-best.yaml` 已移除。
+
+按 total → Anxiety → Depression 顺序运行其余任务：
+
+```bash
+(
+  export CUDA_VISIBLE_DEVICES=0,1
+  for group in total anxiety depression; do
+    for config in CONFIGS/tasks/finetune/audio-video/mental-auto/*-auto-${group}-best.yaml; do
+      torchrun --standalone --nproc_per_node=2 -m app.main \
+        --fname "$config" || exit 1
+    done
+  done
+)
+```
+
+三个 RESULT 任务可独立运行，不包含在上述迁移队列中：
+
+```bash
+for task in RESULT-total RESULT-Anxiety RESULT-Depression; do
+  torchrun --standalone --nproc_per_node=2 -m app.main \
+    --fname "CONFIGS/tasks/finetune/audio-video/mental-auto/${task}.yaml" || break
+done
+```
+
+每卡 batch=10；保留原搜索实验的 5 轮上限，patience=10（因此首轮不会提前停止）。
+支持 auto_resume。为保留续训路径，输出继续使用
+`OUTPUT/finetune_va/mental-transfer/<task>/<group>-best/`；严格同步预检缓存共用
+`OUTPUT/finetune_va/mental-transfer/va_sync_preflight.json`。
+先比较三套固定候选，只对少数需要的任务延长训练或局部调参；延长训练须使用独立
+输出目录记录新预算。
+
+三个 RESULT 入口的输出单独设为
+`OUTPUT/finetune_va/mental/RESULT-*/autoresearch-1026/`，其中归档了对应 autoresearch
+最优实验的原始参数快照、日志、指标和 `best.pt`。源实验最终轮次的 `latest.pt` 已清理；
+归档中的 `latest.pt` 是最佳轮次完整状态的独立副本，可从最佳轮次恢复，不能视为原实验
+最终轮次 checkpoint。来源、最佳轮次和恢复点说明记录在各目录的 `archive_origin.json`。
+其余 35 个任务的输出路径不变。
