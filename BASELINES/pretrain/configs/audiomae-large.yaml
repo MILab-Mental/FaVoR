@@ -1,0 +1,12 @@
+yamls:
+- defaults.yaml
+route: scratch_pretrain
+model:
+  id: audiomae-large
+  kind: audiomae
+  size: large
+  version: official mae_vit_large_patch16 with local Swin decoder; random initialization
+experiment: merged-scratch
+data:
+  datasets:
+  - DATASET/merged/pretrain_audios_0901.csv

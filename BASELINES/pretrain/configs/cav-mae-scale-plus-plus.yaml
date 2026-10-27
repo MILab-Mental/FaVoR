@@ -1,0 +1,13 @@
+yamls:
+- defaults.yaml
+route: continue_pretrain
+model:
+  id: cav-mae-scale-plus-plus
+  kind: cavmae
+  weights: /home/data/sdd/mental/OUTPUTS/对比实验初始化权重/cavmae.pth
+  weight_source: https://www.dropbox.com/s/l5t5geufdy3qvnv/audio_model.21.pth?dl=1
+  version: Scale++ pure PT
+experiment: merged-continue
+data:
+  datasets:
+  - DATASET/merged/pretrain_va_canonical.csv

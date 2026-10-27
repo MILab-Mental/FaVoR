@@ -1,0 +1,11 @@
+yamls:
+- defaults.yaml
+- CONFIGS/optimization/finetune/audio-video/epochs20-warmup0-lr0.001.yaml
+model:
+  id: favor-av-no-joint-pretrain
+  kind: favor_no_joint
+  favor_config: CONFIGS/tasks/finetune/audio-video/classification/RAVDESS-emotion.yaml
+  favor_pretrain_config: CONFIGS/tasks/pretrain/audio-video/lejepa/i3.yaml
+seed: 0
+data:
+  batch_size: 4

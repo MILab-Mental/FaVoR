@@ -1,0 +1,8 @@
+yamls:
+- defaults.yaml
+model:
+  id: mae-dfer-lgi-former
+  kind: maedfer
+  weights: /home/data/sdd/mental/OUTPUTS/对比实验初始化权重/mae-dfer-base.pth
+  weight_source: https://drive.google.com/file/d/1nzvMITUHic9fKwjQ7XLcnaXYViWTawRv/view
+  version: LGI-Former dim512 depth16 VoxCeleb2 PT

@@ -1,0 +1,8 @@
+yamls:
+- defaults.yaml
+model:
+  id: vjepa2-1-vit-large-patch16-384
+  kind: vjepa21
+  weights: CKPT/vjepa2/vjepa2_1_vitl_dist_vitG_384.pt
+  weight_source: https://dl.fbaipublicfiles.com/vjepa2/vjepa2_1_vitl_dist_vitG_384.pt
+  version: 2.1 ViT-L/16 384

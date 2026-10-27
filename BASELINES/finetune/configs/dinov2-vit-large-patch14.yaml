@@ -1,0 +1,7 @@
+yamls:
+- defaults.yaml
+model:
+  id: dinov2-vit-large-patch14
+  kind: dinov2
+  weights: /home/data/sdd/mental/OUTPUTS/对比实验初始化权重/dinov2_vitl14_pretrain.pth
+  weight_source: https://dl.fbaipublicfiles.com/dinov2/dinov2_vitl14/dinov2_vitl14_pretrain.pth

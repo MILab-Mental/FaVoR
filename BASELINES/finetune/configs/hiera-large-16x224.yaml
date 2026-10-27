@@ -1,0 +1,7 @@
+yamls:
+- defaults.yaml
+model:
+  id: hiera-large-16x224
+  kind: hiera
+  weights: /home/data/sdd/mental/OUTPUTS/对比实验初始化权重/mae_hiera_large_16x224.pth
+  weight_source: https://dl.fbaipublicfiles.com/hiera/mae_hiera_large_16x224.pth

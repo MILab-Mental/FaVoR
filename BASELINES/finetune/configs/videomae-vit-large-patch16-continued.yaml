@@ -1,0 +1,11 @@
+yamls:
+- defaults.yaml
+model:
+  id: videomae-vit-large-patch16
+  kind: videomae
+  weights: /home/data/sdd/mental/OUTPUTS/对比实验初始化权重/videomae-large.pth
+  weight_source: https://drive.google.com/file/d/1qLOXWb_MGEvaI7tvuAe94CV7S2HXRwT3/view
+  version: ViT-L K400 1600e PT
+  encoder_checkpoint: /home/data/sdd/mental/OUTPUTS/对比实验输出/pretrain/videomae-vit-large-patch16/merged-continue/best.pt
+route: pretrained_finetune
+experiment: ravdess-emotion-from-merged-continue

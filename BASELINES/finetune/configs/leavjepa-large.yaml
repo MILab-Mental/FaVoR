@@ -1,0 +1,10 @@
+yamls:
+- defaults.yaml
+model:
+  id: leavjepa-large
+  kind: leavjepa
+  size: large
+  version: official shared Echo ViT-L random initialization, G2/K2 cross-modal token-drop
+  encoder_checkpoint: /home/data/sdd/mental/OUTPUTS/对比实验输出/pretrain/leavjepa-large/merged-scratch/best.pt
+route: pretrained_finetune
+experiment: ravdess-emotion-from-merged-scratch

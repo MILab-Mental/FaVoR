@@ -1,0 +1,12 @@
+yamls:
+- defaults.yaml
+route: scratch_pretrain
+model:
+  id: leavjepa-large
+  kind: leavjepa
+  size: large
+  version: official shared Echo ViT-L random initialization, G2/K2 cross-modal token-drop
+experiment: merged-scratch
+data:
+  datasets:
+  - DATASET/merged/pretrain_va_canonical.csv

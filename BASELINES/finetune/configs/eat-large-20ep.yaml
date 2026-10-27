@@ -1,0 +1,8 @@
+yamls:
+- defaults.yaml
+model:
+  id: eat-large-20ep
+  kind: eat
+  weights: /home/data/sdd/mental/OUTPUTS/对比实验初始化权重/EAT-large_epoch20_fairseq.pt
+  weight_source: https://drive.google.com/file/d/1PEgriRvHsqrtLzlA478VemX7Q0ZGl889/view
+  version: EAT Large 20ep Fairseq pure PT

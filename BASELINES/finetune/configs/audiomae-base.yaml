@@ -1,0 +1,8 @@
+yamls:
+- defaults.yaml
+model:
+  id: audiomae-base
+  kind: audiomae
+  size: base
+  weights: /home/data/sdd/mental/OUTPUTS/对比实验初始化权重/audiomae-base.pth
+  weight_source: https://drive.google.com/file/d/1ni_DV4dRf7GxM8k-Eirx71WP9Gg89wwu/view

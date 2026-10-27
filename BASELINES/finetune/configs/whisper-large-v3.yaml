@@ -1,0 +1,10 @@
+yamls:
+- defaults.yaml
+model:
+  id: whisper-large-v3
+  kind: whisper
+  hub_id: openai/whisper-large-v3
+  revision: 06f233fe06e710322aca913c1bc4249a0d71fce1
+  discard_prefixes:
+  - proj_out.
+  weights: /home/data/sdd/mental/OUTPUTS/对比实验初始化权重/whisper-large-v3

@@ -1,0 +1,10 @@
+yamls:
+- defaults.yaml
+model:
+  id: avsiam-base-plus
+  kind: avsiam
+  hub_id: genjib/AVSiam
+  filename: as+vgg+acav_pretrained.pth
+  revision: 92f148bd0ccca771f7dd4c3ba5644d90e59fca05
+  version: Base+ shared backbone, supervised ImageNet21k initialization upstream
+  weights: /home/data/sdd/mental/OUTPUTS/对比实验初始化权重/avsiam-baseplus/as+vgg+acav_pretrained.pth

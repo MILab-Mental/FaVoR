@@ -1,0 +1,10 @@
+yamls:
+- defaults.yaml
+model:
+  id: hubert-large-ll60k
+  kind: waveform
+  hub_id: facebook/hubert-large-ll60k
+  revision: ff022d095678a2995f3c49bab18a96a9e553f782
+  discard_prefixes:
+  - lm_head.
+  weights: /home/data/sdd/mental/OUTPUTS/对比实验初始化权重/hubert-large-ll60k

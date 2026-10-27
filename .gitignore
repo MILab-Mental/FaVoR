@@ -45,3 +45,7 @@ Thumbs.db
 
 # autoresearch 相关文件
 autoresearch/
+
+# Baseline weights, official source checkouts, and run artifacts
+/BASELINES/CKPTS/
+/BASELINES/outputs/

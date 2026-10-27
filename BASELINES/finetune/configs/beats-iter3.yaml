@@ -1,0 +1,7 @@
+yamls:
+- defaults.yaml
+model:
+  id: beats-iter3
+  kind: beats
+  weights: /home/data/sdd/mental/OUTPUTS/对比实验初始化权重/BEATs_iter3.pt
+  weight_source: https://1drv.ms/u/s!AqeByhGUtINrgcpxJUNDxg4eU0r-vA?e=qezPJ5

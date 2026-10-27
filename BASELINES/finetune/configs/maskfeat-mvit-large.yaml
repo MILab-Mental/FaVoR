@@ -1,0 +1,7 @@
+yamls:
+- defaults.yaml
+model:
+  id: maskfeat-mvit-large
+  kind: maskfeat
+  weights: /home/data/sdd/mental/OUTPUTS/对比实验初始化权重/k400_MVIT_L_MaskFeat_PT_epoch_00800.pyth
+  weight_source: https://dl.fbaipublicfiles.com/pyslowfast/masked_models/k400_MVIT_L_MaskFeat_PT_epoch_00800.pyth

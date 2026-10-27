@@ -1,0 +1,8 @@
+yamls:
+- defaults.yaml
+model:
+  id: wavlm-large
+  kind: waveform
+  hub_id: microsoft/wavlm-large
+  revision: c1423ed94bb01d80a3f5ce5bc39f6026a0f4828c
+  weights: /home/data/sdd/mental/OUTPUTS/对比实验初始化权重/wavlm-large
