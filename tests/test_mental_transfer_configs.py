@@ -25,13 +25,15 @@ def test_transfer_preset_matches_tuned_source(group):
     assert config['folder'] == f'OUTPUT/finetune_va/mental/{RESULTS[group]}/autoresearch-1026'
     raw = yaml.safe_load((ENTRIES / f'{RESULTS[group]}.yaml').read_text())
     assert 'model' not in raw
+    assert 'epochs' not in raw['optimization']
+    assert raw['yamls']['opt'] == 'CONFIGS/optimization/finetune/audio-video/epochs100-warmup0-lr0.001.yaml'
     assert len(TASKS) == 35
     source_path = ROOT / 'autoresearch/oct15' / SOURCES[group]
     if not source_path.is_file():
         pytest.skip('local autoresearch provenance artifact is not available')
     source = yaml.safe_load(source_path.read_text())
     assert config['model'] == source['model']
-    assert config['optimization'] == dict(source['optimization'], early_stopping_patience=10)
+    assert config['optimization'] == dict(source['optimization'], epochs=100, early_stopping_patience=10)
     expected_finetune = dict(source['finetune'])
     expected_finetune.pop('early_stopping_patience', None)
     assert config['finetune'] == expected_finetune
@@ -53,7 +55,7 @@ def test_transfer_entry_preserves_task(group, task):
         assert config['data'][key] == value
     assert config['app'] == 'finetune_va'
     assert config['folder'] == folder
-    assert config['optimization']['epochs'] == 5
+    assert config['optimization']['epochs'] == 100
     assert config['optimization']['early_stopping_patience'] == 10
     assert 'early_stopping_patience' not in config['finetune']
     assert config['meta']['auto_resume'] is True

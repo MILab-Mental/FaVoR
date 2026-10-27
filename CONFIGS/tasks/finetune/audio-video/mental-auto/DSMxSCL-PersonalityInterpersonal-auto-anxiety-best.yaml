@@ -8,7 +8,6 @@ data:
   batch_size: 10
   sync_preflight_file: OUTPUT/finetune_va/mental-transfer/va_sync_preflight.json
 optimization:
-  epochs: 5
   lr: 0.00031
   weight_decay: 0.03
   betas:
@@ -30,5 +29,5 @@ finetune:
 yamls:
   sampling: CONFIGS/data/finetune/audio-video/sampling/va-6s-8sentences.yaml
   model: CONFIGS/models/finetune/audio-video/vitl-emotion2vec-instance-jepa-e5-latest.yaml
-  opt: CONFIGS/optimization/finetune/audio-video/epochs20-warmup0-lr0.001.yaml
+  opt: CONFIGS/optimization/finetune/audio-video/epochs100-warmup0-lr0.001.yaml
   data: CONFIGS/data/finetune/audio-video/mental/DSMxSCL-PersonalityInterpersonal.yaml

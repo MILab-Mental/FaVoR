@@ -1004,7 +1004,10 @@ for task in RESULT-total RESULT-Anxiety RESULT-Depression; do
 done
 ```
 
-每卡 batch=10；保留原搜索实验的 5 轮上限，patience=10（因此首轮不会提前停止）。
+每卡 batch=10；mental-auto 的全部 108 个入口共用
+`CONFIGS/optimization/finetune/audio-video/epochs100-warmup0-lr0.001.yaml`：
+最多训练 100 轮，连续 10 次验证未严格提升时早停。任务入口不再重复设置 epochs。
+这属于延长训练预算，原 autoresearch 的 5 轮结果仍保留为历史记录。
 支持 auto_resume。为保留续训路径，输出继续使用
 `OUTPUT/finetune_va/mental-transfer/<task>/<group>-best/`；严格同步预检缓存共用
 `OUTPUT/finetune_va/mental-transfer/va_sync_preflight.json`。

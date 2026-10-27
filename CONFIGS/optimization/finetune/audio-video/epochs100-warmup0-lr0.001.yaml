@@ -1,0 +1,8 @@
+optimization:
+  early_stopping_patience: 10
+  epochs: 100
+  lr: 0.001
+  warmup_steps: 0
+  weight_decay: 0.04
+  clip_grad_norm: 1.0
+  loss: {}
