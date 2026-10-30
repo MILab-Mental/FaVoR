@@ -1,8 +1,9 @@
 yamls:
+- ../../common/defaults.yaml
 - defaults.yaml
 model:
   id: social-mae
   kind: socialmae
-  weights: /home/data/sdd/mental/OUTPUTS/对比实验初始化权重/socialmae.pth
-  weight_source: https://drive.google.com/file/d/1s2giy3_tQKL_cISiYcN5lBy_ami6Dc0n/view
-  version: VoxCeleb2 pure PT n_frame8 stride2
+  version: Native 768-dim Social-MAE, 8 frames, tubelet 2; research-pretrained encoder
+  architecture_source: https://github.com/HuBohy/SocialMAE
+  encoder_checkpoint: /home/data/sdd/mental/OUTPUTS/对比实验输出/pretrain/social-mae/merged-scratch/latest.pt

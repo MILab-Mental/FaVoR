@@ -1,11 +1,12 @@
 yamls:
+- ../../common/defaults.yaml
 - defaults.yaml
 model:
   id: wavjepa-base
   kind: wavjepa
   hub_id: labhamlet/wavjepa-base
   revision: 6be4a5093f6c9adbbd55e00b6e5b8f067aa03345
-  encoder_checkpoint: /home/data/sdd/mental/OUTPUTS/对比实验输出/pretrain/wavjepa-base/merged-continue/best.pt
+  encoder_checkpoint: /home/data/sdd/mental/OUTPUTS/对比实验输出/pretrain/wavjepa-base/merged-continue/latest.pt
   weights: /home/data/sdd/mental/OUTPUTS/对比实验初始化权重/wavjepa-base
 route: pretrained_finetune
 experiment: ravdess-emotion-from-merged-continue

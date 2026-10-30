@@ -1,4 +1,5 @@
 yamls:
+- ../../common/defaults.yaml
 - defaults.yaml
 route: scratch_pretrain
 model:

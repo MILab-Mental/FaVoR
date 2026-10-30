@@ -1,6 +1,3 @@
-seed: 42
-precision: bfloat16
-cpu_threads: 4
 route: direct_finetune
 experiment: ravdess-emotion-direct
 save_predictions: false
@@ -11,14 +8,3 @@ data:
   label_column: emotion
   num_class: 8
   cohort: paired
-  batch_size: 2
-  num_workers: 0
-  eval_clips: 1
-  num_sentence: 0
-optimization:
-  epochs: 20
-  lr: 1.0e-05
-  weight_decay: 0.05
-  warmup_steps: 0
-  loss:
-    class_weighting: none

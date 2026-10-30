@@ -1,4 +1,5 @@
 yamls:
+- ../../common/defaults.yaml
 - defaults.yaml
 model:
   id: wav2vec2-large-lv60

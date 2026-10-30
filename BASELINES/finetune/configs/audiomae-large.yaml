@@ -1,10 +1,11 @@
 yamls:
+- ../../common/defaults.yaml
 - defaults.yaml
 model:
   id: audiomae-large
   kind: audiomae
   size: large
   version: official mae_vit_large_patch16 with local Swin decoder; random initialization
-  encoder_checkpoint: /home/data/sdd/mental/OUTPUTS/对比实验输出/pretrain/audiomae-large/merged-scratch/best.pt
+  encoder_checkpoint: /home/data/sdd/mental/OUTPUTS/对比实验输出/pretrain/audiomae-large/merged-scratch/latest.pt
 route: pretrained_finetune
 experiment: ravdess-emotion-from-merged-scratch

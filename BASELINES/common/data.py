@@ -4,8 +4,10 @@ No failed sample substitution, no missing-modality padding, and no test-set sele
 """
 import csv
 import hashlib
+import math
 import random
 from collections import OrderedDict
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -18,6 +20,12 @@ from datasets.common.instances import sentence_identity, sentence_windows, sampl
 from datasets.common.paths import get_dataset_paths
 from datasets.va_lejepa.av_decoder import AVDecoder
 from BASELINES.common.runtime import path, fingerprint
+
+
+@lru_cache(maxsize=4)
+def _csv_rows(filename, size, mtime):
+    with open(filename, encoding='utf-8-sig', newline='') as handle:
+        return list(csv.DictReader(handle))
 
 
 def configure_instances(cfg, modality):
@@ -42,47 +50,50 @@ def configure_instances(cfg, modality):
         prediction_unit='speaker_recording', csv_splits_unchanged=True)
 
 
-def read_rows(cfg, modality, supervised=True):
+def read_rows(cfg, modality, supervised=True, max_records=None):
     manifests = cfg['datasets']
     roots = cfg.get('rootpaths') or get_dataset_paths(manifests)
     if len(roots) != len(manifests):
         raise ValueError('datasets/rootpaths length mismatch')
     records, missing = [], 0
     for manifest, root in zip(manifests, roots):
-        with path(manifest).open(encoding='utf-8-sig', newline='') as handle:
-            for row in csv.DictReader(handle):
-                if supervised:
-                    split = row.get(cfg['label_column'] + '_split', '')
-                    if split in ('', '-1'):
-                        continue
-                    row['_split'] = int(split)
-                if cfg.get('video_column'):
-                    if cfg['video_column'] not in row:
-                        raise ValueError(f'{manifest}: missing {cfg["video_column"]}; a lip model cannot consume full-face video')
-                    row['video_path'] = row[cfg['video_column']]
-                # AV comparisons can enforce the same paired cohort for every branch.
-                required = ('audio', 'video') if cfg.get('cohort', 'paired') == 'paired' or modality == 'audio-video' else (modality,)
-                if any(not row.get(m + '_path', '').strip() for m in required):
-                    missing += 1
+        stat = path(manifest).stat()
+        for source in _csv_rows(str(path(manifest)), stat.st_size, stat.st_mtime_ns):
+            row = dict(source)
+            if supervised:
+                split = row.get(cfg['label_column'] + '_split', '')
+                if split in ('', '-1'):
                     continue
-                for field in ('audio_path', 'video_path'):
-                    if row.get(field):
-                        value = Path(row[field])
-                        if '|' in row[field]:
-                            raise ValueError('Multi-path row needs an explicit segment manifest')
-                        row[field] = str(value if value.is_absolute() else path(root) / value)
-                row['_manifest'] = str(manifest)
-                if supervised:
-                    # Exactly FAVOR's one-based class, pipe-delimited multi-label contract.
-                    parser = object.__new__(AudioCSVDataset)
-                    parser.task, parser.num_class = cfg['task'], int(cfg.get('num_class', 1))
-                    label = parser._parse_label(row[cfg['label_column']], manifest, len(records) + 2)
-                    if parser.task == 'classification' and not 0 <= label < parser.num_class:
-                        raise ValueError(f'Label outside [1, num_class] in {manifest}')
-                    if not np.isfinite(label).all():
-                        raise ValueError(f'Nonfinite label in {manifest}')
-                    row['_label'] = label
-                records.append(row)
+                row['_split'] = int(split)
+            if cfg.get('video_column'):
+                if cfg['video_column'] not in row:
+                    raise ValueError(f'{manifest}: missing {cfg["video_column"]}; a lip model cannot consume full-face video')
+                row['video_path'] = row[cfg['video_column']]
+            # AV comparisons can enforce the same paired cohort for every branch.
+            required = ('audio', 'video') if cfg.get('cohort', 'paired') == 'paired' or modality == 'audio-video' else (modality,)
+            if any(not row.get(m + '_path', '').strip() for m in required):
+                missing += 1
+                continue
+            for field in ('audio_path', 'video_path'):
+                if row.get(field):
+                    value = Path(row[field])
+                    if '|' in row[field]:
+                        raise ValueError('Multi-path row needs an explicit segment manifest')
+                    row[field] = str(value if value.is_absolute() else path(root) / value)
+            row['_manifest'] = str(manifest)
+            if supervised:
+                # Exactly FAVOR's one-based class, pipe-delimited multi-label contract.
+                parser = object.__new__(AudioCSVDataset)
+                parser.task, parser.num_class = cfg['task'], int(cfg.get('num_class', 1))
+                label = parser._parse_label(row[cfg['label_column']], manifest, len(records) + 2)
+                if parser.task == 'classification' and not 0 <= label < parser.num_class:
+                    raise ValueError(f'Label outside [1, num_class] in {manifest}')
+                if not np.isfinite(label).all():
+                    raise ValueError(f'Nonfinite label in {manifest}')
+                row['_label'] = label
+            records.append(row)
+            if max_records and len(records)>=max_records:
+                return records,missing
     return records, missing
 
 
@@ -137,19 +148,6 @@ class MediaDataset(Dataset):
             validate_identity(pair)
             decoder = AVDecoder(pair, sample_rate, self.cfg.get('sync', {}))
             duration = decoder.video_duration
-            if spec.get('favor_data_cfg'):
-                from datasets.va_lejepa.dataset import VALeJEPADataset
-                from datasets.va_lejepa.av_time_sampler import AVTimeSampler
-                from datasets.va_lejepa.transforms import AVTransforms
-                native = object.__new__(VALeJEPADataset)
-                native.cfg = spec['favor_data_cfg']
-                native.transforms = AVTransforms(native.cfg, self.training)
-                sampler = AVTimeSampler(global_seconds=seconds, local_views=0, training=self.training,
-                    short_policy=native.cfg.get('short_policy', 'zero_pad'))
-                interval, _ = sampler(duration, duration)
-                view = native._decode_view(decoder, interval)
-                view['_favor_prepared'] = True
-                return [view]
         else:
             if has_audio:
                 waveform = load_audio(row['audio_path'], sample_rate)
@@ -159,8 +157,9 @@ class MediaDataset(Dataset):
                 reader = VideoReader(row['video_path'], ctx=cpu(0), num_threads=1)
                 fps = float(reader.get_avg_fps())
                 duration = len(reader) / fps
-                if spec.get('frame_stride'):
-                    seconds = int(spec['frames']) * int(spec['frame_stride']) / fps
+                stride=int(spec.get('frame_stride',0))
+                if spec.get('fps'):stride=max(1,math.ceil(fps)//int(spec['fps']))
+                if stride:seconds=int(spec['frames'])*stride/fps
         if duration <= 0:
             raise ValueError('Empty media: ' + (row.get('audio_path') or row['video_path']))
         span = min(seconds, duration)
@@ -174,15 +173,27 @@ class MediaDataset(Dataset):
                 frames = min(frames, max(1, int(span*decoder.fps)))
                 clip = decoder.decode((start, start + span), frames)
                 clip['video_valid_frames'] = torch.tensor(frames)
+                if spec.get('requires_lips'):
+                    if self.cfg.get('video_column')!='lip_video_path':
+                        from BASELINES.build_model.avhubert import crop_lips
+                        clip['face_video_shape']=torch.tensor(clip['video'].shape)
+                        key=(row['video_path'],tuple(clip['video_frame_indices'].tolist()))
+                        clip['video']=crop_lips(clip['video'],spec['lip_preprocessing'],key)
+                    clip['lip_roi']=True
             else:
                 clip = {}
                 if has_audio:
                     audio = waveform[round(start * sample_rate):round((start + span) * sample_rate)]
                     clip.update(audio=audio, audio_lengths=torch.tensor(len(audio)))
                 if has_video:
-                    indices = np.minimum(len(reader)-1, np.floor(np.linspace(start, start + span, int(spec['frames']), endpoint=False) * fps).astype('int64'))
+                    # Native fixed-rate video samplers repeat the final real
+                    # frame for short clips rather than speeding up their time.
+                    interval=seconds if stride else span
+                    indices=np.floor(np.linspace(start,start+interval,int(spec['frames']),endpoint=False)*fps).astype('int64')
+                    valid=max(1,int((indices<len(reader)).sum()))
+                    indices=np.minimum(len(reader)-1,indices)
                     clip['video'] = torch.from_numpy(reader.get_batch(indices).asnumpy())
-                    clip.update(video_lengths=torch.tensor(len(indices)), source_fps=torch.tensor(fps),
+                    clip.update(video_lengths=torch.tensor(valid),video_valid_frames=torch.tensor(valid),source_fps=torch.tensor(fps),
                                 start_time=torch.tensor(start), end_time=torch.tensor(start+span))
             clips.append(clip)
         return clips
@@ -242,13 +253,14 @@ class PretrainDataset(MediaDataset):
 
 
 def make_loaders(cfg, spec, pretrain=False):
+    from BASELINES.common import distributed
     data = cfg['data']
     if not pretrain and data['task'] == 'regression':
         data['num_class'] = 1
     if not pretrain:
         configure_instances(cfg, spec['modality'])
-    if spec.get('requires_lips') and data.get('video_column') != 'lip_video_path':
-        raise ValueError('AV-HuBERT requires lip_video_path input')
+    if spec.get('requires_lips') and data.get('video_column') != 'lip_video_path' and not spec.get('lip_preprocessing'):
+        raise ValueError('AV-HuBERT requires real lip_video_path input or native mouth-preprocessing assets')
     if pretrain:
         datasets = {'train': PretrainDataset(data, spec)}
         missing, roots = 0, []
@@ -259,6 +271,9 @@ def make_loaders(cfg, spec, pretrain=False):
         roots = [str(path(p).resolve()) for p in (data.get('rootpaths') or get_dataset_paths(data['datasets']))]
     audit = dict(manifests={str(p):fingerprint(p) for p in data['datasets']}, media_roots=roots,
                  missing_modality_rows=missing, split_policy='csv_only', splits={})
+    if spec['modality']=='audio-video':
+        audit['synchronization']=dict(implementation='datasets.va_lejepa.av_decoder.validate_sync',
+            overrides=data.get('sync',{}),timeline='shared_valid_intersection')
     loaders = {}
     for name, dataset in datasets.items():
         training = name == 'train'
@@ -268,13 +283,19 @@ def make_loaders(cfg, spec, pretrain=False):
         if limit and not pretrain:
             dataset.rows, dataset.samples = dataset.rows[:limit], dataset.samples[:limit]
             dataset.labels = dataset.labels[:limit]
-        generator = torch.Generator().manual_seed(int(cfg.get('seed', 42)))
+        generator = torch.Generator().manual_seed(int(cfg.get('seed', 42))+distributed.rank())
         batch_size = int(data.get('batch_size', 1))
         if batch_size < int(spec.get('minimum_batch_size', 1)):
             raise ValueError(f'Native objective requires batch_size >= {spec["minimum_batch_size"]}')
-        loaders[name] = DataLoader(dataset, batch_size=batch_size, shuffle=training,
+        from BASELINES.common import distributed
+        from torch.utils.data.distributed import DistributedSampler
+        sampler = (DistributedSampler(dataset, shuffle=True, seed=int(cfg.get('seed',42))) if training
+                   else distributed.EvaluationSampler(dataset)) if distributed.active() else None
+        loaders[name] = DataLoader(dataset, batch_size=batch_size, shuffle=training and sampler is None, sampler=sampler,
             num_workers=int(data.get('num_workers', 0)), collate_fn=list, generator=generator,
-            persistent_workers=False, drop_last=training and spec.get('minimum_batch_size', 1)>1)
+            persistent_workers=False, multiprocessing_context='spawn' if int(data.get('num_workers',0)) else None,
+            timeout=float(data.get('loader_timeout',180)) if int(data.get('num_workers',0)) else 0,
+            pin_memory=True, drop_last=training and (distributed.active() or spec.get('minimum_batch_size', 1)>1))
     cfg['data_audit'] = audit
     audit['prediction_unit'] = cfg.get('instance_protocol', {}).get('prediction_unit', 'clip') if not pretrain else 'pretraining_clip'
     return loaders

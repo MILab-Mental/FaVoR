@@ -1,21 +1,6 @@
-seed: 42
-precision: bfloat16
-cpu_threads: 4
 route: scratch_pretrain
 experiment: merged
 save_predictions: false
 data:
   datasets:
   - DATASET/merged/pretrain_audios_0901.csv
-  batch_size: 2
-  num_workers: 0
-  eval_clips: 1
-  num_sentence: 0
-optimization:
-  epochs: 20
-  lr: 0.0001
-  weight_decay: 0.05
-  betas:
-  - 0.9
-  - 0.95
-  warmup_steps: 0

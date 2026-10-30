@@ -1,7 +1,1 @@
-python -m BASELINES.run --stage pretrain --models audiomae-large "$@"
-python -m BASELINES.run --stage pretrain --models videomae-vit-large-patch16 "$@"
-python -m BASELINES.run --stage pretrain --models leavjepa-large "$@"
-python -m BASELINES.run --stage pretrain --models wavjepa-base "$@"
-python -m BASELINES.run --stage pretrain --models cav-mae-scale-plus-plus "$@"
-python -m BASELINES.run --stage pretrain --models eat-large-20ep "$@"
-python -m BASELINES.run --stage pretrain --models maskfeat-mvit-large "$@"
+python -B -m BASELINES.run --stage pretrain --models all --gpus 2 "$@"

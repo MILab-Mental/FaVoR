@@ -354,6 +354,7 @@ def main(args):
         )
 
     latest_path = folder / "latest.pt"
+    save_latest = bool(cfgs_meta.get("save_latest", False))
     higher_is_better = task in {"classification", "multi_label_classification"}
     patience = early_stopping_patience(args)
     stale = 0
@@ -638,9 +639,10 @@ def main(args):
                     )
 
         if is_main:
-            _save_checkpoint(latest_path, epoch + 1, encoder, task_head, optimizer, scaler, scheduler,
-                             wd_scheduler, best_score, history, args,
-                             grokfast_grads=grokfast_grads, stale_epochs=stale)
+            if save_latest:
+                _save_checkpoint(latest_path, epoch + 1, encoder, task_head, optimizer, scaler, scheduler,
+                                 wd_scheduler, best_score, history, args,
+                                 grokfast_grads=grokfast_grads, stale_epochs=stale)
             if save_every_freq > 0 and (epoch + 1) % save_every_freq == 0:
                 _save_checkpoint(folder / f"e{epoch + 1}.pt", epoch + 1, encoder, task_head,
                                  optimizer, scaler, scheduler, wd_scheduler, best_score, history, args,
@@ -652,7 +654,7 @@ def main(args):
             dist.barrier()
 
     return {
-        "latest_checkpoint": latest_path,
+        "latest_checkpoint": latest_path if save_latest else None,
         "best_checkpoint": folder / "best.pt",
         "logs_dir": logs_dir,
     }

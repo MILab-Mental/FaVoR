@@ -1,0 +1,10 @@
+yamls:
+- ../../common/defaults.yaml
+- defaults.yaml
+model:
+  id: avsiam-large
+  kind: avsiam_large
+  size: large
+  version: Paper-based shared ViT-L/16 candidate; random initialization, no ImageNet-21k weights
+  architecture_source: https://www.ecva.net/papers/eccv_2024/papers_ECCV/papers/02220.pdf
+  encoder_checkpoint: /home/data/sdd/mental/OUTPUTS/对比实验输出/pretrain/avsiam-large/merged-scratch/latest.pt

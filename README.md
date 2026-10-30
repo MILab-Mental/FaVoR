@@ -1,5 +1,7 @@
 # FAVOR
 
+FaVoR 音视频内部消融与晚期概率融合见 [内部对照说明](CONFIGS/tasks/finetune/audio-video/ablations/README.md)，由根项目运行。
+
 **多模态语音 / 视频情感与心理数据集** —— 视频 V-JEPA 与音频 AudioJEPA 预训练 + 下游微调。
 
 FAVOR（Facial / Audio / Video emotion & mental-health understanding）是一套面向

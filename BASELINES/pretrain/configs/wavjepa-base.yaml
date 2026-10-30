@@ -1,4 +1,5 @@
 yamls:
+- ../../common/defaults.yaml
 - defaults.yaml
 route: continue_pretrain
 model:

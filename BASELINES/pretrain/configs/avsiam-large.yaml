@@ -1,0 +1,14 @@
+yamls:
+- ../../common/defaults.yaml
+- defaults.yaml
+route: scratch_pretrain
+experiment: merged-scratch
+model:
+  id: avsiam-large
+  kind: avsiam_large
+  size: large
+  version: Paper-based shared ViT-L/16 candidate; random initialization, no ImageNet-21k weights
+  architecture_source: https://www.ecva.net/papers/eccv_2024/papers_ECCV/papers/02220.pdf
+data:
+  datasets:
+  - DATASET/merged/pretrain_va_canonical.csv

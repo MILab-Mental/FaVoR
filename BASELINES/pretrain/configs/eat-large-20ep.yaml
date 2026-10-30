@@ -1,10 +1,13 @@
+python: /home/data/sdd/mental/OUTPUTS/对比实验初始化权重/environments/legacy/bin/python
 yamls:
+- ../../common/defaults.yaml
 - defaults.yaml
 route: continue_pretrain
 model:
   id: eat-large-20ep
   kind: eat
   weights: /home/data/sdd/mental/OUTPUTS/对比实验初始化权重/EAT-large_epoch20_fairseq.pt
+  weight_sha256: ed4343a2f94aac8cd56f883cf7f34337c7da80829b1d0865b564970e67670daa
   weight_source: https://drive.google.com/file/d/1PEgriRvHsqrtLzlA478VemX7Q0ZGl889/view
   version: EAT Large 20ep Fairseq pure PT
 experiment: merged-continue

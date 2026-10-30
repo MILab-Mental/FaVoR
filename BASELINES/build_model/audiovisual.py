@@ -1,4 +1,4 @@
-"""Joint AV backbones. CAV-MAE uses image frames; SocialMAE uses video tubelets."""
+"""External joint audio-video backbones."""
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -23,7 +23,7 @@ def joint_only(model):
 
 
 def joint_tokens(model, batch):
-    """The shared, unchanged multimodal FT path of CAV-MAE and SocialMAE."""
+    """The official multimodal fine-tuning path shared by CAV-MAE/Social-MAE."""
     audio = model.patch_embed_a(batch['audio'].unsqueeze(1).transpose(2, 3)) + model.pos_embed_a + model.modality_a
     video = model.patch_embed_v(batch['video']) + model.pos_embed_v + model.modality_v
     for block in model.blocks_a:
@@ -34,6 +34,19 @@ def joint_tokens(model, batch):
     for block in model.blocks_u:
         x = block(x)
     return model.norm(x), video.shape[1]
+
+
+def global_contrastive(encoder):
+    """Keep the native loss, with both ranks contributing real negative pairs."""
+    native=encoder.forward_contrastive
+    def contrastive(audio,video,*args,**kwargs):
+        from BASELINES.common import distributed
+        if distributed.active():
+            from torch.distributed.nn.functional import all_gather
+            audio=torch.cat(all_gather(audio))
+            video=torch.cat(all_gather(video))
+        return native(audio,video,*args,**kwargs)
+    encoder.forward_contrastive=contrastive
 
 
 class CAVMAE(nn.Module):
@@ -59,6 +72,7 @@ class CAVMAE(nn.Module):
         self.input_spec = dict(modality='audio-video', sample_rate=16000, seconds=10.24, frames=1, size=224)
         if pretrain:
             self.input_spec['minimum_batch_size'] = 2
+            global_contrastive(self.encoder)
 
     def prepare(self, clip):
         audio, valid = fbank(clip['audio'], mean=-5.081, std=4.4849)
@@ -87,38 +101,48 @@ class CAVMAE(nn.Module):
                 if not k.startswith(removed) and not any('.'+part+'.' in k for part in ('norm1_a', 'norm1_v', 'norm2_a', 'norm2_v'))}
 
 
-class SocialMAE(nn.Module):
-    def gradient_components(self):
-        return dict(audio_input=self.encoder.patch_embed_a, video_input=self.encoder.patch_embed_v)
+class SocialMAE(CAVMAE):
+    """Random native Social-MAE pretraining, then encoder-only transfer."""
+    def __init__(self,cfg,initialize=True,pretrain=False):
+        nn.Module.__init__(self)
+        self.pretraining=pretrain
+        with official('SocialMAE','src') as source:
+            module=source('models.social_mae')
+            constructor=module.SocialMAE if pretrain else module.SocialMAEFT
+            kwargs={} if pretrain else dict(label_dim=1)
+            self.encoder=constructor(n_frame=8,stride=2,tr_pos=True,**kwargs)
+        if pretrain:global_contrastive(self.encoder)
+        else:
+            self.encoder.mlp_head=nn.Identity()
+            joint_only(self.encoder)
+        self.output_dim=768
+        self.input_spec=dict(modality='audio-video',sample_rate=16000,seconds=4,
+                             frames=8,fps=2,size=224)
+        if pretrain:self.input_spec['minimum_batch_size']=2
 
-    def __init__(self, cfg, initialize=True):
-        super().__init__()
-        with official('SocialMAE', 'src') as source:
-            self.encoder = source('models.social_mae').SocialMAEFT(label_dim=1, n_frame=8, stride=2)
-        self.encoder.mlp_head = nn.Identity()
-        removed = joint_only(self.encoder)
-        if initialize:
-            checkpoint = load_file(cfg['weights'])
-            strict_load(self.encoder, checkpoint.get('model', checkpoint),
-                        discard=('decoder_', 'mask_token', 'mlp_head.') + removed)
-        self.output_dim = 768
-        self.input_spec = dict(modality='audio-video', sample_rate=16000, seconds=4, frames=8, size=224)
-
-    def prepare(self, clip):
-        audio, valid = fbank(clip['audio'], mean=-6.2943, std=12.26344)
-        # SocialMAE's Conv3d expects C,H,W,T, unlike other video backbones.
-        video = frames_tensor(clip['video'], training=self.training, square_resize=True).permute(1, 2, 3, 0)[None]
-        real_frames = video.shape[-1]
-        video = F.pad(video, (0, 8-real_frames))
-        return dict(audio=audio[None], video=video, valid=torch.tensor([valid]),
+    def prepare(self,clip):
+        audio,valid=fbank(clip['audio'],mean=-6.2943,std=12.26344)
+        # The release passes OpenCV BGR frames directly to its transform;
+        # FAVOR decodes RGB. Preserve that channel order and bicubic resize.
+        video=frames_tensor(clip['video'].flip(-1),training=False,square_resize=True).permute(1,2,3,0)[None]
+        real_frames=video.shape[-1]
+        video=video.repeat(1,1,1,1,(8+real_frames-1)//real_frames)[...,:8]
+        return dict(audio=audio[None],video=video,valid=torch.tensor([valid]),
                     video_valid=torch.tensor([(real_frames+1)//2]))
 
-    def forward(self, batch):
-        x, _ = joint_tokens(self.encoder, batch)
-        valid = torch.arange(64, device=x.device).repeat(8)[None] < (batch['valid'][:, None]+15)//16
-        visual_valid = torch.arange(4, device=x.device).repeat(196)[None] < batch['video_valid'][:, None]
-        valid = torch.cat([valid, visual_valid], 1)
-        return (x*valid[..., None]).sum(1) / valid.sum(1, keepdim=True)
+    def forward(self,batch):
+        x,_=joint_tokens(self.encoder,batch)
+        audio=torch.arange(64,device=x.device).repeat(8)[None]<(batch['valid'][:,None]+15)//16
+        video=torch.arange(4,device=x.device).repeat(196)[None]<batch['video_valid'][:,None]
+        valid=torch.cat([audio,video],1)
+        return (x*valid[...,None]).sum(1)/valid.sum(1,keepdim=True)
+
+    def gradient_components(self):
+        modules=super().gradient_components()
+        if self.pretraining:
+            modules.update(audio_decoder=self.encoder.decoder_pred_a,video_decoder=self.encoder.decoder_pred_v,
+                           audio_contrast=self.encoder.norm_a,video_contrast=self.encoder.norm_v)
+        return modules
 
 
 class LeAVJEPA(nn.Module):
@@ -143,6 +167,10 @@ class LeAVJEPA(nn.Module):
             if pretrain:
                 self.projector = models.Projector(in_dim=1024, hidden_dim=2048, out_dim=128)
                 self.sigreg = models.SIGReg()
+        if not pretrain:
+            # EchoFineTuner normalizes its raw CLS token before supervision.
+            # Keep this new downstream readout outside the exported SSL encoder.
+            self.feature_norm = nn.LayerNorm(1024)
         if initialize:
             checkpoint = load_file(cfg['weights'])
             strict_load(self.encoder, checkpoint['encoder'])
@@ -178,7 +206,8 @@ class LeAVJEPA(nn.Module):
         return result
 
     def forward(self, batch):
-        return self.encoder(batch['video'], batch['audio'])
+        features=self.encoder(batch['video'], batch['audio'])
+        return features if self.pretraining else self.feature_norm(features)
 
     def prepare_views(self, clips):
         if len(clips) != 4:
@@ -209,51 +238,13 @@ class LeAVJEPA(nn.Module):
         return self.encoder.state_dict()
 
 
-class AVHubert(nn.Module):
-    def __init__(self, cfg, initialize=True):
-        super().__init__()
-        import fairseq
-        with official('av_hubert') as source:
-            source('avhubert')
-            models, checkpoint_cfg, _ = fairseq.checkpoint_utils.load_model_ensemble_and_task(
-                [str(path(cfg['weights']))], strict=True)
-            self.encoder = models[0]
-        self.encoder.remove_pretraining_modules()
-        # The label embedding table is used only for the upstream cluster loss.
-        self.encoder.label_embs_concat = None
-        self.encoder.mask_emb = None
-        self.encoder.feature_grad_mult = 1.0
-        self.output_dim = self.encoder.encoder_embed_dim
-        if self.output_dim != 1024:
-            raise ValueError('AV-HuBERT requires Large clean PT')
-        self.input_spec = dict(modality='audio-video', sample_rate=16000, seconds=4,
-                              frames=100, fps=25, size=88, requires_lips=True)
-
-    def prepare(self, clip):
-        from python_speech_features import logfbank
-        from torchvision.transforms import functional as TF
-        import numpy as np
-        # Official logfbank uses PCM16 amplitude, then stacks four 100 Hz frames.
-        waveform = (clip['audio'].numpy() * 32768).clip(-32768, 32767).astype(np.int16)
-        audio = torch.from_numpy(logfbank(waveform, samplerate=16000).astype('float32'))
-        audio = F.pad(audio, (0, 0, 0, (-len(audio)) % 4)).reshape(-1, 104)
-        audio = F.layer_norm(audio, audio.shape[1:])
-        frames = clip['video'].permute(0, 3, 1, 2).float() / 255
-        if min(frames.shape[-2:]) < 88:
-            raise ValueError('Lip ROI must be at least 88x88; do not pad a missing crop')
-        video = (TF.center_crop(TF.rgb_to_grayscale(frames), [88, 88])-.421)/.165
-        length = min(len(audio), len(video))
-        return dict(audio=audio[:length].T[None], video=video[:length].permute(1, 0, 2, 3)[None],
-                    padding_mask=torch.zeros(1, length, dtype=torch.bool))
-
-    def forward(self, batch):
-        x, mask = self.encoder.extract_features(source={k: batch[k] for k in ('audio', 'video')},
-                                                padding_mask=batch['padding_mask'], mask=False)
-        valid = (~mask)[..., None] if mask is not None else torch.ones_like(x[..., :1])
-        return (x*valid).sum(1) / valid.sum(1).clamp_min(1)
-
-
 class LanguageBind(nn.Module):
+    def gradient_components(self):
+        return {mode+'_'+part:module for mode,branch in self.encoder.items() for part,module in branch.items()}
+
+    def counted_components(self):
+        return {mode+'_encoder_and_projection':branch for mode,branch in self.encoder.items()}
+
     def __init__(self, cfg, initialize=True):
         super().__init__()
         from .audio import hf_load
@@ -274,11 +265,18 @@ class LanguageBind(nn.Module):
                     frames = model.config.vision_config.num_frames
                 dim = model.config.projection_dim
         self.output_dim = 2*dim
+        # Its unused video-file helper installs a global Torch decord bridge;
+        # FAVOR's actual paired decoder requires decord's native NDArray API.
+        import decord
+        decord.bridge.set_bridge('native')
         self.input_spec = dict(modality='audio-video', sample_rate=self.sample_rate, seconds=10, frames=frames, size=224)
 
     def prepare(self, clip):
         audio = self.transforms['audio']((clip['audio'][None].clone(), self.sample_rate))[None]
-        video = frames_tensor(clip['video'], mean=(.48145466, .4578275, .40821073),
+        frames=clip['video']
+        if len(frames)!=self.input_spec['frames']:
+            frames=frames[torch.linspace(0,len(frames)-1,self.input_spec['frames']).long()]
+        video = frames_tensor(frames, mean=(.48145466, .4578275, .40821073),
                               std=(.26862954, .26130258, .27577711), training=self.training).permute(1, 0, 2, 3)[None]
         return dict(audio=audio, video=video)
 
@@ -289,171 +287,3 @@ class LanguageBind(nn.Module):
             x = self.encoder[mode]['projection'](x)
             features.append(F.normalize(x, dim=-1))
         return torch.cat(features, -1)
-
-
-class FavorNoJoint(nn.Module):
-    """Reuse the exact FAVOR downstream structure and separate A/V initialization."""
-    def __init__(self, cfg, initialize=True):
-        super().__init__()
-        from BASELINES.common.data import configure_instances
-        configure_instances(cfg, 'audio-video')
-        from app.main import load_config
-        from models.va_lejepa import build_va_lejepa
-        from models.va_lejepa.finetune import VAFinetuner
-        from BASELINES.common.runtime import path
-        native = load_config(path(cfg['model']['favor_config']))
-        joint = load_config(path(cfg['model']['favor_pretrain_config']))
-        initialization_keys = {'init_source', 'weight_source', 'vjepa_checkpoint', 'video_lejepa_checkpoint',
-                               'emotion2vec_checkpoint', 'audio_lejepa_checkpoint'}
-        for mode in ('audio', 'video'):
-            left, right = native['model'][mode], joint['model'][mode]
-            structural = (left.keys() | right.keys()) - initialization_keys - {'freeze'}
-            if any(left.get(k) != right.get(k) for k in structural):
-                raise ValueError(f'P0 {mode} structure differs from the joint SSL counterpart')
-            for key in initialization_keys:
-                left.pop(key, None)
-                if key in right:
-                    left[key] = right[key]
-        if native['model']['fusion'] != joint['model']['fusion']:
-            raise ValueError('P0 fusion structure differs from the joint SSL counterpart')
-        cfg['p0_joint_counterpart'] = cfg['model']['favor_pretrain_config']
-        cfg['p0_initialization'] = {mode:{k:v for k,v in native['model'][mode].items() if k in initialization_keys}
-                                   for mode in ('audio', 'video')}
-        cfg['p0_optimizer_scales'] = {k:v for k,v in native['finetune'].items() if k.endswith('_lr_scale')}
-        data = native['data']
-        if native.get('finetune', {}).get('freeze_video_encoder') or native.get('finetune', {}).get('freeze_audio_encoder'):
-            raise ValueError('The P0 no-joint control must train both backbones')
-        va = build_va_lejepa(native['model'], data, initialize=initialize)
-        outputs = 1 if cfg['data']['task'] == 'regression' else int(cfg['data']['num_class'])
-        finetune = dict(native['finetune'])
-        self.native_finetune = finetune
-        finetune['pretrained_checkpoint'] = None
-        if 'instance_aggregator' in native['model']:
-            finetune['instance_aggregator'] = native['model']['instance_aggregator']
-        if cfg['model'].get('instance_aggregator'):
-            finetune['instance_aggregator'] = cfg['model']['instance_aggregator']
-        self.encoder = VAFinetuner(va, outputs, finetune)
-        from datasets.va_lejepa.transforms import AVTransforms
-        self.transforms = AVTransforms(data, training=True)
-        self.input_spec = dict(modality='audio-video', sample_rate=data['sample_rate'],
-            seconds=data['global_seconds'], frames=data['video_frames_global'], size=data['video_global_size'],
-            favor_data_cfg=data)
-
-    def prepare(self, clip):
-        if clip.get('_favor_prepared') is not True:
-            raise ValueError('P0 must use the original FAVOR view decoder/transforms')
-        view = clip
-        return dict(global_view={k: v[None] for k, v in view.items() if torch.is_tensor(v)})
-
-    def forward(self, batch):
-        return self.encoder({'global': batch['global_view']})
-
-    def predict_sample(self, sample, task, device):
-        from datasets.va_lejepa.collate import collate_views, to_device
-        from utils.instance_evaluation import average_window_outputs
-        prepared = [clips[0] for clips in sample['sentences']]
-        outputs = []
-        for indices in sample['windows']:
-            # Reuse native VAFinetuner's sentence aggregator and branch heads.
-            views = [{k: v for k, v in prepared[i].items() if torch.is_tensor(v)} for i in indices]
-            view = collate_views(views)
-            if self.encoder.instance_enabled:
-                view = {k: v[None] for k, v in view.items()}
-                outputs.append(self.encoder({'global': to_device(view, device)}))
-            else:
-                result = self.encoder({'global': to_device(view, device)})
-                sentences = [dict(logits=result['logits'][i:i+1],
-                    branches={k:v[i:i+1] for k,v in result['branches'].items()}) for i in range(len(indices))]
-                outputs.append(average_window_outputs(sentences, task))
-        return average_window_outputs(outputs, task)
-
-    def make_optimizer(self, cfg):
-        from app.pretrain_va_lejepa.train import _optimizer
-        opt = dict(cfg['optimization'])
-        for family, scale in (('video_pretrained', 'video'), ('audio_pretrained', 'audio'), ('new', 'fusion'), ('head', 'head')):
-            opt['lr_'+family] = float(opt['lr']) * float(self.native_finetune.get(scale+'_lr_scale', 1))
-        return _optimizer(self.encoder, opt)
-
-    def supervised_loss(self, output, labels, criterion, task):
-        from app.finetune_va.train import _loss
-        weight = float(self.native_finetune.get('branch_loss_weight', .1 if self.encoder.strategy=='transformer' else 0))
-        return _loss(output, labels, criterion, task, weight)
-
-    def gradient_components(self):
-        return dict(audio_backbone=self.encoder.va.audio_encoder, video_backbone=self.encoder.va.video_encoder,
-                    fusion=self.encoder.va.fusion_adapters, task_heads=self.encoder.heads)
-
-    def counted_components(self):
-        return dict(favor_audio_backbone=self.encoder.va.audio_encoder,
-                    favor_video_backbone=self.encoder.va.video_encoder,
-                    favor_full_downstream_including_heads=self.encoder)
-
-
-class AVSiam(nn.Module):
-    """Published Base+ only; two shared streams followed by native fusion blocks."""
-    def __init__(self, cfg, initialize=True):
-        super().__init__()
-        import ast
-        import sys
-        import types
-        import timm
-        from BASELINES.common.official import checkout
-        directory = checkout('AVSiam') / 'src/models'
-        filename = directory / 'cav_mae_base.py'
-        tree = ast.parse(filename.read_text())
-        # The release imports debugging/ToMe files that are absent, but their
-        # only call sites are commented out. Verify that before removing ONLY
-        # these unused imports; execute all backbone/fusion code unchanged.
-        unused = {'set_trace', 'bipartite_soft_matching', 'merge_source', 'merge_wavg', 'yb_bipartite_soft_matching'}
-        if any(isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load) and n.id in unused for n in ast.walk(tree)):
-            raise ValueError('AVSiam now uses formerly dead imports; review the source adaptation')
-        tree.body = [node for node in tree.body if not (isinstance(node, ast.ImportFrom) and
-                     node.module in ('ipdb', 'tome.merge', 'yb_tome'))]
-        package_name = '_favor_baseline_avsiam'
-        package = types.ModuleType(package_name)
-        package.__path__ = [str(directory)]
-        sys.modules[package_name] = package
-        module = types.ModuleType(package_name + '.cav_mae_base')
-        module.__file__, module.__package__ = str(filename), package_name
-        sys.modules[module.__name__] = module
-        with official('AVSiam', 'src'):
-            exec(compile(tree, str(filename), 'exec'), module.__dict__)
-            create_model = timm.create_model
-            def no_redundant_download(name, **kwargs):
-                if name != 'vit_base_patch16_224.augreg_in21k':
-                    raise ValueError('Unexpected AVSiam backbone')
-                kwargs['pretrained'] = False  # full Base+ checkpoint replaces these tensors
-                return create_model(name, **kwargs)
-            timm.create_model = no_redundant_download
-            try:
-                self.encoder = module.CAVMAEFT_BASE(label_dim=1)
-            finally:
-                timm.create_model = create_model
-        for name in ('my_blocks', 'my_patch_embed', 'my_patch_embed_a'):
-            delattr(self.encoder, name)
-        for name in ('mlp_head', 'mlp_head_a', 'mlp_head_mm', 'mlp_head_mm_v2'):
-            setattr(self.encoder, name, nn.Identity())
-        self.encoder.vit_base.head = nn.Identity()
-        if initialize:
-            from huggingface_hub import hf_hub_download
-            weights = cfg.get('weights') or hf_hub_download(cfg['hub_id'], cfg['filename'], revision=cfg['revision'])
-            checkpoint = load_file(weights)
-            strict_load(self.encoder, checkpoint.get('model', checkpoint), discard=(
-                'my_blocks.', 'my_patch_embed.', 'my_patch_embed_a.', 'ast_base.',
-                'decoder_', 'mask_token', 'vit_base.head.', 'mlp_head', 'predictor.'))
-        self.output_dim = 1536
-        self.input_spec = dict(modality='audio-video', sample_rate=16000, seconds=10.24, frames=1, size=224)
-
-    def prepare(self, clip):
-        audio, _ = fbank(clip['audio'], mean=-5.081, std=4.4849)
-        return dict(audio=audio[None], video=frames_tensor(clip['video'], training=self.training, square_resize=True)[None])
-
-    def forward(self, batch):
-        # Native training path returns fused, audio, video readouts. Only the
-        # fused representation feeds our new task head in both train and eval.
-        fused, _, _ = self.encoder(batch['audio'], batch['video'], mode='mm_grad', is_eval=False)
-        return fused
-
-    def gradient_components(self):
-        return dict(audio_input=self.encoder.vit_base.patch_embed_a,
-                    video_input=self.encoder.vit_base.patch_embed)

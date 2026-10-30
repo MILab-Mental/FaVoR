@@ -1,20 +1,79 @@
 """Align existing FAVOR A/V predictions and select probability weight on validation."""
 import argparse
 import csv
+import hashlib
+import logging
 import json
 from pathlib import Path
 
 import numpy as np
-import torch
 import yaml
 
 from app.main import load_config
 from datasets.common.instances import sentence_identity
-from datasets.va_lejepa.va_manifest import source_key
-from BASELINES.common.data import read_rows, partition, configure_instances
-from BASELINES.common.runtime import setup, write_config, write_json, path, fingerprint
-from BASELINES.finetune.trainer import metrics_for
+from datasets.va_lejepa.va_manifest import source_key, iter_manifest
+from datasets.common.paths import get_dataset_paths
+from datasets.audio_jepa.finetune_dataset import AudioCSVDataset
+from utils.instance_finetune_configs import is_long_media_task
+from app.finetune_a.train import _regression_metrics
+from utils.classification_metrics import classification_metrics, multilabel_metrics
 from utils.classification_metrics import write_predictions_csv, write_multilabel_predictions_csv, write_regression_predictions_csv
+
+
+ROOT=Path(__file__).resolve().parents[1]
+
+
+def path(value):
+    value=Path(value).expanduser()
+    return value if value.is_absolute() else ROOT/value
+
+
+def fingerprint(filename):
+    digest=hashlib.sha256()
+    with path(filename).open('rb') as handle:
+        for block in iter(lambda:handle.read(8*1024*1024),b''):digest.update(block)
+    return digest.hexdigest()
+
+
+def paired_splits(data):
+    """Native paired manifest/labels and original CSV assignments; no decoding."""
+    parser=object.__new__(AudioCSVDataset)
+    parser.task,parser.num_class=data['task'],int(data.get('num_class',1))
+    manifests=data['datasets']
+    roots=data.get('rootpaths') or get_dataset_paths(manifests)
+    if len(roots)!=len(manifests):raise ValueError('datasets/rootpaths length mismatch')
+    splits={}
+    for manifest,root in zip(manifests,roots):
+        for row in iter_manifest(path(manifest),root=path(root)):
+            split=str(row.get(data['label_column']+'_split','')).strip()
+            if split in ('','-1'):continue
+            if split not in ('0','1','2'):raise ValueError('Expected CSV split 0=train, 1=test, 2=validation')
+            label=parser._parse_label(row[data['label_column']],manifest,0)
+            if not np.isfinite(label).all():raise ValueError('Nonfinite label')
+            if parser.task=='classification' and not 0<=label<parser.num_class:raise ValueError('Invalid class label')
+            row.update(_manifest=str(manifest),_label=label)
+            splits.setdefault({'0':'train','1':'test','2':'validation'}[split],[]).append(row)
+    return splits
+
+
+def metrics_for(task,truth,logits,classes):
+    if task=='classification':
+        metrics,_,predictions,probabilities=classification_metrics(truth,logits,classes)
+    elif task=='multi_label_classification':
+        metrics,predictions,probabilities=multilabel_metrics(truth,logits,classes)
+    else:
+        predictions,probabilities=logits[:,0],None
+        metrics=_regression_metrics(predictions,truth)
+    return metrics,predictions,probabilities
+
+
+def write_json(filename,value):
+    def clean(item):
+        if isinstance(item,dict):return {k:clean(v) for k,v in item.items()}
+        if isinstance(item,(list,tuple)):return [clean(v) for v in item]
+        if isinstance(item,(float,np.floating)) and not np.isfinite(item):return None
+        return item.item() if isinstance(item,np.generic) else item
+    filename.write_text(json.dumps(clean(value),ensure_ascii=False,indent=2,allow_nan=False))
 
 
 def combine(audio, video, weight, task):
@@ -55,23 +114,25 @@ def load_predictions(filename, lookup, allowed, task, classes):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data-config', required=True, help='A baseline config carrying the audited task/group protocol')
+    parser.add_argument('--data-config', required=True, help='Native FAVOR task or data YAML; uses its original CSV splits')
     for mode in ('audio', 'video'):
         for split in ('validation', 'test'):
             parser.add_argument(f'--{mode}-{split}', required=split=='test')
         parser.add_argument(f'--{mode}-run-config', help='Saved run config with measured parameter_counts')
     parser.add_argument('--experiment', default='favor-late-fusion')
     parser.add_argument('--audio-weight', type=float, default=.5, help='Fixed probability weight when the CSV has no validation split')
+    parser.add_argument('--test',action='store_true',help='Check existing real predictions without writing results')
+    parser.add_argument('--save-predictions',action='store_true')
+    parser.add_argument('--output',help='Output directory; defaults to OUTPUT/ablations/favor-late-fusion/<experiment>')
     args = parser.parse_args()
-    cfg = load_config(path(args.data_config))
-    cfg.update(stage='finetune', experiment=args.experiment, model=dict(id='favor-av-late-fusion'))
-    cfg.pop('output', None)
-    output, logger, _ = setup(cfg)
-    configure_instances(cfg, 'audio-video')
-    data = cfg['data']
-    data['cohort'] = 'paired'
-    rows, _ = read_rows(data, 'audio-video')
-    splits = partition(rows, data)
+    cfg=load_config(path(args.data_config))
+    data=cfg['data']
+    if is_long_media_task(data) and not data.get('num_sentence'):data['num_sentence']=8
+    output=path(args.output) if args.output else ROOT/'OUTPUT/ablations/favor-late-fusion'/args.experiment
+    if not args.test:output.mkdir(parents=True,exist_ok=True)
+    logger=logging.getLogger('favor.late_fusion')
+    logging.basicConfig(level=logging.INFO)
+    splits=paired_splits(data)
     if 'test' not in splits:
         raise ValueError('The CSV has no test split')
     if not 0 <= args.audio_weight <= 1:
@@ -122,12 +183,13 @@ def main():
     keys, truth, audio, video = paired['test']
     logits = combine(audio, video, best['audio_weight'], task)
     metrics, predictions, probabilities = metrics_for(task, truth, logits, classes)
-    if task == 'classification':
-        write_predictions_csv(output/'predictions.csv', keys, truth, predictions, logits, probabilities)
-    elif task == 'multi_label_classification':
-        write_multilabel_predictions_csv(output/'predictions.csv', keys, truth, predictions, logits, probabilities)
-    else:
-        write_regression_predictions_csv(output/'predictions.csv', keys, truth, predictions)
+    if args.save_predictions and not args.test:
+        if task == 'classification':
+            write_predictions_csv(output/'predictions.csv', keys, truth, predictions, logits, probabilities)
+        elif task == 'multi_label_classification':
+            write_multilabel_predictions_csv(output/'predictions.csv', keys, truth, predictions, logits, probabilities)
+        else:
+            write_regression_predictions_csv(output/'predictions.csv', keys, truth, predictions)
     counts = {}
     for mode in ('audio', 'video'):
         config_path = getattr(args, mode+'_run_config')
@@ -135,9 +197,9 @@ def main():
             counts[mode] = yaml.safe_load(path(config_path).read_text()).get('parameter_counts')
     cfg.update(sources=sources, source_parameter_counts=counts,
                count_scope='Sum the two measured downstream models; fusion adds zero parameters. Missing source counts remain unavailable.')
-    write_config(output, cfg)
-    write_json(output/'metrics.json', dict(best=best, test=metrics, samples=len(keys), source_parameter_counts=counts))
-    torch.save(dict(best=best, config=cfg), output/'best.pt')
+    if not args.test:
+        (output/'config.yaml').write_text(yaml.safe_dump(cfg,allow_unicode=True,sort_keys=False))
+        write_json(output/'metrics.json', dict(best=best, test=metrics, samples=len(keys), source_parameter_counts=counts))
     logger.info('selection=%s audio_weight=%.2f test_instances=%d', best['selection'], best['audio_weight'], len(keys))
 
 

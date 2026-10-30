@@ -1,0 +1,33 @@
+app: finetune_va
+folder: OUTPUT/ablations/finetune_va/no-joint-pretraining/RAVDESS-emotion
+meta:
+  seed: 0
+  auto_resume: true
+  read_checkpoint: null
+finetune:
+  pretrained_checkpoint: null
+  branch_aggregation: separate_logits
+  freeze_video_encoder: false
+  freeze_audio_encoder: false
+  freeze_fusion_adapter: false
+  video_lr_scale: 0.05
+  audio_lr_scale: 0.05
+  fusion_lr_scale: 0.2
+  head_lr_scale: 1.0
+  best_metric: f1_macro
+  best_metric_mode: max
+  branch_loss_weight: 0.0
+yamls:
+  sampling: CONFIGS/data/finetune/audio-video/sampling/va-6s.yaml
+  model: CONFIGS/models/finetune/audio-video/vitl-emotion2vec.yaml
+  opt: CONFIGS/optimization/finetune/audio-video/epochs20-warmup0-lr0.001.yaml
+  data: CONFIGS/data/finetune/audio-video/classification/RAVDESS-emotion.yaml
+model:
+  video:
+    init_source: video_lejepa
+    weight_source: encoder
+    video_lejepa_checkpoint: /home/data/sdd/mental/OUTPUTS/pretrain_v_lejepa/vitl16/FaVoR-112px-48f8/e25.pt
+  audio:
+    init_source: audio_lejepa
+    weight_source: encoder
+    audio_lejepa_checkpoint: /home/data/sdd/mental/OUTPUTS/pretrain_a_lejepa/emotion2vec-plus-large/FaVoR-4s-local2s/latest.pt

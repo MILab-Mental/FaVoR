@@ -1,4 +1,4 @@
-"""One entry for training, evaluation, resume, fusion and bounded real-data checks."""
+"""One entry for training, evaluation, resume and bounded real-data checks."""
 import argparse
 import json
 import subprocess
@@ -11,13 +11,14 @@ if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.main import load_config
-from BASELINES.common.runtime import ROOT, OUTPUT_ROOT, path, load_file, write_config, write_json
+from BASELINES.common.runtime import ROOT, OUTPUT_ROOT, path, load_file, write_config, write_json,apply_overrides
 
 
 def verify(stage, config, experiment, device, extra=()):
     cfg = load_config(config)
     run_name = experiment or cfg['experiment']+'-smoke-'+datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')
     output = OUTPUT_ROOT / stage / 'smoke' / cfg['model']['id'] / run_name
+    checkpoint_name='latest.pt' if stage=='pretrain' else 'best.pt'
     if output.exists():
         raise FileExistsError(f'{output}: choose a new --experiment name')
     base = [sys.executable, '-m', 'BASELINES.run', '--stage', stage, '--config', str(config)]
@@ -31,23 +32,26 @@ def verify(stage, config, experiment, device, extra=()):
             (output / 'smoke-failure.log').write_text(result.stdout)
             raise RuntimeError(f'{cfg["model"]["id"]}: {suffix} failed; see {output}/smoke-failure.log')
     run(['--set', *overrides, 'stop_after_epoch=1'], 'first update')
-    first = load_file(output / 'last.pt')
+    first = load_file(output / checkpoint_name)
     if first['step'] != 1 or not first['config'].get('gradient_check', {}).get('encoder'):
         raise AssertionError('First real update did not reach the encoder')
     del first
-    run(['--resume', str(output / 'last.pt'), '--set', *overrides, 'stop_after_epoch=2'], 'resume')
-    last = load_file(output / 'last.pt')
-    if last['step'] != 2 or last['epoch'] != 2:
+    run(['--resume', str(output / checkpoint_name), '--set', *overrides, 'stop_after_epoch=2'], 'resume')
+    last = load_file(output / checkpoint_name)
+    report=json.loads((output/'metrics.json').read_text())
+    # A validation-selected best.pt may correctly stay at epoch 1 even after
+    # resumed training completes epoch 2. The run report tracks actual progress.
+    if report['optimizer_steps'] != 2 or report['history'][-1]['epoch'] != 2:
         raise AssertionError('Resume did not advance optimizer/epoch state')
     result = dict(model=cfg['model']['id'], configuration=str(config),
                   stage=stage, route=cfg['route'], output=str(output),
-                  complete_resume_verified=True, optimizer_steps=last['step'],
+                  complete_resume_verified=True, optimizer_steps=report['optimizer_steps'],
                   csv_splits=list(last['config']['data_audit']['splits']),
                   parameters=last['config']['parameter_counts'], gradient_check=last['config']['gradient_check'],
                   real_manifests=last['config']['data_audit']['manifests'])
     del last
     for split in (s for s in ('validation', 'test') if s in result['csv_splits']):
-        run(['--evaluate', split, '--checkpoint', str(output / 'best.pt'), '--set',
+        run(['--evaluate', split, '--checkpoint', str(output / checkpoint_name), '--set',
              *overrides, 'save_predictions=true'], split)
     if stage == 'finetune' and 'test' in result['csv_splits']:
         report = json.loads((output / 'metrics.json').read_text())
@@ -62,7 +66,7 @@ def verify(stage, config, experiment, device, extra=()):
 def remove_smoke_checkpoints(result):
     """Keep the evidence after restore/transfer checks, discard disposable weights."""
     output = path(result['output'])
-    for name in ('best.pt', 'last.pt'):
+    for name in (('latest.pt',) if result['stage']=='pretrain' else ('best.pt',)):
         (output / name).unlink()
     cfg = load_config(output / 'config.yaml')
     cfg['artifacts'] = dict(checkpoints_retained=False,
@@ -76,26 +80,24 @@ def remove_smoke_checkpoints(result):
 
 def main():
     stage_parser = argparse.ArgumentParser(add_help=False)
-    stage_parser.add_argument('--stage', choices=['finetune', 'pretrain', 'fusion'], default='finetune')
-    selected, remaining = stage_parser.parse_known_args()
-    if selected.stage == 'fusion':
-        from BASELINES.finetune.fusion import main as fusion
-        sys.argv = [sys.argv[0], *remaining]
-        return fusion()
+    stage_parser.add_argument('--stage', choices=['finetune', 'pretrain'], default='finetune')
     parser = argparse.ArgumentParser(parents=[stage_parser], description=__doc__)
     source = parser.add_mutually_exclusive_group()
     source.add_argument('--models', nargs='+', help='Configuration names without .yaml; all selects every config in this stage')
     source.add_argument('--config', help='Custom experiment YAML, including task/data settings')
     parser.add_argument('--list', action='store_true', help='List stage configurations without building models')
+    parser.add_argument('--gpus',type=int,default=1,help='Use 2 for the full DDP comparison matrix')
+    parser.add_argument('--tasks',nargs='+',help='all, ordinary, mental, or explicit task names')
+    parser.add_argument('--test',action='store_true',help='Real training checks entirely in RAM; no files, downloads or cache writes')
     parser.add_argument('--device', help='Override device, e.g. cuda:1 or cpu')
     parser.add_argument('--experiment', help='Run directory name; smoke defaults to configured task/route plus timestamp')
     parser.add_argument('--set', nargs='*', default=[], metavar='KEY=YAML')
-    parser.add_argument('--resume', help='Resume one experiment from last.pt')
+    parser.add_argument('--resume', help='Restore latest.pt (pretraining) or an unfinished best.pt (finetuning)')
     parser.add_argument('--evaluate', choices=['validation', 'test'])
     parser.add_argument('--checkpoint', help='Checkpoint for evaluation')
     parser.add_argument('--smoke', action='store_true', help='Two updates, full resume, evaluation, and pretrain-to-finetune transfer')
     parser.add_argument('--finetune-config', help='Custom downstream config for a pretraining smoke check')
-    parser.add_argument('--keep-checkpoints', action='store_true', help='Keep temporary best.pt/last.pt after successful checks')
+    parser.add_argument('--keep-checkpoints', action='store_true', help='Keep temporary latest.pt (pretraining) or best.pt (finetuning) after --smoke')
     args = parser.parse_args()
     directory = ROOT / 'BASELINES' / args.stage / 'configs'
     available = sorted(p for p in directory.glob('*.yaml') if p.stem != 'defaults')
@@ -115,6 +117,9 @@ def main():
         configs = [directory / f'{name}.yaml' for name in names]
     else:
         parser.error('Choose --models or --config; use --list to inspect configurations')
+    if args.test or args.tasks or args.gpus>1:
+        from BASELINES.common.launch import matrix
+        return matrix(configs,args)
     if (args.resume or args.evaluate or args.checkpoint) and (args.smoke or len(configs)!=1):
         parser.error('Resume/evaluation requires one non-smoke experiment')
     if bool(args.evaluate) != bool(args.checkpoint):
@@ -122,12 +127,14 @@ def main():
     if args.resume and args.evaluate:
         parser.error('Choose either --resume or --evaluate')
     if args.keep_checkpoints and not args.smoke:
-        parser.error('--keep-checkpoints only applies to --smoke; regular training keeps best.pt/last.pt')
+        parser.error('--keep-checkpoints only applies to --smoke; training keeps latest.pt (pretraining) or best.pt (finetuning)')
     if args.finetune_config and not (args.smoke and args.stage=='pretrain'):
         parser.error('--finetune-config requires --stage pretrain --smoke')
     if not args.smoke:
+        from BASELINES.common.launch import python_environment
         for config in configs:
-            command = [sys.executable, '-m', f'BASELINES.{args.stage}.main', '--config', str(config)]
+            cfg=apply_overrides(load_config(config),args.set)
+            command = [cfg.get('python',sys.executable), '-B', '-m', f'BASELINES.{args.stage}.main', '--config', str(config)]
             for key in ('resume', 'evaluate', 'checkpoint'):
                 if getattr(args, key):
                     command.extend([f'--{key}', getattr(args, key)])
@@ -137,7 +144,7 @@ def main():
                     overrides.append(f'{key}={getattr(args, key)}')
             if overrides:
                 command.extend(['--set', *overrides])
-            result = subprocess.run(command, cwd=ROOT)
+            result = subprocess.run(command, cwd=ROOT,env=python_environment(command[0]))
             if result.returncode:
                 sys.exit(result.returncode)
         return
@@ -148,7 +155,7 @@ def main():
         try:
             checked = [verify(args.stage, config, experiment, device, args.set)]
             if args.stage == 'pretrain':
-                checkpoint = str(path(checked[0]['output']) / 'best.pt')
+                checkpoint = str(path(checked[0]['output']) / 'latest.pt')
                 finetune = checked[0]['model']+('-continued' if checked[0]['route']=='continue_pretrain' else '')
                 downstream = path(args.finetune_config) if args.finetune_config else ROOT / 'BASELINES/finetune/configs' / f'{finetune}.yaml'
                 checked.append(verify('finetune', downstream, experiment, device,

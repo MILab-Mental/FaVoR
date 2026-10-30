@@ -1,10 +1,24 @@
+python: /home/data/sdd/mental/OUTPUTS/对比实验初始化权重/environments/avhubert/bin/python
 yamls:
+- ../../common/defaults.yaml
 - defaults.yaml
 data:
-  video_column: lip_video_path
+  num_workers: 8
 model:
   id: av-hubert-large
   kind: avhubert
   weights: /home/data/sdd/mental/OUTPUTS/对比实验初始化权重/large_vox_iter5.pt
+  weight_sha256: 343c9dbaa29847b8c4d0d9503c43f2877fd2efde9988d41abf14e74f28232b75
   weight_source: https://dl.fbaipublicfiles.com/avhubert/model/lrs3_vox/clean-pretrain/large_vox_iter5.pt
   version: Large LRS3+VoxCeleb2 clean PT, lip ROI
+  modality_dropout: 0.0
+  mouth_preprocessing:
+    predictor: /home/data/sdd/mental/OUTPUTS/对比实验初始化权重/avhubert-preprocessing/shape_predictor_68_face_landmarks.dat
+    detector: /home/data/sdd/mental/OUTPUTS/对比实验初始化权重/avhubert-preprocessing/mmod_human_face_detector.dat
+    mean_face: /home/data/sdd/mental/OUTPUTS/对比实验初始化权重/avhubert-preprocessing/20words_mean_face.npy
+  mouth_preprocessing_sha256:
+    predictor: fbdc2cb80eb9aa7a758672cbfdda32ba6300efe9b6e6c7a299ff7e736b11b92f
+    detector: 4cb19393e2fbaf2b1609a9319ad5386618c886a6234ec1b971f3e87c85d87fe6
+    mean_face: dbf68b2044171e1160716df7c53e8bbfaa0ee8c61fb41171d04cb6092bb81422
+  mouth_preprocessing_source: 'Official AV-HuBERT preparation: dlib landmarks, 12-frame
+    smoothing, 256px alignment, 96px mouth -> 88px input'

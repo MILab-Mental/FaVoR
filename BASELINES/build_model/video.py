@@ -1,5 +1,6 @@
 """Frame encoders and native video encoders keep distinct readouts and inputs."""
 from functools import partial
+from contextlib import contextmanager
 
 import numpy as np
 import torch
@@ -13,6 +14,29 @@ from .audio import hf_load
 
 IMAGENET_MEAN = (.485, .456, .406)
 IMAGENET_STD = (.229, .224, .225)
+
+
+@contextmanager
+def slowfast_classification_imports():
+    """SlowFast imports a detection head even when detection is disabled."""
+    import importlib.util
+    import sys
+    import types
+    if importlib.util.find_spec('detectron2') is not None:
+        yield
+        return
+    from torchvision.ops import RoIAlign
+    # Detectron2 delegates ROIAlign to this same torchvision operator. Preserve
+    # its aligned=True default; MaskFeat never invokes the unused detection head.
+    layers=types.ModuleType('detectron2.layers')
+    layers.ROIAlign=partial(RoIAlign,aligned=True)
+    package=types.ModuleType('detectron2')
+    package.layers=layers
+    sys.modules.update({'detectron2':package,'detectron2.layers':layers})
+    try:yield
+    finally:
+        sys.modules.pop('detectron2.layers',None)
+        sys.modules.pop('detectron2',None)
 
 
 def frames_tensor(video, size=224, mean=IMAGENET_MEAN, std=IMAGENET_STD, training=False, square_resize=False):
@@ -54,7 +78,7 @@ class FrameEncoder(nn.Module):
                 self.encoder = cls(config) if self.kind == 'clip' else AutoModel.from_config(config)
             self.output_dim = self.encoder.config.projection_dim if self.kind == 'clip' else self.encoder.config.hidden_size
         self.input_spec = dict(modality='video', seconds=float(cfg.get('seconds', 4)), frames=int(cfg.get('frames', 8)), size=224)
-        self.frame_batch = int(cfg.get('frame_batch', 4))
+        self.frame_batch = int(cfg.get('frame_batch', 32))
 
     def prepare(self, clip):
         if self.processor is None:
@@ -64,15 +88,17 @@ class FrameEncoder(nn.Module):
         return dict(pixel_values=frames)
 
     def forward(self, batch):
-        features = []
-        for frames in batch['pixel_values'].split(self.frame_batch):
-            if self.kind == 'dinov2':
-                values = self.encoder.forward_features(frames)['x_norm_clstoken']
+        pixels=batch['pixel_values']
+        batch_size,frames=(pixels.shape[:2] if pixels.ndim==5 else (1,len(pixels)))
+        pixels=pixels.flatten(0,1) if pixels.ndim==5 else pixels
+        features=[]
+        for chunk in pixels.split(self.frame_batch):
+            if self.kind=='dinov2':values=self.encoder.forward_features(chunk)['x_norm_clstoken']
             else:
-                result = self.encoder(pixel_values=frames)
-                values = result.image_embeds if self.kind == 'clip' else result.pooler_output
+                result=self.encoder(pixel_values=chunk)
+                values=result.image_embeds if self.kind=='clip' else result.pooler_output
             features.append(values)
-        return torch.cat(features).mean(0, keepdim=True)
+        return torch.cat(features).reshape(batch_size,frames,-1).mean(1)
 
 
 class VideoMAE(nn.Module):
@@ -164,13 +190,19 @@ class VJEPA21(nn.Module):
             state = {k.removeprefix('module.').removeprefix('backbone.'): v for k, v in checkpoint['ema_encoder'].items()}
             strict_load(self.encoder, state)
         self.output_dim = 1024
-        self.input_spec = dict(modality='video', seconds=64/24, frames=64, size=384)
+        # The published 2.1 ViT-L 64-frame cooldown recipe samples at 4 fps.
+        self.input_spec = dict(modality='video', seconds=64/4, frames=64, size=384,fps=4)
 
     def prepare(self, clip):
-        return dict(video=frames_tensor(clip['video'], 384, training=self.training).permute(1, 0, 2, 3)[None])
+        return dict(video=frames_tensor(clip['video'], 384, training=self.training).permute(1, 0, 2, 3)[None],
+                    valid=torch.as_tensor(clip.get('video_valid_frames',len(clip['video']))).reshape(1))
 
     def forward(self, batch):
-        return self.encoder(batch['video'], training=False).mean(1)
+        tokens=self.encoder(batch['video'],training=False)
+        temporal=batch['video'].shape[2]//2
+        features=tokens.reshape(tokens.shape[0],temporal,-1,tokens.shape[-1]).mean(2)
+        mask=torch.arange(temporal,device=tokens.device)[None]<(batch['valid'][:,None]+1)//2
+        return (features*mask[...,None]).sum(1)/mask.sum(1,keepdim=True).clamp_min(1)
 
 
 class HieraVideo(nn.Module):
@@ -201,30 +233,52 @@ class HieraVideo(nn.Module):
 
 
 class MaskFeat(nn.Module):
+    def gradient_components(self):
+        return {'hog_predictor':self.encoder.pred_head} if self.pretraining else {}
+
     def __init__(self, cfg, initialize=True, pretrain=False):
         super().__init__()
         from BASELINES.common.official import checkout
+        import yaml
         self.pretraining = pretrain
-        with official('SlowFast') as source, official('pytorchvideo'):
+        checkpoint=load_file(cfg['weights'])
+        released=yaml.safe_load(checkpoint['cfg'])
+        state=checkpoint['model_state']
+        with slowfast_classification_imports(), official('SlowFast') as source, official('pytorchvideo'):
             config = source('slowfast.config.defaults').get_cfg()
             suffix = 'MaskFeat_PT' if pretrain else 'FT'
             config.merge_from_file(str(checkout('SlowFast') / f'configs/masked_ssl/k400_MVITv2_L_16x4_{suffix}.yaml'))
             config.NUM_GPUS = 0
+            # This published 800-epoch file predates the current config: it
+            # has separate Q/K/V, no CLS token, and Gaussian-weighted HOG.
+            config.MVIT.CLS_EMBED_ON=released['MVIT']['CLS_EMBED_ON']
+            config.MVIT.SEPARATE_QKV='blocks.0.attn.q.weight' in state
+            objective=released.get('BEIT',released.get('MASK',{}))
+            if pretrain:
+                config.MVIT.DROPPATH_RATE=released['MVIT']['DROPPATH_RATE']
+                config.MASK.PRETRAIN_DEPTH=objective['PRETRAIN_DEPTH']
+                config.MASK.HEAD_TYPE=objective['HEAD_TYPE']
             builder = source('slowfast.models.masked') if pretrain else source('slowfast.models.video_model_builder')
             self.encoder = builder.MaskMViT(config) if pretrain else builder.MViT(config)
+            if pretrain:
+                operators=source('slowfast.models.operators')
+                self.encoder.hogs=nn.ModuleList([operators.HOGLayerC(
+                    nbins=objective['PRED_HOG_NBINS'],pool=objective['PRED_HOG_CELL_SIZE'],
+                    gaussian_window=objective['PRED_HOG_GW'])])
+                # HOG scatter targets are FP32 even when backbone AMP is BF16.
+                self.encoder._get_hog_label_3d=torch.autocast('cuda',enabled=False)(self.encoder._get_hog_label_3d)
             self.loss_fn = source('slowfast.models.losses').MultipleMSELoss() if pretrain else None
             self.mask_generator = source('slowfast.datasets.transform').MaskingGenerator3D(
                 mask_window_size=config.AUG.MASK_WINDOW_SIZE,
-                num_masking_patches=round(np.prod(config.AUG.MASK_WINDOW_SIZE) * config.AUG.MASK_RATIO),
-                max_num_patches=np.prod(config.AUG.MASK_WINDOW_SIZE[1:]),
-                min_num_patches=np.prod(config.AUG.MASK_WINDOW_SIZE[1:])//5) if pretrain else None
+                num_masking_patches=released['AUG']['NUM_MASK_PATCHES'],
+                max_num_patches=released['AUG']['MAX_MASK_PATCHES_PER_BLOCK'],
+                min_num_patches=released['AUG']['MIN_MASK_PATCHES_PER_BLOCK']) if pretrain else None
         self.output_dim = 1152
         if not pretrain:
             self.encoder.head = nn.Identity()
         if initialize:
-            checkpoint = load_file(cfg['weights'])
-            self.load_encoder(checkpoint.get('encoder', checkpoint.get('model_state', checkpoint)))
-        self.input_spec = dict(modality='video', seconds=16*4/30, frames=16, size=224)
+            self.load_encoder(state)
+        self.input_spec = dict(modality='video', seconds=16*4/30, frames=16, size=224,frame_stride=4)
 
     def prepare(self, clip):
         return dict(video=frames_tensor(clip['video'], mean=(.45,)*3, std=(.225,)*3,
@@ -246,6 +300,9 @@ class MaskFeat(nn.Module):
     def load_encoder(self, state):
         import logging
         state = {k.removeprefix('module.'): v for k, v in state.items()}
+        if any(k.startswith('pred_hog_head.') for k in state):
+            logging.getLogger('baselines').info('MaskFeat release compatibility: pred_hog_head -> pred_head; native split Q/K/V; no CLS; Gaussian HOG window 16')
+            state={('pred_head.'+k[len('pred_hog_head.'):]) if k.startswith('pred_hog_head.') else k:v for k,v in state.items()}
         target = self.encoder.state_dict()
         # The official FT config downsamples the last stage further than HOG
         # pretraining. Apply ONLY checkpoint.py's documented relative-position

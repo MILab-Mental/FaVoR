@@ -31,9 +31,10 @@ def checkout(name):
 
 
 @contextlib.contextmanager
-def official(name, subdir='.'):
+def official(name, subdir='.', keep_packages=()):
     root = checkout(name) / subdir
     roots = {p.stem for p in root.glob('*.py')} | {p.name for p in root.iterdir() if p.is_dir() and not p.name.startswith('.')}
+    roots.difference_update(keep_packages)
     saved = {k: v for k, v in sys.modules.items() if k.split('.')[0] in roots}
     for key in saved:
         del sys.modules[key]
@@ -61,12 +62,21 @@ def official(name, subdir='.'):
         np.float = float
     old_home = os.environ.get('TORCH_HOME')
     def import_module(module):
-        # SocialMAE seeds global RNGs at import. Preserve caller's run seed.
+        # Official module imports may seed global RNGs. Preserve the run seed.
         python_rng, numpy_rng, torch_rng = __import__('random').getstate(), np.random.get_state(), torch.get_rng_state()
+        cuda_rng=torch.cuda.get_rng_state() if torch.cuda.is_initialized() else None
         result = importlib.import_module(module)
+        # The original VideoMAE defaults to reentrant checkpointing, which is
+        # incompatible with DDP unused-parameter traversal. Preserve its math
+        # while selecting PyTorch's supported non-reentrant implementation.
+        if name=='VideoMAE' and module in ('modeling_finetune','modeling_pretrain'):
+            from functools import partial
+            from torch.utils.checkpoint import checkpoint
+            result.checkpoint = types.SimpleNamespace(checkpoint=partial(checkpoint,use_reentrant=False))
         __import__('random').setstate(python_rng)
         np.random.set_state(numpy_rng)
         torch.set_rng_state(torch_rng)
+        if cuda_rng is not None:torch.cuda.set_rng_state(cuda_rng)
         return result
     try:
         yield import_module

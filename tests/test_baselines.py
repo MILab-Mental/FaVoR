@@ -1,4 +1,4 @@
-"""Protocol/restore regressions. Real-model integration is BASELINES.run --smoke."""
+"""CSV and restore regressions. Real-model integration is BASELINES.run --test."""
 from collections import OrderedDict
 import copy
 import random
@@ -12,7 +12,6 @@ from torch.utils.data import DataLoader, TensorDataset
 from BASELINES.common.data import partition
 from BASELINES.common.runtime import (optimizer_and_scheduler, save_checkpoint, restore,
                                      strict_load, update, evaluation_rng)
-from BASELINES.finetune.fusion import combine
 
 
 def test_csv_assignments_are_preserved_without_group_resplitting():
@@ -57,13 +56,13 @@ def test_resume_reproduces_next_update_and_random_draws(tmp_path):
         assert torch.equal(torch.rand(3), evaluation_draw)
     x = torch.arange(8).float().reshape(2, 4)
     update(model(x).square().mean(), model, optimizer, scheduler, scaler)
-    save_checkpoint(tmp_path/'last.pt', model, optimizer, scheduler, scaler, loader, cfg, 1, 1, None, [], validation_loader=validation)
+    save_checkpoint(tmp_path/'best.pt', model, optimizer, scheduler, scaler, loader, cfg, 1, 1, None, [], validation_loader=validation)
     draws = (random.random(), float(np.random.rand()), torch.rand(3))
     update(model(x).square().mean(), model, optimizer, scheduler, scaler)
     expected = copy.deepcopy(model.state_dict())
     resumed, opt, sched, scale, data = build()
     torch.rand(3, generator=validation.generator)
-    state = restore(tmp_path/'last.pt', resumed, opt, sched, scale, data, cfg, validation)
+    state = restore(tmp_path/'best.pt', resumed, opt, sched, scale, data, cfg, validation)
     assert torch.equal(validation.generator.get_state(), validation_state)
     assert state['step'] == 1 and sched.last_epoch == 1
     assert random.random() == draws[0]
@@ -74,13 +73,7 @@ def test_resume_reproduces_next_update_and_random_draws(tmp_path):
     assert resumed._gradient_check['encoder']['absolute_update'] > 0
     assert resumed._gradient_check['head']['absolute_update'] > 0
     with pytest.raises(ValueError, match='max_batches'):
-        restore(tmp_path/'last.pt', resumed, opt, sched, scale, data, dict(cfg, max_batches=1))
-
-
-def test_fusion_averages_probabilities_and_scalar_regression():
-    a, v = np.array([[.9, .1]]), np.array([[.2, .8]])
-    assert np.allclose(np.exp(combine(a, v, .25, 'classification')), .25*a+.75*v)
-    assert np.allclose(combine(np.array([1.]), np.array([3.]), .5, 'regression'), [[2.]])
+        restore(tmp_path/'best.pt', resumed, opt, sched, scale, data, dict(cfg, max_batches=1))
 
 
 def test_real_task_schema_allows_regression_without_class_count(tmp_path):
@@ -93,35 +86,12 @@ def test_real_task_schema_allows_regression_without_class_count(tmp_path):
     assert missing == 0 and rows[0]['_label'] == 12.5
 
 
-def test_native_branch_supervision_reaches_auxiliary_head():
-    from BASELINES.finetune.trainer import run_epoch
-    from app.finetune_va.train import _loss
-    class NativeBranches(nn.Module):
-        def __init__(self):
-            super().__init__()
-            self.encoder, self.head, self.aux = nn.Linear(2, 4), nn.Linear(4, 2), nn.Linear(4, 2)
-        def predict_sample(self, sample, task, device):
-            x = self.encoder(sample['x'][None])
-            return dict(logits=self.head(x), branches=dict(aux=self.aux(x)))
-        def supervised_loss(self, output, labels, criterion, task):
-            return _loss(output, labels, criterion, task, .1)
-    model = NativeBranches()
-    before = model.aux.weight.detach().clone()
-    dataset = [dict(x=torch.tensor([1., float(i)]), label=i, id=str(i)) for i in range(2)]
-    loader = DataLoader(dataset, batch_size=2, collate_fn=list)
-    cfg = dict(data=dict(task='classification', num_class=2), optimization=dict(lr=.01))
-    optimizer, scheduler = optimizer_and_scheduler(model, cfg, 2)
-    metrics = run_epoch(model, loader, nn.CrossEntropyLoss(), cfg, torch.device('cpu'),
-                        optimizer, scheduler, torch.amp.GradScaler('cuda', enabled=False))
-    assert metrics['samples'] == 2 and metrics['updates'] == 1
-    assert not torch.equal(before, model.aux.weight)
-
-
-def test_no_validation_uses_final_epoch_without_reading_test(tmp_path):
+@pytest.mark.parametrize('stage,filename',[('pretrain','latest.pt'),('finetune','best.pt')])
+def test_no_validation_uses_final_epoch_without_reading_test(tmp_path,stage,filename):
     import logging
     from BASELINES.common.runtime import fit, load_file
     cfg = dict(model={'kind':'test'}, data=dict(task='classification'),
-               optimization=dict(lr=.01,epochs=2), stage='finetune', seed=42)
+               optimization=dict(lr=.01,epochs=2), stage=stage, seed=42)
     model = nn.Sequential(OrderedDict(encoder=nn.Linear(2,2),head=nn.Linear(2,2)))
     train = DataLoader(TensorDataset(torch.ones(2,2)), batch_size=2,
                        generator=torch.Generator().manual_seed(42))
@@ -134,7 +104,9 @@ def test_no_validation_uses_final_epoch_without_reading_test(tmp_path):
         return dict(loss=float(step+1),updates=1,samples=2)
     fit(model,dict(train=train,test=object()),cfg,tmp_path,logging.getLogger('test'),
         torch.device('cpu'),None,epoch)
-    best=load_file(tmp_path/'best.pt')
+    assert sorted(p.name for p in tmp_path.glob('*.pt'))==[filename]
+    best=load_file(tmp_path/filename)
+    assert {'optimizer','scheduler','scaler','rng','loader_rng'}<=best.keys()
     assert calls==[0,1] and best['epoch']==2
     assert best['best']['score'] is None and best['best']['validation'] is None
     assert best['best']['selection']=='final_epoch_no_csv_validation'
@@ -169,8 +141,8 @@ def test_mental_instances_match_favor_and_train_attention_before_classification(
         def __init__(self):
             super().__init__()
             self.projection=nn.Linear(3,4)
-        def prepare(self,clip):return clip
-        def forward(self,batch):return self.projection(batch['x'][None])
+        def prepare(self,clip):return {'x':clip['x'][None]}
+        def forward(self,batch):return self.projection(batch['x'])
     model=TaskModel(Encoder(),2,cfg['model']['instance_aggregator'])
     before=model.head.instance_aggregator.attention[0].weight.detach().clone()
     loader=DataLoader(dataset,batch_size=2,collate_fn=list)

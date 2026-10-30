@@ -1,4 +1,5 @@
 yamls:
+- ../../common/defaults.yaml
 - defaults.yaml
 model:
   id: whisper-large-v3

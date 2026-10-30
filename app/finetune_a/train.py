@@ -386,6 +386,7 @@ def main(args):
 
     model = AudioFineTuneModel(model_cfg, task, num_class=num_class)
     latest_path = folder / "latest.pt"
+    save_latest = bool(meta.get("save_latest", False))
     will_resume = bool(
         meta.get("load_checkpoint", True)
         and latest_path.is_file()
@@ -592,10 +593,11 @@ def main(args):
                     folder / "best.pt", model, optimizer, scheduler,
                     epoch + 1, best_score, history, args, grokfast_grads=grokfast_grads, stale_epochs=stale,
                 )
-            _checkpoint(
-                latest_path, model, optimizer, scheduler,
-                epoch + 1, best_score, history, args, grokfast_grads=grokfast_grads, stale_epochs=stale,
-            )
+            if save_latest:
+                _checkpoint(
+                    latest_path, model, optimizer, scheduler,
+                    epoch + 1, best_score, history, args, grokfast_grads=grokfast_grads, stale_epochs=stale,
+                )
             if task == "classification":
                 LOGGER.info(
                     "epoch=%d train_loss=%.4f val_loss=%.4f train_acc=%.4f val_acc=%.4f "
@@ -629,7 +631,7 @@ def main(args):
     if validation_group is not None:
         dist.destroy_process_group(validation_group)
     return {
-        "latest_checkpoint": latest_path,
+        "latest_checkpoint": latest_path if save_latest else None,
         "best_checkpoint": folder / "best.pt",
         "logs_dir": logs_dir,
     }

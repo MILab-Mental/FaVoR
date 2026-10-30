@@ -1,0 +1,13 @@
+yamls:
+- ../../common/defaults.yaml
+- defaults.yaml
+route: scratch_pretrain
+experiment: merged-scratch
+model:
+  id: social-mae
+  kind: socialmae
+  version: Native 768-dim Social-MAE, 8 frames, tubelet 2; random initialization
+  architecture_source: https://github.com/HuBohy/SocialMAE
+data:
+  datasets:
+  - DATASET/merged/pretrain_va_canonical.csv

@@ -1,161 +1,108 @@
-# FaVoR baselines
+# FaVoR 对比实验
 
-从项目根目录统一使用 `python -m BASELINES.run`（也支持 `python BASELINES/run.py`）。模型范围遵循 [核心表](../核心对比模型精简表.md)；固定的 Hub revision、公开权重 URL 和本地路径在各模型 YAML 中，官方源码提交在 [sources.yaml](/home/data/sdd/mental/OUTPUTS/对比实验初始化权重/sources.yaml)。没有用 Base 替代 Large。
+在项目根目录运行。模型范围见 [核心表](核心对比模型精简表.md)，版本、Hub revision、权重来源和 SHA256 见各模型 YAML；官方源码固定提交见初始化目录的 `sources.yaml`。没有使用 Base 权重替代 Large。
 
-## 环境
+## 环境与路径
 
-已运行环境：Python 3.13、PyTorch/torchaudio 2.11.0、torchvision 0.26.0、transformers 4.57.6、timm 0.9.2，RTX PRO 6000 Blackwell，BF16。复用根目录依赖；LeAVJEPA/WavJEPA 另需 `lightning`、`torchmetrics`。没有在线日志服务。
+主环境：Python 3.13、PyTorch/torchaudio 2.11.0、torchvision 0.26.0、transformers 4.57.6、timm 0.9.2；LeAVJEPA/WavJEPA 使用 lightning 2.6.1、torchmetrics 1.9.0。使用两张 RTX PRO 6000 96GB、BF16。
 
-```bash
-pip install -r requirements.txt
-pip install timm==0.9.2 transformers==4.57.6 lightning==2.6.1 torchmetrics==1.9.0
-python -m BASELINES.common.official --fetch AudioMAE VideoMAE cav-mae LeAVJEPA WavJEPA vjepa2 dinov2 AVSiam
-```
+EAT、LanguageBind 的 YAML 指定独立 Python：`<初始化目录>/environments/legacy/bin/python`。该环境使用 Python 3.10、PyTorch/torchaudio 2.7.1+cu128、torchvision 0.22.1、transformers 4.30.2、NumPy 1.23.5、官方 Fairseq 固定提交及兼容的 peft/PyTorchVideo。NCCL 单独更新为 2.28.9；原附带 2.26.2 在本机通信初始化停滞。脚本自动选择环境，主环境未降级。AV-HuBERT 使用 `environments/avhubert/bin/python`，复用旧栈依赖并单独安装其仓库指定的 Fairseq `afc77bdf`；两个 Fairseq 版本相互隔离；AV-HuBERT 另使用 CPU dlib 19.24.6、scikit-image 0.21.0 和初始化目录内的三份嘴部前处理资产。MaskFeat 使用固定 SlowFast/PyTorchVideo 源码；仅对其未使用的检测头导入提供 torchvision RoIAlign，分类和 HOG 目标使用官方实现。
 
-未验证的旧栈另需官方对应环境：EAT/AV-HuBERT 使用 Fairseq（AV-HuBERT 还需 `python_speech_features`）；MaskFeat 使用 SlowFast、固定源码版 PyTorchVideo、`simplejson`、detectron2；LanguageBind 使用其官方旧版 transformers/peft 组合。不能把当前 Python 3.13 环境当作这些旧栈已经兼容的证据。
+- 初始化目录：`/home/data/sdd/mental/OUTPUTS/对比实验初始化权重/`，包含权重、`sources/`、`sources.yaml`、`verification.json` 和旧栈环境。
+- 输出目录：`/home/data/sdd/mental/OUTPUTS/对比实验输出/{pretrain,finetune}/<model>/<experiment>/`。
+- 修改权重路径使用 YAML 的 `model.weights`，研究预训练迁移使用 `model.encoder_checkpoint`；联合模型的两个分支分别配置。
+- 官方源码和环境已经放置在初始化目录；`python -m BASELINES.common.official --fetch <源码名称>` 可按锁定提交获取源码。
 
-官方源码位于 `/home/data/sdd/mental/OUTPUTS/对比实验初始化权重/sources/`，按提交校验。AudioMAE 使用官方 Swin 解码器；兼容层仅处理旧 timm 的默认 `qk_scale`、旧 NumPy/PyTorch 名称及隔离同名包，未修改系统 timm。AVSiam Base+ 仅删除经语法树确认未使用的调试/ToMe 导入，未改骨干计算。WavJEPA 绕过官方 `inference_mode` 特征接口，直接训练相同模块；继续预训练沿用发布权重的 GELU、原生 mask/教师目标并恢复 EMA。
+## 模型与验证状态
 
-## 模型与验证
+“全任务检查”是本轮真实 CSV、两卡小批量训练检查：指定初始化、有限 loss/梯度、编码器和任务头更新、两卡参数同步、内存序列化及恢复、验证/测试指标与预测数量核对。每任务通常一次更新，首个适用任务两次更新并恢复；不是正式收敛结果。音频有 71 个适用任务；视频/音视频有 53 个，其余 18 个只有音频。预训练另检查原生目标组件及编码器迁移。
 
-表中既有验证记录来自此前的小规模接入检查；当前 CSV 原划分与 merged 数据协议的复查状态见验证记录，历史自定义划分结果不作当前协议结果。“完整 smoke”指指定权重、真实数据、编码器/任务头非零有限梯度及参数更新、保存、完整恢复后再更新、验证/测试、预测数量检查；预训练另检查解码器/投影器和编码器迁移。共 14 个直接微调模型、5 条预训练→微调路线通过；另在 CNSCED 上检查单独的多标签/回归任务。每次仅 2 个真实样本、至多 2 次更新，均为功能验证，不能当作正式性能结果。逐项参数量和数据清单 SHA256 见 [verification.json](/home/data/sdd/mental/OUTPUTS/对比实验初始化权重/verification.json)；下表最终状态也以该记录为准。
+下表配置名均位于 `finetune/configs/<配置名>.yaml`。当前清单中的初始化权重均已就绪。30 条微调路线、1,806 个适用的模型/任务组合通过真实数据小批量检查。9 条预训练路线均通过原生目标、恢复及编码器迁移检查，包含新增的 Social-MAE 从头预训练。WavJEPA、CLIP、CAV-MAE 另通过有效全局 batch 16、多进程加载检查；AV-HuBERT 通过每卡 batch 2、累积 4 次、每卡 8 个加载进程的真实普通/mental 检查，测试预测数量均为 16。
 
-| 模型 / 配置 | 固定版本及保留部分 | 路线 / 状态 |
-|---|---|---|
-| [wavlm-large](finetune/configs/wavlm-large.yaml) | WavLM Large，24 层，纯 PT | 直接微调；完整 smoke |
-| [whisper-large-v3](finetune/configs/whisper-large-v3.yaml) | 原版多语种 Whisper large-v3，仅 audio encoder | 直接微调；完整 smoke |
-| [audiomae-base](finetune/configs/audiomae-base.yaml) | AudioMAE ViT-B，AS-2M 纯 PT | 直接微调；完整 smoke |
-| [data2vec-audio-large](finetune/configs/data2vec-audio-large.yaml) | data2vec **1.0** audio Large | 直接微调；完整 smoke |
-| [hubert-large-ll60k](finetune/configs/hubert-large-ll60k.yaml) | HuBERT Large LL60k，非 `-ft` | 直接微调；完整 smoke |
-| [wav2vec2-large-lv60](finetune/configs/wav2vec2-large-lv60.yaml) | wav2vec 2.0 Large LV60，非 ASR FT | 直接微调；完整 smoke |
-| [eat-large-20ep](finetune/configs/eat-large-20ep.yaml) | EAT Large 20ep，官方 Fairseq PT | 接入代码；当前缺 Fairseq/指定 Fairseq 权重，未验证；HF 推理版不替代正式训练 |
-| [beats-iter3](finetune/configs/beats-iter3.yaml) | BEATs Iter3，非 Iter3+ | 接入代码；指定 OneDrive 权重本次 TLS/SSL 失败，未验证 |
-| [wavjepa-base](finetune/configs/wavjepa-base.yaml) | 官方 WavJEPA Base，仅编码路径约 89M | 直接微调；完整 smoke |
-| [dinov2-vit-large-patch14](finetune/configs/dinov2-vit-large-patch14.yaml) | DINOv2 ViT-L/14，无 registers | 逐帧 + 特征时间均值；完整 smoke |
-| [videomae-vit-large-patch16](finetune/configs/videomae-vit-large-patch16.yaml) | 原版 VideoMAE ViT-L K400 1600e PT | 原生 16 帧视频；完整 smoke |
-| [mae-dfer-lgi-former](finetune/configs/mae-dfer-lgi-former.yaml) | MAE-DFER/LGI-Former，dim512、depth16、160px | 原生视频；指定 Google Drive 权重本次 TLS/SSL 失败，未验证 |
-| [dinov3-vit-large-patch16](finetune/configs/dinov3-vit-large-patch16.yaml) | DINOv3 ViT-L/16 LVD-1689M | 逐帧均值；代码接入，指定仓库需要访问授权，未验证 |
-| [vjepa2-1-vit-large-patch16-384](finetune/configs/vjepa2-1-vit-large-patch16-384.yaml) | V-JEPA **2.1** ViT-L/16，384px；EMA 编码器 | 原生 64 帧、末层 token 均值；完整 smoke |
-| [clip-vit-large-patch14](finetune/configs/clip-vit-large-patch14.yaml) | CLIP ViT-L/14 224px，仅视觉分支含投影 | 逐帧均值；完整 smoke |
-| [hiera-large-16x224](finetune/configs/hiera-large-16x224.yaml) | Hiera-L `mae_k400`，16×224，非 FT | 原生视频；完整 smoke |
-| [maskfeat-mvit-large](finetune/configs/maskfeat-mvit-large.yaml) | MaskFeat MViT-L K400 800ep | 代码接入；当前缺 detectron2 等 SlowFast 环境和指定权重，未验证 |
-| [social-mae](finetune/configs/social-mae.yaml) | Social-MAE VoxCeleb2 纯 PT，8 帧/tubelet2 | 代码接入；指定下载链接本次返回 404，未验证 |
-| [av-hubert-large](finetune/configs/av-hubert-large.yaml) | AV-HuBERT Large clean PT，仅 AV 编码器 | 代码接入；缺 Fairseq、指定权重及真实唇部 ROI 清单，未验证 |
-| [cav-mae-scale-plus-plus](finetune/configs/cav-mae-scale-plus-plus.yaml) | CAV-MAE Scale++ 纯 PT，**单图像帧**主线 | 联合 AV 微调；完整 smoke |
-| [avsiam-base-plus](finetune/configs/avsiam-base-plus.yaml) | AVSiam **Base+**，共享骨干 + 原生融合块 | 联合 AV 微调；完整 smoke；上游有 ImageNet-21k 监督初始化 |
-| [languagebind-audio-large-video-large-v1-5](finetune/configs/languagebind-audio-large-video-large-v1-5.yaml) | LanguageBind Audio-Large + Video-Large V1.5，完整 FT | 独立编码器及投影 + 拼接任务头；代码接入，当前缺 peft，官方 transformers 4.30.2 接口亦需隔离环境验证 |
-
-| 额外路线 | 原生目标 / 状态 |
+| 配置名 / 网络版本 | 路线与本轮状态 |
 |---|---|
-| [audiomae-large](pretrain/configs/audiomae-large.yaml) | **Large 随机初始化**，官方局部 Swin 解码器及归一化掩码频谱重建；真实预训练→微调 |
-| [videomae-vit-large-patch16](pretrain/configs/videomae-vit-large-patch16.yaml) | VideoMAE Large 公开初始化，保留指定权重的 **12 层解码器**，tube mask + 归一化视频像素重建；真实预训练→微调 |
-| [leavjepa-large](pretrain/configs/leavjepa-large.yaml) | LeAVJEPA Large 随机初始化，共享 Echo、G2/K2、单模态 token drop、不变性 + SIGReg；真实预训练→微调 |
-| [wavjepa-base](pretrain/configs/wavjepa-base.yaml) | WavJEPA Base 初始化，原生 context/target mask、12 层教师表示及 EMA；真实继续预训练→微调 |
-| [cav-mae-scale-plus-plus](pretrain/configs/cav-mae-scale-plus-plus.yaml) | CAV-MAE Scale++ 初始化，重建 + 对比，保留原解码器；完整真实预训练→微调 smoke |
-| [eat-large-20ep](pretrain/configs/eat-large-20ep.yaml) | 原生 Fairseq 帧级/句级目标、克隆 mask 与 EMA；同 EAT Large 环境/权重限制，未验证 |
-| [maskfeat-mvit-large](pretrain/configs/maskfeat-mvit-large.yaml) | 原生 3D mask + HOG 目标；同 MaskFeat 环境/权重限制，未验证 |
-| avsiam-large | **未实现、未注册**：发布仓库缺 Large 架构/训练配置，仅有 Base 入口和部分 `.pyc`；没有拿 Base+ 充当 Large |
+| `wavlm-large`：24 层 Large 纯 PT | 直接微调；71 任务通过 |
+| `whisper-large-v3`：原版多语种，仅音频编码器 | 直接微调；71 任务通过 |
+| `audiomae-base`：ViT-B，AS-2M 纯 PT | 直接微调；71 任务通过 |
+| `data2vec-audio-large`：data2vec **1.0** Large | 直接微调；71 任务通过 |
+| `hubert-large-ll60k`：Large LL60k，非 ASR FT | 直接微调；71 任务通过 |
+| `wav2vec2-large-lv60`：Large LV60，非 ASR FT | 直接微调；71 任务通过 |
+| `eat-large-20ep`：官方 Fairseq Large 20ep | 直接 / 继续预训练；各 71 任务通过，原生预训练、恢复及迁移通过 |
+| `beats-iter3`：Iter3，非 Iter3+ | 直接微调；71 任务通过；官方链接不可用时下载指定版本镜像，来源、提交和 SHA256 明确登记，未声称与无法获取的原文件完成哈希比对 |
+| `wavjepa-base`：官方 Base | 直接 / 继续预训练；各 71 任务通过 |
+| `dinov2-vit-large-patch14`：ViT-L/14，无 registers | 逐帧微调；53 任务通过 |
+| `dinov3-vit-large-patch16`：ViT-L/16 LVD-1689M | 逐帧微调；53 任务通过 |
+| `clip-vit-large-patch14`：ViT-L/14，视觉分支含投影 | 逐帧微调；53 任务通过 |
+| `videomae-vit-large-patch16`：原版 Large K400 1600ep PT | 直接 / 继续预训练；各 53 任务通过，保留原生 12 层预训练解码器 |
+| `mae-dfer-lgi-former`：LGI-Former，512 维、16 层、160px | 直接微调；53 任务通过 |
+| `vjepa2-1-vit-large-patch16-384`：V-JEPA **2.1** Large EMA | 直接微调；53 任务通过；64 帧、384px、官方 4fps 规范 |
+| `hiera-large-16x224`：Hiera-L MAE K400，非 FT | 直接微调；53 任务通过 |
+| `maskfeat-mvit-large`：MViT-L K400 800ep | 直接 53 任务通过；继续预训练及迁移通过，迁移后全部 53 个任务通过 |
+| `cav-mae-scale-plus-plus`：Scale++ 纯 PT，单图像帧 | 直接 / 继续预训练；各 53 任务通过 |
+| `avsiam-base-plus`：官方 Base+，共享骨干及融合块 | 直接微调；53 任务通过；上游包含 ImageNet-21k 监督初始化 |
+| `avsiam-large`：随机共享 ViT-L/16，24 层、1024 维 | 论文构建候选；2 层融合 + 6 层解码器，0–50% 多比例掩码；真实数据两卡预训练、完整恢复、编码器迁移及全部 53 个适用微调任务通过 |
+| `languagebind-audio-large-video-large-v1-5`：Audio-Large + Video-Large V1.5 完整 FT 发布版 | 独立编码器及投影 + 拼接任务头；两个分支严格加载、真实训练及全部 53 个适用任务通过 |
+| `av-hubert-large`：Large LRS3+VoxCeleb2 clean PT | 指定权重严格加载，下游编码器 324,622,976 参数；原生嘴部裁剪后的全部 53 个适用任务、两卡更新、BatchNorm 状态同步和完整恢复通过 |
+| `social-mae`：原生 768 维，8 帧 / tubelet 2，随机初始化 | 从头预训练 → 编码器迁移 → 全参数微调；两卡原生目标、恢复、严格迁移及全部 53 个适用微调任务通过；另通过有效全局 batch 16、每卡 4 个加载进程的普通/mental 检查 |
 
-Hiera 输入归一化采用固定提交的官方 `examples/inference.ipynb`：mean=`[.45,.45,.45]`、std=`[.225,.225,.255]`，其中第三通道不同于 SlowFast 通用默认值，已在适配器和运行配置明确记录。
+另外两条从头预训练路线：`audiomae-large` 使用随机 Large 和官方局部 Swin 解码器；`leavjepa-large` 使用随机 Large Echo、原生不变性 + SIGReg。两者均通过真实预训练、恢复、迁移及全部适用微调任务。加上 Social-MAE 和上表 AVSiam Large，预训练配置共 9 份，其中 5 条为上表 EAT、WavJEPA、VideoMAE、MaskFeat、CAV-MAE 的继续预训练，微调配置后缀为 `-continued`。
 
-FaVoR 无联合预训练对照使用 [favor-av-no-joint-pretrain.yaml](finetune/configs/favor-av-no-joint-pretrain.yaml)，复用原 `build_va_lejepa`、`VAFinetuner`、视图解码和句子聚合，只跳过联合 SSL。`model.favor_config` 指定原生下游配置，`model.favor_pretrain_config` 指定联合 SSL 对照配置并校验骨干/融合结构，从后者提取 A/V 初始化以保证对照一致。当前 i3 对照所需 `OUTPUT/pretrain_v_lejepa/vitl16/FaVoR-112px-48f8/e25.pt` 和 `OUTPUT/pretrain_a_lejepa/emotion2vec-plus-large/FaVoR-4s-local2s/latest.pt` 均不存在，尚未真实验证；不回退到其他权重。
+Social-MAE 使用固定官方代码的随机初始化、可训练位置编码、8 层重建解码器、75% 非结构化掩码及 0.01 对比损失；两卡汇集对比负例。输入为 4 秒 / 2fps / 8 帧，沿用其 OpenCV BGR 通道顺序、224px 双三次缩放和频谱归一化，变短视频重复真实帧并按有效时间池化。该路线在本研究配对 CSV 上从头训练，不能作为 VoxCeleb2 公开权重的直接微调或继续预训练结果。
 
-FaVoR 晚期概率融合对照使用 `finetune.fusion`：CSV 有验证集时从验证预测选概率权重；没有验证集时用固定概率权重（默认 0.5），仅在测试集评估；严格核对样本、标签和划分。当前缺这样的两套预测，尚未完成真实 FaVoR 融合验证。
+AVSiam Large 按[论文 Sec.3](https://www.ecva.net/papers/eccv_2024/papers_ECCV/papers/02220.pdf)补齐，实测下游编码器 329,496,576 参数、预训练模型 349,850,624 参数。复用发布代码的 blocks、重建解码和对比损失，按论文共享重建路径骨干，使用六层解码器及 0–50%、5% 步长的随机分组掩码。按核心表要求**随机初始化**，区别于论文的 ImageNet-21k 初始化，不能当作发表结果的等条件复现。
 
-## 数据与权重
+`verification.json` 是历史接入记录，本轮按“不保存测试结果”要求没有更新；本轮状态以上述说明及控制台检查为准。
 
-下游只读取项目 `DATASET/splits-0901/csvs/` 中对应任务的原始 CSV，使用 `<label_column>_split`：`0=train`、`1=test`、存在时 `2=validation`，`-1`/空值不参与该任务。不再按说话人、参与者或会话重新划分，也不要求额外身份字段。只有 CSV 提供验证集时才按验证指标选点；没有验证集时固定训练轮数，`best.pt` 保存最终 epoch，关闭验证早停，测试集只用于显式评估。
+## 数据与协议
 
-预训练按模态直接读取以下三个真实清单，不再限制为 CNCVS1 或划出验证对象：
+微调只使用 `DATASET/splits-0901/csvs/` 原始 CSV 和 FaVoR 原有 33 个普通、38 个 mental 任务定义：`<标签列>_split` 的 `0=train`、`1=test`、存在时 `2=validation`；不重新划分说话人或会话。没有 CSV 验证集时固定轮数、使用最终 epoch，测试集不选点。
 
-| 模态 | 清单 | 真实格式 |
-|---|---|---|
-| 音频 | `DATASET/merged/pretrain_audios_0901.csv` | 无表头，每行“路径 + 数字标签” |
-| 视频 | `DATASET/merged/pretrain_videos_0901.csv` | 无表头，每行“路径 + 数字标签” |
-| 音视频 | `DATASET/merged/pretrain_va_canonical.csv` | `pair_id,source_id,video_path,audio_path,label` |
+预训练直接读取 `DATASET/merged/pretrain_audios_0901.csv`、`pretrain_videos_0901.csv`、`pretrain_va_canonical.csv`，数字标签不用于监督或划分，不额外划验证集。复用 FaVoR mmap 清单索引、媒体路径注册、标签解析、损失和指标。音视频比较使用共同有真实 A/V 路径的样本，复用 FaVoR 通用解码器的同步校验、媒体时间起点和共同有效时间区间。`data.sync` 可显式覆盖解码器容差，生效来源记入 `data_audit`；不会把联合预训练模板的零偏移约束强加到下游 CSV（实查 1,121 对媒体，其中 543 对不满足该更严约束，主要包含 MP3 编码起点等差异）。
 
-三个清单中的数字标签不作为划分，全部清单行用于预训练，不额外划验证集。复用 FaVoR 的 mmap 行索引按需读取，避免一次展开数百万行；音视频保留 canonical 身份和同步检查。`data.limit` 只用于小规模检查，不改变 CSV 的正式划分。
+长媒体按 FaVoR `sentence_identity` 聚合同一说话人/原始录制实例的切片，使用原生 8 句采样与注意力实例头；不会把同一说话人的不同录制全局合并。音频评估遍历句子窗口，视频/音视频复用其固定随机状态的原生采样。FaVoR 无联合预训练对照保留 CSV 中不足 100ms 的非空真实切片，使用原生 zero-pad 和有效长度 mask，不增加样本排除规则。
 
-Mental 长媒体任务（`*_LA.csv` / `*_LV.csv`）按 FaVoR 的说话人/原始访谈实例处理：复用 `sentence_identity` 去掉 `-sXXXX` 后缀并保留目录，把同一原始长媒体的切片合为一个样本。训练默认采样 8 句，先用官方基线编码器提取句子特征，再复用 FaVoR 的 `InstancePredictionHead`（可学习注意力聚合、LayerNorm、分类/回归头）产生一次实例预测和监督损失。测试指标、预测 CSV 和样本数量均按实例统计。采样配置也复用 FaVoR：音频遍历句子窗口，视频/音视频默认随机采样 8 句，评估随机状态固定。CSV 的训练/测试归属保持原样，这里的聚合不会重新划分数据。
+模型各自保留采样率、频谱、帧数、分辨率和读出。AV-HuBERT 对 CSV 的实际 112px 全脸帧重新检测 68 点，复用官方平滑、256px 对齐、96px 嘴部裁剪和 88px 输入，全部在内存完成；原有关键点使用原始高清视频坐标，不能直接套用。该低分辨率来源与原论文的原始高清视频前处理存在质量差异。Hiera 使用固定官方 notebook 的 mean `[.45,.45,.45]` / std `[.225,.225,.255]`；MaskFeat 按实际发布权重恢复 split Q/K/V、无 CLS、Gaussian HOG window 16，并仅使用官方相对位置插值。树外 EMA、预训练解码器和下游保留编码器分别统计。
 
-微调默认 `data.cohort=paired` 使用共同有 A/V 路径的样本；纯音频任务设 `data.cohort=modality`。标签、损失、指标和媒体路径注册复用 FaVoR。保留各模型原生输入与长样本窗口聚合，训练标签权重只从 CSV 训练行计算。AV-HuBERT 需要真实唇部输入。Whisper 原生固定 30 秒输入，池化排除 padding；WavJEPA SSL 按官方方式补齐短录音并使用固定长度原生目标，微调读出保留有效长度。
-
-Hub 模型用固定 revision；本地快照放 `/home/data/sdd/mental/OUTPUTS/对比实验初始化权重/` 后配置 `model.weights`。例如：
-
-```bash
-hf download microsoft/wavlm-large --revision c1423ed94bb01d80a3f5ce5bc39f6026a0f4828c \
-  --include config.json preprocessor_config.json pytorch_model.bin \
-  --local-dir /home/data/sdd/mental/OUTPUTS/对比实验初始化权重/wavlm-large
-```
-
-Google Drive/OneDrive/Dropbox 文件按模型 YAML 中 `weight_source` 获取，保持指定版本；下载到 HTML 或缺失文件不能当权重。加载只允许显式上游组件丢弃和新的读出归一化，其他缺失/形状不匹配直接报错。MaskFeat 仅使用官方相对位置插值。
-
-## 最小运行命令
-
-`--models` 使用上表对应的配置名，不带 `.yaml`；可给多个名称顺序运行。`--config` 可直接指定包含模型、任务和数据的完整 YAML。`--list` 只列配置，不构建模型；表中未验证条目仍需补齐所列资源。
+## 最小命令
 
 ```bash
-BASELINE_OUTPUTS=/home/data/sdd/mental/OUTPUTS/对比实验输出
+# 正式全量：两卡、所有模型；先预训练，再运行直接和迁移后的全部微调任务
+bash BASELINES/pretrain.sh
+bash BASELINES/finetune.sh
 
-# 查看阶段配置
+# 本轮使用的真实数据小批量检查：不保存训练结果或测试报告
+bash BASELINES/pretrain.sh --test
+bash BASELINES/finetune.sh --test
+
+# 选择路线；配置名不带 .yaml
+bash BASELINES/finetune.sh --models wavlm-large
+bash BASELINES/pretrain.sh --models audiomae-large       # 从头
+bash BASELINES/pretrain.sh --models social-mae          # 从头 AV 重建 + 对比
+bash BASELINES/finetune.sh --models social-mae          # 加载上述 latest.pt
+bash BASELINES/pretrain.sh --models videomae-vit-large-patch16  # 继续
+bash BASELINES/finetune.sh --models videomae-vit-large-patch16-continued
+
+# 只选择某个任务；可用 --set 覆盖权重路径等配置
+bash BASELINES/finetune.sh --models wavlm-large --tasks mental/DSM-Depression
+
+# 查看配置；单实验评估已保存的最佳模型
 python -m BASELINES.run --stage finetune --list
-python -m BASELINES.run --stage pretrain --list
-
-# 直接微调；多个 --models 名称按顺序运行
-python -m BASELINES.run --stage finetune --models wavlm-large --device cuda:1
-
-# 从头预训练 / 继续预训练
-python -m BASELINES.run --stage pretrain --models audiomae-large
-python -m BASELINES.run --stage pretrain --models videomae-vit-large-patch16
-
-# 加载研究预训练导出的编码器；默认路径已写在对应微调配置中
-python -m BASELINES.run --stage finetune --models audiomae-large
-python -m BASELINES.run --stage finetune --models videomae-vit-large-patch16-continued
-
-# 自定义任务配置；--set 仍可覆盖数据、优化器或权重路径
-python -m BASELINES.run --stage finetune \
-  --models wavjepa-base --set data.datasets=[DATASET/splits-0901/csvs/2_CNSCED_SA.csv] \
-  data.task=multi_label_classification data.label_column=emotion data.num_class=7 data.cohort=modality
-
-# 测试 / 完整续训
 python -m BASELINES.run --stage finetune --models wavlm-large --evaluate test \
-  --checkpoint "$BASELINE_OUTPUTS/finetune/wavlm-large/ravdess-emotion-direct/best.pt" \
-  --set save_predictions=true
-python -m BASELINES.run --stage finetune --models wavlm-large \
-  --resume "$BASELINE_OUTPUTS/finetune/wavlm-large/ravdess-emotion-direct/last.pt"
-
-# 小规模真实检查；预训练模式还会验证编码器迁移到微调
-python -m BASELINES.run --stage finetune --models wavlm-large --smoke --device cuda:1
-python -m BASELINES.run --stage pretrain --models wavjepa-base --smoke --device cuda:1
-python -m pytest tests/test_baselines.py -q
-
-# FaVoR 概率融合；源预测必须覆盖同一组划分的共同验证/测试样本
-python -m BASELINES.run --stage fusion --data-config audited-task.yaml \
-  --audio-test audio-test.csv --video-test video-test.csv --audio-weight 0.5
+  --checkpoint /完整路径/best.pt --set save_predictions=true
 ```
 
-用 `--device cpu` 或 `--device cuda:0` 选设备。`--smoke` 固定两样本、两次更新；默认检查完成后删除临时权重，`--keep-checkpoints` 可保留。预训练 smoke 的下游任务可用 `--finetune-config` 指定。正式训练的 epoch、批量和路径由 YAML / `--set` 决定；恢复拒绝改变模型、数据、优化器、seed 和原定预算，恢复边界是 epoch，尚未实现中途 batch 精确恢复或 DDP。
+两个脚本都只有一条运行命令。公共参数在 `common/defaults.yaml`：20 epochs、CUDA fused AdamW、lr=1e-4、weight decay=.05、seed=42、BF16、有效全局 batch 16。句子任务每卡 batch 8；长媒体实例任务每卡 batch 2、累积 4 次梯度；使用激活检查点、默认 4 个数据加载进程；AV-HuBERT 使用 8 个进程完成 CPU 嘴部前处理。各方法仍保留原生目标和必要输入规范，不把不同初始化与训练预算的差异解释为单一损失增益。
 
-## 路径与输出
+正式模式会在开始前检查全部所选模型资源；缺权重、研究预训练产物或唇部数据时明确退出，不静默省略。测试模式打印阻塞项目，继续检查可用项，最后返回非零状态。Social-MAE 改为随机初始化后在本研究配对数据上从头预训练，不再依赖失效的 VoxCeleb2 公开权重；只支持该预训练产物的微调，不提供直接微调路线。迁移路线的正式微调仍需先完成对应预训练。`--test` 的少步数结果也不能代替空卡时正式 batch 的吞吐量验证。
 
-模型 ID 和配置文件统一使用小写、连字符和真实网络名，例如 `wavlm-large`、`videomae-vit-large-patch16`。继续预训练后的微调配置使用 `-continued.yaml` 后缀；预训练配置在 `pretrain/configs/` 选择同名模型。
+## 输出与恢复
 
-固定存储根路径集中定义于 `common/runtime.py`：
+每次正式运行仅生成 `config.yaml`、`train.log`、`metrics.json` 和一个检查点；需要导出评估预测时才生成 `predictions.csv`。目录名如 `finetune/wavlm-large/direct/mental/DSM-Depression/`，迁移路线使用 `scratch-pretrained` 或 `continued-pretrained`。
 
-- 输出：`/home/data/sdd/mental/OUTPUTS/对比实验输出/`。
-- 初始化权重：`/home/data/sdd/mental/OUTPUTS/对比实验初始化权重/`，同时保存 `sources/`、`sources.yaml` 和 `verification.json`。
+- **预训练只保留 `latest.pt`**：覆盖更新，包含完整模型、EMA/解码器、优化器、调度器、scaler、各 rank 随机状态和 DataLoader 状态，另含可迁移的纯编码器。
+- **每个微调任务只保留 `best.pt`**：有 CSV 验证集时仅改善才覆盖，没有验证集时覆盖为最终 epoch。未完成时含完整续训状态；完成训练和测试后精简为最佳模型，移除优化器等状态。
+- 不保存 `last.pt`、逐 epoch 权重或在线日志。原子替换时会短暂存在同目录 `.tmp`，正常完成后只留下一个检查点。
 
-正式输出为 `<输出根目录>/<pretrain|finetune>/<model>/<experiment>/`，例如 `finetune/wavlm-large/ravdess-emotion-direct/`、`pretrain/videomae-vit-large-patch16/merged-continue/`。Smoke 位于对应阶段的 `smoke/<model>/<experiment>/`，检查结论直接写入各实验的 `metrics.json`。下游和预训练清单均使用上述原始数据路径。`--set output=...` 可覆盖单次输出路径，`model.weights` 和 `model.encoder_checkpoint` 使用配置中的显式路径。
+重新执行相同脚本即可恢复未完成的实验，完成训练与测试的微调任务自动跳过。预训练从最新 epoch 恢复；微调只能从保留下来的最佳 epoch 恢复。单实验也可用 `--resume /完整路径/latest.pt` 或未完成的 `best.pt`。恢复校验模型、数据、优化器、seed、预算及卡数，不支持 batch 中途精确恢复。
 
-正式训练仅保存最终 `config.yaml`、`train.log`、`metrics.json`、轻量 `best.pt` 和完整恢复的 `last.pt`；需要时用 `save_predictions=true` 生成 `predictions.csv`。恢复包含优化器、调度器、scaler、Python/NumPy/PyTorch/CUDA 随机状态及训练/验证 DataLoader RNG。预训练权重另含可直接转移的纯 `encoder` 映射；参数量区分保留编码器、新头及教师/解码器/投影器，EAT 的树外 EMA 单列。
-
-历史两步 smoke 权重已清理，保留配置、日志、指标、预测和验证记录，已清理的 smoke 不能直接续训。新 smoke 也默认采用相同保留策略；正式训练保留检查点。
-
-Mental 长视频分类小规模检查示例：
-
-```bash
-python -m BASELINES.run --stage finetune --models videomae-vit-large-patch16 \
-  --smoke --device cuda:1 --experiment mental-dsm-depression \
-  --set 'data.datasets=[DATASET/splits-0901/csvs/3_私有临床数据_LV.csv]' \
-  data.task=classification data.label_column=DSM-Depression data.num_class=2
-```
+只保留一个检查点仍不代表所有任务能装入当前约 200GiB 的剩余空间：全部任务的最终最佳模型需要 TiB 量级容量；脚本会在写入前检查当前实验的空间。正式全量运行需要先准备足够输出空间。

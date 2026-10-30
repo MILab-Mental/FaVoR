@@ -1,4 +1,6 @@
+python: /home/data/sdd/mental/OUTPUTS/对比实验初始化权重/environments/legacy/bin/python
 yamls:
+- ../../common/defaults.yaml
 - defaults.yaml
 model:
   id: languagebind-audio-large-video-large-v1-5

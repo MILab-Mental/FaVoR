@@ -805,3 +805,11 @@ def test_cuda_ema_matches_cpu_and_checkpoint_reuses_shadow(tmp_path):
     assert restored.last_step == 64 and restored.num_updates == 2
     for name, value in restored.shadow.items():
         torch.testing.assert_close(value, gpu_ema.shadow[name], rtol=0, atol=0)
+
+
+def test_fusion_averages_probabilities_and_scalar_regression():
+    import numpy as np
+    from utils.late_fusion import combine
+    a, v = np.array([[.9, .1]]), np.array([[.2, .8]])
+    assert np.allclose(np.exp(combine(a, v, .25, 'classification')), .25*a+.75*v)
+    assert np.allclose(combine(np.array([1.]), np.array([3.]), .5, 'regression'), [[2.]])

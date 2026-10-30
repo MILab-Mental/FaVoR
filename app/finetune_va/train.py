@@ -202,6 +202,7 @@ def main(args):
     if int(data.get('num_sentence', 0)) > 0 and 'instance_aggregator' not in cfg:
         raise ValueError('data.num_sentence > 0 requires model.instance_aggregator')
     meta = args.get('meta', {})
+    save_latest = bool(meta.get('save_latest', False))
     data['seed'] = int(meta.get('seed', 0))
     task = data.get('task', 'classification')
     classes = int(data.get('num_class', 2))
@@ -353,7 +354,8 @@ def main(args):
             save_metric_curves(history, folder / 'logs/metrics_curves.png')
             LOGGER.info(_epoch_summary(epoch + 1, task, row, best_score * score_sign))
         extra = dict(best_score=best_score, stale_epochs=stale, history=history, stage='finetune', task=task)
-        _save_all(folder / 'latest.pt', model, optimizer, scaler, None, step, epoch + 1, args, 0, **extra)
+        if save_latest:
+            _save_all(folder / 'latest.pt', model, optimizer, scaler, None, step, epoch + 1, args, 0, **extra)
         if improved:
             _save_all(folder / 'best.pt', model, optimizer, scaler, None, step, epoch + 1, args, 0, **extra)
         if patience > 0 and stale >= patience:
@@ -361,4 +363,5 @@ def main(args):
             break
     if distributed:
         dist.barrier()
-    return {'latest_checkpoint': folder / 'latest.pt', 'best_checkpoint': folder / 'best.pt'}
+    return {'latest_checkpoint': folder / 'latest.pt' if save_latest else None,
+            'best_checkpoint': folder / 'best.pt'}

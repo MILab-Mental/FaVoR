@@ -11,9 +11,11 @@ from BASELINES.common.runtime import load_file, path, strict_load
 
 
 def fbank(waveform, frames=1024, mean=-4.2677393, std=9.1379948):
+    if waveform.numel()==0:raise ValueError('Empty audio cannot produce a real spectrogram')
     waveform = waveform - waveform.mean()
     if waveform.numel() < 400:
-        raise ValueError('Kaldi fbank requires at least 25 ms of real audio')
+        # One partial real frame, with raw valid length retained in io_check.
+        waveform=F.pad(waveform,(0,400-waveform.numel()))
     features = torchaudio.compliance.kaldi.fbank(waveform[None], htk_compat=True,
         sample_frequency=16000, use_energy=False, window_type='hanning',
         num_mel_bins=128, dither=0., frame_shift=10)
@@ -49,16 +51,43 @@ class WaveformEncoder(nn.Module):
             raise ValueError('These waveform table entries require the specified 24-layer Large encoder')
         if cfg.get('gradient_checkpointing', True):
             self.encoder.gradient_checkpointing_enable(gradient_checkpointing_kwargs={'use_reentrant': False})
-        self.input_spec = dict(modality='audio', sample_rate=16000, seconds=float(cfg.get('seconds', 4)))
+        receptive,jump=1,1
+        for kernel,stride in zip(self.encoder.config.conv_kernel,self.encoder.config.conv_stride):
+            receptive+=(kernel-1)*jump
+            jump*=stride
+        self.minimum_samples=receptive
+        self.input_spec = dict(modality='audio', sample_rate=16000, seconds=float(cfg.get('seconds', 4)),minimum_samples=receptive)
 
     def prepare(self, clip):
-        return dict(self.processor(clip['audio'].numpy(), sampling_rate=16000, return_tensors='pt', return_attention_mask=True))
+        batch=dict(self.processor(clip['audio'].numpy(), sampling_rate=16000, return_tensors='pt', return_attention_mask=True))
+        if batch['input_values'].shape[-1]<self.minimum_samples:
+            batch['input_values']=F.pad(batch['input_values'],(0,self.minimum_samples-batch['input_values'].shape[-1]))
+            # One partial receptive field contains real samples; there are no
+            # fully padded feature tokens to mask. Raw length stays in io_check.
+            batch.pop('attention_mask')
+        return batch
 
     def forward(self, batch):
-        states = self.encoder(**batch).last_hidden_state
-        lengths = self.encoder._get_feat_extract_output_lengths(batch['attention_mask'].sum(-1))
+        inputs=dict(batch)
+        length=int(self.encoder._get_feat_extract_output_lengths(batch['input_values'].shape[-1]))
+        # Keep native SpecAugment for ordinary clips. A real short sentence can
+        # have fewer tokens than its fixed ten-token time mask; skip that mask
+        # for this batch instead of inventing valid padding tokens or dropping it.
+        if self.training and length<int(getattr(self.encoder.config,'mask_time_length',0)):
+            inputs['mask_time_indices']=torch.zeros((batch['input_values'].shape[0],length),dtype=torch.bool,device=batch['input_values'].device)
+        states = self.encoder(**inputs).last_hidden_state
+        lengths = self.encoder._get_feat_extract_output_lengths(batch['attention_mask'].sum(-1)) if 'attention_mask' in batch else torch.full((states.shape[0],),states.shape[1],device=states.device)
         mask = torch.arange(states.shape[1], device=states.device)[None] < lengths[:, None]
         return (states * mask[..., None]).sum(1) / mask.sum(1, keepdim=True).clamp_min(1)
+
+    def batch_inputs(self, inputs):
+        # Normalize each real waveform before padding; convolution/attention
+        # and readout receive the matching per-sample valid-length mask.
+        from torch.nn.utils.rnn import pad_sequence
+        values=[item['input_values'][0] for item in inputs]
+        masks=[item.get('attention_mask',torch.ones_like(item['input_values'],dtype=torch.long))[0] for item in inputs]
+        return dict(input_values=pad_sequence(values,batch_first=True),
+                    attention_mask=pad_sequence(masks,batch_first=True))
 
 
 class WhisperEncoder(nn.Module):
@@ -163,10 +192,16 @@ class BEATsEncoder(nn.Module):
         if initialize:
             strict_load(self.encoder, checkpoint['model'])
         self.output_dim = config.encoder_embed_dim
-        self.input_spec = dict(modality='audio', sample_rate=16000, seconds=10)
+        self.minimum_samples=400+160*(config.input_patch_size-1)
+        self.input_spec = dict(modality='audio', sample_rate=16000, seconds=10,minimum_samples=self.minimum_samples)
 
     def prepare(self, clip):
-        return dict(source=clip['audio'][None], padding_mask=torch.zeros(1, len(clip['audio']), dtype=torch.bool))
+        # A 16-frame patch needs 400 + 15*160 waveform samples. Some real
+        # interview sentences are shorter; pad within this single patch only.
+        # Every resulting token includes real frames, so none is fully padded.
+        waveform=clip['audio']
+        waveform=F.pad(waveform,(0,max(0,self.minimum_samples-len(waveform))))
+        return dict(source=waveform[None])
 
     def forward(self, batch):
         values, mask = self.encoder.extract_features(**batch)
@@ -273,17 +308,33 @@ class WavJEPA(nn.Module):
 
 class EAT(nn.Module):
     """Use the official Fairseq release for both FT and continued SSL."""
+    def gradient_components(self):
+        return {name.lower()+'_decoder':encoder.decoder
+                for name,encoder in self.encoder.modality_encoders.items()
+                if self.pretraining and isinstance(encoder.decoder,nn.Module)}
+
     def __init__(self, cfg, initialize=True, pretrain=False):
         super().__init__()
         # Fairseq's official loader enforces strict=True, including EMA state.
         # It also restores the actual model/task dataclasses from this PT file.
         import fairseq
-        with official('EAT') as source:
-            source('models.EAT_pretraining')
-            source('tasks')
+        with official('EAT','..',keep_packages=('EAT','fairseq')) as source:
+            # EAT's datasets use parent-relative imports, so retain its actual
+            # package namespace instead of importing a top-level `tasks` package.
+            source('EAT.models.EAT_pretraining')
+            source('EAT.tasks')
             models, _, _ = fairseq.checkpoint_utils.load_model_ensemble_and_task(
                 [str(path(cfg['weights']))], strict=True)
             self.encoder = models[0]
+        # Native masking imports EAT.utils lazily. Retain its unique namespace
+        # and Fairseq registry across the pretraining-to-finetuning transition.
+        if pretrain:
+            for encoder in self.encoder.modality_encoders.values():
+                native_maskinfo=encoder.make_maskinfo
+                def maskinfo(x,mask,shape=None,native=native_maskinfo):
+                    return native(x,mask.to(x.device),shape)
+                # The released block-mask generator returns CPU indices.
+                encoder.make_maskinfo=maskinfo
         logging.getLogger('baselines').info('EAT Fairseq strict checkpoint load: %s', cfg['weights'])
         self.pretraining = pretrain
         if not pretrain:
@@ -326,12 +377,11 @@ class EAT(nn.Module):
             self.encoder.num_updates = state['num_updates']
 
     def export_encoder(self):
-        import copy
-        # remove_pretraining_modules mutates both cfg and EMA; prune a copy so
-        # exporting best.pt never disrupts the continuing training model.
-        encoder = copy.deepcopy(self.encoder)
-        encoder.remove_pretraining_modules()
-        return encoder.state_dict()
+        # Exact state pruning performed by native remove_pretraining_modules;
+        # avoid duplicating the full student and external EMA teacher on GPU.
+        removed=('recon_proj.','shared_decoder.')+tuple(
+            'modality_encoders.'+name+'.decoder.' for name in self.encoder.modality_encoders)
+        return {k:v for k,v in self.encoder.state_dict().items() if k!='_ema' and not k.startswith(removed)}
 
     def counted_components(self):
         # Fairseq's EMA wrapper is not registered as a child nn.Module.
