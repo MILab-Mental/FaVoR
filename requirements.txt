@@ -1,34 +1,50 @@
-torch>=2
-torchvision
-torchaudio
-soundfile
-torchcodec
-tensorboard
-wandb
-iopath
-pyyaml
-numpy
-opencv-python
-submitit
-braceexpand
-webdataset
-timm
-transformers
-peft
-decord
-pandas
-einops
-beartype
-psutil
-h5py
-fire
-python-box
-scikit-image
-ftfy
-jupyter
+# 项目实际使用的依赖：主训练、数据处理、结果分析、对比基线和测试。
+# PyTorch、torchvision、torchaudio、torchcodec 需选择相互兼容的版本，CUDA 按机器环境选择。
 
+# 深度学习与模型组件（音频、视频、音视频预训练及微调）
+torch>=2             # 张量计算、自动求导、分布式训练与模型保存
+torchvision          # 图像与视频变换、数据增强及视觉算子
+torchaudio           # 音频读取、重采样、频谱与 Kaldi 特征
+timm                 # ViT 组件、DropPath 及官方基线模型组件
+einops               # 视频 patch 与模型特征的维度重排
 
-matplotlib
-tqdm
-scikit-learn
-pillow
+# 音视频读取与图像处理
+soundfile            # 音频解码备用后端
+torchcodec           # torchaudio 音频读取所用的解码后端
+decord               # 视频随机取帧与音视频配对解码
+opencv-python        # 图像缩放、视频变换与基线嘴部预处理
+pillow               # PIL 图像处理与数据增强
+scikit-image         # 视频数据增强及 AV-HuBERT 图像变换
+
+# 配置、数据清单与运行监控
+pyyaml               # 训练配置读取、合并与保存
+numpy                # 数值计算、采样及数组处理
+pandas               # 视频预训练清单读取与实验结果整理
+tqdm                 # 训练、评估及数据准备进度条
+psutil               # CPU、内存与进程资源监控
+
+# 评估、绘图与结果分析
+scikit-learn         # 分类指标、混淆矩阵及 PCA
+matplotlib           # 训练曲线、评估图表与论文绘图
+scipy                # 雷达图平滑插值（PLOT/增加radar.py）
+
+# BASELINES 主环境：预训练模型加载及官方源码运行所需依赖
+transformers         # Hugging Face 音频、视频及视觉基线模型
+huggingface-hub      # 下载固定版本的基线模型与源码快照
+lightning            # LeAVJEPA 官方模型基类
+pytorch-lightning    # WavJEPA 官方模型基类（使用 pytorch_lightning 导入名）
+torchmetrics         # LeAVJEPA 官方模型导入的指标组件
+fvcore               # MaskFeat / SlowFast 配置、注册器及权重初始化
+iopath               # MaskFeat / SlowFast 官方源码的文件访问
+simplejson           # MaskFeat / SlowFast 官方日志序列化
+av                   # MaskFeat / SlowFast 导入的视频读取组件
+
+# 开发验证（仅运行 tests/ 时需要）
+pytest               # 项目测试用例与分布式训练检查
+
+# BASELINES 独立环境（不在主环境混装，版本及源码提交见 BASELINES/README.md）
+# EAT：独立 legacy 环境中的固定提交 Fairseq。
+# LanguageBind：独立 legacy 环境中的 transformers 4.30.2、peft、PyTorchVideo。
+# AV-HuBERT：独立 avhubert 环境中的专用 Fairseq、dlib、python-speech-features、scikit-image。
+# SlowFast / PyTorchVideo 等官方源码由 sources.yaml 固定提交，不以同名 PyPI 包替代。
+# 系统依赖：FFmpeg（ffmpeg / ffprobe），用于音频备用解码和音视频同步信息探测。
