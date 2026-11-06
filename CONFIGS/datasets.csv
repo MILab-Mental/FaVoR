@@ -6,7 +6,7 @@ DATASET/splits-0901/csvs/1_CNCVS3_SV.csv,/home/data/sdd/mental/CNCVS3/,/home/dat
 DATASET/splits-0901/csvs/1_CNS-AV_SV.csv,/home/data/sdd/mental/CNC-AV/,/home/data/sdd/mental/CNC-AV/split_new.csv
 DATASET/splits-0901/csvs/1_HDTF_SV.csv,/home/data/sdb/基座模型数据集/1通用数据/HDTF/,/home/data/sdb/基座模型数据集/1通用数据/HDTF/split.csv
 DATASET/splits-0901/csvs/1_MAGICDATA_SA.csv,/home/data/sdb/基座模型数据集/1通用数据/MAGICDATA/,/home/data/sdb/基座模型数据集/1通用数据/MAGICDATA/split.csv
-DATASET/splits-0901/csvs/1_VoxCeleb_SV.csv,/home/data/sdc/voxceleb/,/home/data/sdc/voxceleb/split.csv
+DATASET/splits-0901/csvs/1_VoxCeleb_SV.csv,/home/data/sdc/datasets/voxceleb/,/home/data/sdc/datasets/voxceleb/split.csv
 DATASET/splits-0901/csvs/1_VoxTube_SA.csv,/home/data/sdb/基座模型数据集/1通用数据/VoxTube/,/home/data/sdb/基座模型数据集/1通用数据/VoxTube/split.csv
 DATASET/splits-0901/csvs/2_ASVP-ESD_SA.csv,/home/data/sdb/基座模型数据集/2情绪数据集/ASVP-ESD/,/home/data/sdb/基座模型数据集/2情绪数据集/ASVP-ESD/split.csv
 DATASET/splits-0901/csvs/2_CASIA_SA.csv,/home/data/sdb/基座模型数据集/2情绪数据集/CASIA/,/home/data/sdb/基座模型数据集/2情绪数据集/CASIA/split.csv
@@ -19,8 +19,8 @@ DATASET/splits-0901/csvs/2_EMOVIE_SA.csv,/home/data/sdb/基座模型数据集/2�
 DATASET/splits-0901/csvs/2_ESD-Chinese_SA.csv,/home/data/sdb/基座模型数据集/2情绪数据集/ESD-Chinese/,/home/data/sdb/基座模型数据集/2情绪数据集/ESD-Chinese/split.csv
 DATASET/splits-0901/csvs/2_IEMOCAP_SV.csv,/home/data/sdb/基座模型数据集/2情绪数据集/IEMOCAP/,/home/data/sdb/基座模型数据集/2情绪数据集/IEMOCAP/split_new.csv
 DATASET/splits-0901/csvs/2_M3ED_SA.csv,/home/data/sdb/基座模型数据集/2情绪数据集/M3ED/,/home/data/sdb/基座模型数据集/2情绪数据集/M3ED/split.csv
-DATASET/splits-0901/csvs/2_MER2023_SV.csv,/home/data/sdc/MER/MER2023/,/home/data/sdc/MER/MER2023/split_new.csv
-DATASET/splits-0901/csvs/2_MER242526_SV.csv,/home/data/sdc/MER/,/home/data/sdc/MER/split_new.csv
+DATASET/splits-0901/csvs/2_MER2023_SV.csv,/home/data/sdb/基座模型数据集/2情绪数据集/MER/MER2023/,/home/data/sdb/基座模型数据集/2情绪数据集/MER/MER2023/split_new.csv
+DATASET/splits-0901/csvs/2_MER242526_SV.csv,/home/data/sdb/基座模型数据集/2情绪数据集/MER/,/home/data/sdb/基座模型数据集/2情绪数据集/MER/split_new.csv
 DATASET/splits-0901/csvs/2_RAVDESS_SV.csv,/home/data/sdb/基座模型数据集/2情绪数据集/RAVDESS/,/home/data/sdb/基座模型数据集/2情绪数据集/RAVDESS/split_new.csv
 DATASET/splits-0901/csvs/3_EATD-Corpus_SA.csv,/home/data/sdb/基座模型数据集/3心理数据集/EATD-Corpus/,/home/data/sdb/基座模型数据集/3心理数据集/EATD-Corpus/split.csv
 DATASET/splits-0901/csvs/3_MODMA_SA.csv,/home/data/sdb/基座模型数据集/3心理数据集/MODMA/,/home/data/sdb/基座模型数据集/3心理数据集/MODMA/split.csv

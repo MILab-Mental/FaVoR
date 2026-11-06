@@ -3,10 +3,7 @@
 from __future__ import annotations
 
 import random
-import os
 import subprocess
-from array import array
-from bisect import bisect_right
 from pathlib import Path
 
 import numpy as np
@@ -15,6 +12,8 @@ import torchaudio
 import soundfile as sf
 from torch.utils.data import DataLoader, Dataset
 from torch.utils.data.distributed import DistributedSampler
+
+from datasets.common.indexed_manifest import IndexedManifest
 
 
 def load_audio(path, sample_rate):
@@ -81,6 +80,15 @@ def _manifest_path(line):
     return line
 
 
+def read_audio_manifest(path):
+    """Parse audio paths once; both JEPA loaders share the same .csv.index cache."""
+    with path.open(encoding="utf-8") as handle:
+        for line in handle:
+            value = _manifest_path(line)
+            if value is not None:
+                yield {"path": value}
+
+
 class AudioPretrainDataset(Dataset):
     def __init__(self, manifests, sample_rate=16000, process_seconds=2.0,
                  min_process_seconds=None, max_process_seconds=None,
@@ -88,15 +96,7 @@ class AudioPretrainDataset(Dataset):
         if isinstance(manifests, (str, Path)):
             manifests = [manifests]
         self.manifests = [Path(path).expanduser().resolve() for path in manifests]
-        self.indices = [np.load(ensure_manifest_index(path), mmap_mode="r") for path in self.manifests]
-        self.cumulative_sizes = []
-        total = 0
-        for index in self.indices:
-            total += len(index)
-            self.cumulative_sizes.append(total)
-        self._handles = {}
-        if not total:
-            raise ValueError("No audio paths were found in the pre-training manifests")
+        self.rows = IndexedManifest(self.manifests, read_audio_manifest, kind="audio-pretrain")
         self.sample_rate = int(sample_rate)
         self.min_length = int(self.sample_rate * (min_process_seconds or process_seconds))
         self.max_length = int(self.sample_rate * (max_process_seconds or process_seconds))
@@ -105,23 +105,10 @@ class AudioPretrainDataset(Dataset):
         self.max_retries = int(max_retries)
 
     def __len__(self):
-        return self.cumulative_sizes[-1]
+        return len(self.rows)
 
     def _audio_path(self, index):
-        manifest_index = bisect_right(self.cumulative_sizes, index)
-        previous = self.cumulative_sizes[manifest_index - 1] if manifest_index else 0
-        local_index = index - previous
-        path = self.manifests[manifest_index]
-        # Each DataLoader worker opens its own descriptor on first access.
-        handle = self._handles.get(manifest_index)
-        if handle is None or handle.closed:
-            handle = path.open("rb")
-            self._handles[manifest_index] = handle
-        handle.seek(int(self.indices[manifest_index][local_index]))
-        value = _manifest_path(handle.readline().decode("utf-8"))
-        if value is None:
-            raise ValueError(f"Indexed an empty manifest row in {path}")
-        return value
+        return self.rows[index]["path"]
 
     def __getitem__(self, index):
         error = None
@@ -140,31 +127,6 @@ class AudioPretrainDataset(Dataset):
         raise RuntimeError(f"Could not load a valid audio sample after {self.max_retries} attempts: {error}")
 
 
-def _manifest_index_path(manifest):
-    return Path(f"{manifest}.idx.npy")
-
-
-def ensure_manifest_index(manifest):
-    """Build a compact mmap-able array of line offsets for a large manifest."""
-    manifest = Path(manifest).expanduser().resolve()
-    if not manifest.is_file():
-        raise FileNotFoundError(f"Audio manifest does not exist: {manifest}")
-    index_path = _manifest_index_path(manifest)
-    if index_path.is_file() and index_path.stat().st_mtime >= manifest.stat().st_mtime:
-        return index_path
-    offsets = array("Q")
-    offset = 0
-    with manifest.open("rb") as handle:
-        for line in handle:
-            if line.strip():
-                offsets.append(offset)
-            offset += len(line)
-    temporary = Path(f"{index_path}.{os.getpid()}.tmp.npy")
-    np.save(temporary, np.asarray(offsets, dtype=np.uint64), allow_pickle=False)
-    os.replace(temporary, index_path)
-    return index_path
-
-
 def collate_audio_crops(batch):
     max_length = max(crops.shape[1] for crops, _ in batch)
     waveforms, lengths = [], []
@@ -180,14 +142,7 @@ def make_audio_pretrain_loader(cfg, rank=0, world_size=1):
     manifests = cfg["datasets"]
     if isinstance(manifests, (str, Path)):
         manifests = [manifests]
-    if rank == 0:
-        for manifest in manifests:
-            ensure_manifest_index(manifest)
-    if world_size > 1 and torch.distributed.is_available() and torch.distributed.is_initialized():
-        torch.distributed.barrier()
-    if rank != 0:
-        for manifest in manifests:
-            ensure_manifest_index(manifest)
+    # IndexedManifest uses a file lock: ranks share one atomic cache build.
     dataset = AudioPretrainDataset(
         manifests,
         sample_rate=cfg.get("sample_rate", 16000),

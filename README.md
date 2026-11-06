@@ -32,8 +32,9 @@ FAVOR/
 ├── CKPT/                  # V-JEPA 2.1 官方预训练权重（不纳入版本控制）
 ├── OUTPUT/                # 训练产物：日志 / checkpoint / 参数快照（不纳入版本控制）
 ├── PLOT/                  # 论文统计、制表与可视化脚本，详见 PLOT/README.md
-├── run.sh                 # 15 个微调任务的一键运行脚本（含 vjepaori 基线 15 条）
-├── train.sh               # 元数据生成训练命令：dry-run 校验 / N 路并发 / 日志汇总
+├── train_pretrain.sh      # 统一预训练入口：a / v / va，选择现有 YAML
+├── train_finetune.sh      # 统一微调入口：从 tasks.csv 筛选并依次运行任务
+├── SCRIPTS/               # 历史实验脚本，仅本地归档，不纳入版本控制
 ├── clean.py               # 递归清理 __pycache__ / .ipynb_checkpoints
 └── requirements.txt
 ```
@@ -73,18 +74,18 @@ torchrun --nproc_per_node=2 -m app.main --fname CONFIGS/tasks/finetune/video/cla
         meta.read_checkpoint=OUTPUT/pretrain_v/vitl16/FaVoR-112px-48f/e11.pt \
         meta.seed=7
 
-# 一次性跑完 run.sh 里列的 15 个视频微调任务（内部已改为 torchrun）
-# 注意：tasks.json 共 33 个语义任务；run.sh 当前只编排其中 15 条视频任务，全部
-# 33 条任务的音频版本可从 CONFIGS/tasks/finetune/audio/ 单独启动。
-bash run.sh
+# 预训练：编辑 train_pretrain.sh，取消需要的命令前的 #，然后运行。
+# 共五条：视频 JEPA / LeJEPA、音频 JEPA / LeJEPA、音视频 LeJEPA。
+# 默认全部注释，通常一次启用一条；显卡和进程数直接在命令中修改。
+# 末尾可追加 --set data.batch_size=16 folder=OUTPUT/实验目录 等参数。
+bash train_pretrain.sh
+# 初始化权重、输出目录和续训规则沿用对应 YAML。
 
-# train.sh 从实验元数据 + 15 条任务元数据自动生成 torchrun 命令；先预览再运行
-bash train.sh --dry-run  # 只校验元数据并打印命令，不启动训练、不创建日志
-bash train.sh          # 串行（1 个槽位，最安全）
-bash train.sh 2        # 2 个任务同时跑（槽位轮流从列表领取，见脚本头部说明）
-# 单任务失败只记录不中断，跑完打印汇总并以非 0 退出；日志在 OUTPUT/train_sh_logs/<时间戳>/
-# 切换 checkpoint / scratch / 官方 V-JEPA 时只改 train.sh 的 EXPERIMENT_META；
-# 增删任务只改 TASK_META，不再复制整条命令。EXTRA_SET 可添加所有任务共享的 --set 覆盖。
+# 统一微调：从 tasks.csv 筛选任务；预览也需要已有 checkpoint。
+CUDA_VISIBLE_DEVICES=0,1 CHECKPOINT=/path/to/model.pt RUN_NAME=my-run \
+  SCOPE=mental DRY_RUN=1 bash train_finetune.sh a
+# 去掉 DRY_RUN=1 后开始训练；详细筛选方式见 CONFIGS/tasks/finetune/README.md。
+# 旧 run.sh / train*.sh 已归档到 SCRIPTS/（gitignore），仅作为历史实验记录。
 
 ```
 

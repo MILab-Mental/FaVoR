@@ -77,6 +77,20 @@ CONFIGS/
 仅保留 18 份音频独有任务的数据片段。`data/finetune/video/` 只保留视频采样预设。
 三个模态的 task 入口仍分别保留各自的 app、采样、模型、优化器和输出目录。
 
+### 预训练清单索引
+
+音频 JEPA / LeJEPA 与视频、VA LeJEPA 共用 `IndexedManifest`，缓存统一保存为
+`<清单路径>.index/<版本签名>/`，不再生成旧的 `.idx.npy`。
+每个版本包含 `records.jsonl`、`offsets.npy`、`metadata.json`；音频两种加载器共用
+`audio-pretrain` 类型，读取同一组清单时直接复用同一份缓存。
+首次加载或清单路径、内容文件信息、解析选项变化时自动重建，文件锁避免多个进程重复创建；
+DataLoader worker 按需打开自己的文件句柄和 mmap。索引只解析清单，不解码媒体。
+
+当前三份预训练清单为 `DATASET/merged/pretrain_audios_0901.csv`、
+`pretrain_videos_0901.csv`、`pretrain_va_canonical.csv`。
+2026-11-06 已更新 MER、VoxCeleb 的绝对路径，VA 的路径哈希 `pair_id` 同步更新；
+样本顺序、标签和样本数不变。旧缓存可在没有相关训练读取时清理，下次加载会自动生成。
+
 ### VA-LeJEPA 预训练的数据异常处理
 
 `CONFIGS/tasks/pretrain/audio-video/lejepa/` 的入口直接使用 canonical paired manifest，
@@ -600,7 +614,7 @@ multi-hot 向量（维度 = `data.num_class`，该键对多标签**必填且须 
 
 > **为什么 `MER242526-emotion` 的 13 个历史变体是 `48-4` 而不是 `48-8`**：这些入口历史上一直
 > 吃数据片段里的 `fps: 4`（该 `fps` 键对 8.1 的任务入口是死键，因为那些入口一律覆盖成 8）。
-> 改成 `48-8` 会把帧率翻倍，`run.sh:25-113` 记录的那些指标（如 `favor-e11-23out` 的
+> 改成 `48-8` 会把帧率翻倍，`SCRIPTS/run.sh` 记录的那些指标（如 `favor-e11-23out` 的
 > `best acc 0.5219 @ epoch 15`）就不再可比。想统一到 8fps 的话，把这 13 个入口的 `sampling:`
 > 改成 `48frames-8fps.yaml` 即可。
 
@@ -759,7 +773,7 @@ torchrun --nproc_per_node=2 -m app.main \
 
 5. **`yamls` 路径** —— 片段路径可用绝对路径，也可用相对入口文件的相对路径（`load_config`
    会自动相对入口目录解析）。**移动 / 重构 `data/` 或 `tasks/` 下的文件后，记得同步更新
-   引用方**：`CONFIGS/tasks/**` 各入口的 `yamls`、`CONFIGS/test*.yaml`、以及 `run.sh` 的
+   引用方**：`CONFIGS/tasks/**` 各入口的 `yamls`、`CONFIGS/test*.yaml`、以及 `SCRIPTS/run.sh` 的
    `--fname`。仓库没有覆盖这些引用的校验，路径写错只会在启动时以 `FileNotFoundError` 暴露。
 
 6. **音频下游特征与 loss** —— `model.features.mode` 支持 `last` 和 `topk_average`，后者由

@@ -141,3 +141,42 @@ def test_concurrent_build_publishes_one_generation(tmp_path):
         assert worker.exitcode == 0
     assert [queue.get(timeout=5) for _ in workers] == [dict(value=3), dict(value=3)]
     assert marker.read_text().splitlines() == ['built']
+
+
+def test_audio_jepa_and_lejepa_share_parsed_cache(tmp_path, monkeypatch):
+    from datasets.audio_jepa import pretrain_dataset as audio
+    from datasets.audio_lejepa import dataset as lejepa
+    first, second = tmp_path/'first.csv', tmp_path/'second.csv'
+    first.write_text('/音频/a space.wav 0\n\n/plain.wav\n')
+    second.write_text('/other.wav -1\n')
+    manifests = [str(first), str(second)]
+    jepa = audio.AudioPretrainDataset(manifests)
+    expected = ['/音频/a space.wav', '/plain.wav', '/other.wav']
+    assert [jepa._audio_path(i) for i in range(len(jepa))] == expected
+    assert jepa.rows.counts == [2, 1]
+    assert not list(tmp_path.glob('*.idx.npy'))
+    monkeypatch.setattr(lejepa, 'read_audio_manifest',
+        lambda *a: (_ for _ in ()).throw(AssertionError('reparsed audio cache')))
+    other = lejepa.AudioLeJEPADataset(dict(datasets=manifests))
+    assert other.rows.directory == jepa.rows.directory
+    assert [other._audio_path(i) for i in range(len(other))] == expected
+    # Dataset serialization must not copy offsets or open file descriptors.
+    for dataset in (jepa, other):
+        payload = pickle.dumps(dataset)
+        restored = pickle.loads(payload)
+        assert len(payload) < 4096 and restored._audio_path(2) == '/other.wav'
+
+
+def test_audio_cache_refresh_preserves_old_snapshot_and_rejects_empty(tmp_path):
+    from datasets.audio_jepa.pretrain_dataset import AudioPretrainDataset
+    path = tmp_path/'audio.csv'; path.write_text('/old.wav 0\n')
+    old = AudioPretrainDataset(path)
+    path.write_text('/new.wav 0\n/extra.wav 1\n')
+    new = AudioPretrainDataset(path)
+    assert old.rows.directory != new.rows.directory
+    assert len(old) == 1 and old._audio_path(0) == '/old.wav'
+    assert len(new) == 2 and new._audio_path(0) == '/new.wav'
+    empty = tmp_path/'empty.csv'; empty.write_text('\n')
+    with pytest.raises(ValueError, match='empty manifests'):
+        AudioPretrainDataset(empty)
+    assert not list(Path(str(empty)+'.index').glob('*/metadata.json'))

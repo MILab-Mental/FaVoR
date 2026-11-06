@@ -3,19 +3,17 @@
 from __future__ import annotations
 
 import random
-from bisect import bisect_right
 from pathlib import Path
 
-import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset
 from torch.utils.data.distributed import DistributedSampler
 
 from datasets.audio_jepa.pretrain_dataset import (
-    _manifest_path,
-    ensure_manifest_index,
+    read_audio_manifest,
     load_audio,
 )
+from datasets.common.indexed_manifest import IndexedManifest
 from .views import make_audio_views
 
 
@@ -25,28 +23,14 @@ class AudioLeJEPADataset(Dataset):
         if isinstance(manifests, (str, Path)):
             manifests = [manifests]
         self.manifests = [Path(path).expanduser().resolve() for path in manifests]
-        self.indices = [np.load(ensure_manifest_index(path), mmap_mode="r") for path in self.manifests]
-        self.cumulative_sizes, total = [], 0
-        for index in self.indices:
-            total += len(index)
-            self.cumulative_sizes.append(total)
-        if not total:
-            raise ValueError("No audio paths were found in the pre-training manifests")
-        self._handles = {}
+        self.rows = IndexedManifest(self.manifests, read_audio_manifest, kind="audio-pretrain")
         self.cfg = cfg
 
     def __len__(self):
-        return self.cumulative_sizes[-1]
+        return len(self.rows)
 
     def _audio_path(self, index):
-        manifest_index = bisect_right(self.cumulative_sizes, index)
-        previous = self.cumulative_sizes[manifest_index - 1] if manifest_index else 0
-        handle = self._handles.get(manifest_index)
-        if handle is None or handle.closed:
-            handle = self.manifests[manifest_index].open("rb")
-            self._handles[manifest_index] = handle
-        handle.seek(int(self.indices[manifest_index][index - previous]))
-        return _manifest_path(handle.readline().decode("utf-8"))
+        return self.rows[index]["path"]
 
     def __getitem__(self, index):
         error = None
@@ -99,12 +83,7 @@ def collate_audio_lejepa(samples):
 
 
 def make_audio_lejepa_loader(cfg, rank=0, world_size=1):
-    manifests = cfg["datasets"] if isinstance(cfg["datasets"], list) else [cfg["datasets"]]
-    if rank == 0:
-        for manifest in manifests:
-            ensure_manifest_index(manifest)
-    if world_size > 1 and torch.distributed.is_initialized():
-        torch.distributed.barrier()
+    # IndexedManifest serializes concurrent cache creation across ranks/jobs.
     dataset = AudioLeJEPADataset(cfg)
     sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=True)
     loader = DataLoader(

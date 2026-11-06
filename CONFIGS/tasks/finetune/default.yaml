@@ -1,0 +1,5 @@
+# Shared defaults for the CSV entry only. Existing task YAMLs are unchanged.
+meta:
+  save_latest: false
+optimization:
+  early_stopping_patience: 10

@@ -2,6 +2,7 @@
 DATASET/
 CKPT/
 OUTPUT/
+/SCRIPTS/
 PLOT/output/
 
 # ---- Python 缓存 ----
