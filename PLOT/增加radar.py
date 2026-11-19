@@ -8,6 +8,9 @@
 各轴在给定配置中单独归一化，因此该任务的最优值一定位于 100% 外圈。
 归一化只用于几何位置，图上标注的仍是原始指标值。
 
+对比模型八面板（分类 Macro-F1、回归 MAE；直线连接相邻有效节点）：
+    python PLOT/增加radar.py --baselines
+
 示例：
     python PLOT/增加radar.py \
       --task OUTPUT/finetune_v/vitl16 \
@@ -26,6 +29,8 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
+import re
 import math
 import sys
 from dataclasses import dataclass
@@ -38,6 +43,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import yaml
 from matplotlib import font_manager
+from matplotlib.lines import Line2D
 from scipy.interpolate import CubicSpline
 
 
@@ -381,25 +387,200 @@ def draw_radar(
     plt.close(fig)
 
 
+def read_baseline_validation(text, task_catalog):
+    """Read the source-labelled validation tables attached to the report."""
+    _, _, section = text.partition('\n## 历史验证集结果\n')
+    scopes = {'### 普通任务': 'nonmental', '### 心理临床任务': 'mental'}
+    scope = None
+    tasks = []
+    for line in section.splitlines():
+        if line in scopes:
+            scope = scopes[line]
+            tasks = []
+        if not line.startswith('| '):
+            continue
+        cells = [cell.strip() for cell in line.strip().strip('|').split('|')]
+        if cells[0] == '模型（模态）':
+            tasks = cells[3:]
+            continue
+        match = re.fullmatch(r'(.+)（(A|V|VA)）', cells[0])
+        if not match:
+            continue
+        if scope is None or not tasks or len(cells) != len(tasks) + 3:
+            raise ValueError(f'Invalid historical validation table row: {cells[:3]}')
+        model, modality = match.groups()
+        route = cells[1].strip('`')
+        values = {}
+        for task, cell in zip(tasks, cells[3:]):
+            if not cell or cell == '-/-/-':
+                continue
+            task_info = task_catalog[task]
+            if task_info['scope'] != scope or modality.lower() not in task_info['modalities'].split('|'):
+                raise ValueError(f'Unexpected validation metric for {model}, {route}: {task}')
+            parts = cell.split('/')
+            if len(parts) != 3:
+                raise ValueError(f'Invalid validation metric for {model}, {route}, {task}: {cell}')
+            value = parts[0 if task_info['task_type'] == 'regression' else 1]
+            if value != '-' and math.isfinite(float(value)):
+                values[task] = float(value)
+        yield model, modality, route, scope, values
+
+
+def draw_baselines(root: Path, output: Path) -> None:
+    """绘制心理/普通 × V/A/VA 八面板，使用 Macro-F1 和 MAE。
+
+    图例以 [val] 标记历史验证集；每轴使用相同的原始指标刻度，
+    将每个任务的最佳和最差结果线性映射到外圈和近圆心。
+    相邻节点均有结果时以直线相连，不跨越缺失任务。
+    """
+    report = root / "对比模型进度表.md"
+    text = report.read_text(encoding="utf-8")
+    with (PROJECT_ROOT / 'CONFIGS/tasks/finetune/tasks.csv').open(encoding='utf-8') as stream:
+        rows = [row for row in csv.DictReader(stream) if row['enabled'] == '1']
+    task_catalog = {row['task_id']: row for row in rows}
+    task_types={r['task_id']:r['task_type'] for r in rows}
+    models={}
+    for model,mod,route in re.findall(r'\| `([^`]+)`（(A|V|VA)） \| ([^|]+) \|',text):
+     models[(model,{'直接微调':'direct','继续预训练后微调':'continued-pretrained','从头预训练后微调':'scratch-pretrained'}[route.strip()])]=mod
+    metrics={}
+    test_selected = set()
+    for p in (root/'finetune').glob('*/*/*/*/metrics.json'):
+     model,route,scope,task,_=p.relative_to(root/'finetune').parts
+     try:
+      evaluation = json.loads(p.read_text()).get('evaluations', {}).get('test', {})
+      m = evaluation.get('metrics', {})
+      v = m.get('mae' if task_types.get(task) == 'regression' else 'f1_macro')
+      if isinstance(v, (int, float)) and math.isfinite(v):
+       panel_scope = 'nonmental' if scope == 'ordinary' else scope
+       metrics[model, route, panel_scope, task] = v if task_types.get(task) == 'regression' else 100*v
+       if evaluation.get('selection_split') == 'test':
+        test_selected.add((model, route, panel_scope))
+     except (ValueError,OSError,AttributeError): continue
+    validation = set()
+    for model, modality, route, scope, values in read_baseline_validation(text, task_catalog):
+        key = (model, route)
+        models[key] = modality
+        validation.add(key)
+        for task, value in values.items():
+            metrics[model, route, scope, task] = value
+    # Qualitative colors within each family retain modality cues while separating models.
+    palettes={
+     'A':['#123B8A','#0077BB','#56B4E9','#6650A4','#242F59','#3280A1','#47316E','#2867D0','#596B8A','#008DC8','#235AAB'],
+     'V':['#B2182B','#E66101','#D4A000','#8C510A','#722530','#F28E2B','#A27700','#C84B54','#D66816'],
+     'VA':['#005A42','#009E73','#18A999','#66A61E','#0A4039','#327848','#087E83','#4E6815'],
+    }
+    model_colors={}
+    for modality, palette in palettes.items():
+     names=list(dict.fromkeys(name for (name, _), model_mod in models.items() if model_mod==modality and name!='FaVoR'))
+     for i,name in enumerate(names): model_colors[name]=palette[i % len(palette)]
+    pink_palette = ('#DA2B82', '#AE206A', '#E755A1', '#8C1457', '#FF84B9')
+    favor_colors = {key: pink_palette[i % len(pink_palette)]
+                    for i, key in enumerate(key for key in models if key[0] == 'FaVoR')}
+    markers={'V':'o', 'A':'s', 'VA':'D'}
+    opacities={'V':.85, 'A':.85, 'VA':1.0}
+    line_widths={'V':1.25, 'A':1.25, 'VA':2.0}
+    fig, axes=plt.subplots(2,4,figsize=(48,26),subplot_kw={'projection':'polar'})
+    for row,scope in enumerate(['mental','nonmental']):
+     for col,mod in enumerate(['V','A','VA','ALL']):
+      ax=axes[row,col]; tasks=[r['task_id'] for r in rows if r['scope']==scope and (all(m in r['modalities'].split('|') for m in ('v','a','va')) if mod=='ALL' else mod.lower() in r['modalities'].split('|'))];n=len(tasks)
+      if not n: continue
+      theta=2*np.pi*np.arange(n)/n
+      task_values = [[metrics[m,rt,scope,t] for (m,rt),mo in models.items() if (mo==mod or mod=='ALL') and (m,rt,scope,t) in metrics] for t in tasks]
+      lower=np.array([min(values,default=np.nan) for values in task_values])
+      upper=np.array([max(values,default=np.nan) for values in task_values])
+      ax.set_theta_offset(np.pi/2);ax.set_theta_direction(-1);ax.set_ylim(0,110);ax.set_xticks(theta);ax.set_xticklabels([]);ax.set_yticks(np.linspace(18,90,9));ax.set_yticklabels([]);ax.xaxis.grid(color='#AEB8C4',alpha=.25,lw=.55,ls='-');ax.yaxis.grid(color='#AEB8C4',alpha=.23,lw=.7,ls='-');ax.spines['polar'].set_visible(False)
+      dense=np.linspace(0,2*np.pi,1000);ax.plot(dense,np.full_like(dense,90),color='#9FA5AD',lw=1,ls='-',alpha=.7)
+      # Each spoke has its own original metric scale; the direction respects the task type.
+      for i,t in enumerate(tasks):
+       if not np.isfinite(lower[i]) or upper[i] <= lower[i]: continue
+       ticks = np.linspace(upper[i], lower[i], 9) if task_types[t]=='regression' else np.linspace(lower[i], upper[i], 9)
+       for radius,value in zip(np.linspace(18,90,9),ticks):
+        label=f'{value:.3f}' if task_types[t]=='regression' else f'{value:.1f}'
+        tangent_x, tangent_y = np.cos(theta[i]), -np.sin(theta[i])
+        ha = 'left' if tangent_x > .3 else ('right' if tangent_x < -.3 else 'center')
+        va = 'bottom' if tangent_y > .7 else ('top' if tangent_y < -.7 else 'center')
+        ax.annotate(label, (theta[i], radius), xytext=(5*tangent_x, 5*tangent_y),
+                    textcoords='offset points', color='black', fontsize=5.5, ha=ha, va=va,
+                    zorder=10, bbox={'facecolor':'white','edgecolor':'none','alpha':.8,'pad':.1})
+      handles=[]
+      for (model,route),mo in models.items():
+       if mo != mod and mod != 'ALL':
+        continue
+       vals=np.array([metrics.get((model,route,scope,t),np.nan) for t in tasks]);valid=np.isfinite(vals)
+       if not np.any(valid): continue
+       span=upper-lower
+       fraction=np.divide(vals-lower,span,out=np.ones_like(vals),where=span>0)
+       for i,t in enumerate(tasks):
+        if task_types[t]=='regression' and span[i]>0: fraction[i]=1-fraction[i]
+       rad=18+72*np.clip(fraction,0,1)
+       key = (model, route)
+       is_favor = key in favor_colors
+       is_validation = key in validation
+       color = favor_colors[key] if is_favor else model_colors[model]
+       width = 2.25 if is_favor else line_widths[mo]
+       alpha = 1.0 if is_favor else opacities[mo]
+       if valid.all() and n >= 3:
+        ax.fill(theta,rad,color=color,alpha=.035,edgecolor='none',zorder=1)
+       for i in range(n):
+        j=(i+1)%n
+        if valid[i] and valid[j]:ax.plot([theta[i],theta[i]+2*np.pi/n],[rad[i],rad[j]],color=color,lw=width,alpha=alpha,linestyle='-',zorder=4 if is_favor else 2)
+       ax.scatter(theta[valid],rad[valid],s=35 if is_favor else 28,marker=markers[mo],color=[color],alpha=alpha,edgecolor='white',linewidth=.3,zorder=6 if is_favor else 5)
+       if is_validation:
+        label = f'{model} ({mo}) · {route} [val]'
+       else:
+        label = model if route=='direct' else model+' ('+('continued' if route=='continued-pretrained' else 'scratch')+')'
+        if (model, route, scope) in test_selected:
+         label += ' [test-selected]'
+       handles.append(Line2D([0],[0],color=color,lw=width,alpha=alpha,linestyle='-',marker=markers[mo],markersize=4,label=label))
+      for i,t in enumerate(theta):
+       label=tasks[i].replace('DSMxSCL-','D×S-').replace('RESULT-','RES-').replace('RepetitiveThoughtsBehaviors','Repetitive').replace('InterpersonalSensitivity','Interpersonal').replace('PersonalityInterpersonal','PersonalityInter').replace('PsychosisParanoidExpanded','PsychosisParanoid').replace('ObsessiveCompulsive','Obsessive').replace('PersonalityFunctioning','PersonalityFunc').replace('SomaticSymptoms','Somatic')
+       deg=np.degrees(t);align='center' if deg<8 or deg>352 or 172<deg<188 else ('left' if deg<180 else 'right')
+       ax.text(t,98+(i%2)*2,label,ha=align,va='center',fontsize=7.4 if n==38 else 8,color='#30343A',clip_on=False)
+      ax.set_title(('Mental' if scope=='mental' else 'Ordinary')+' · '+{'V':'Video','A':'Audio','VA':'Audio-video','ALL':'All modalities'}[mod]+f' ({n} tasks)',fontsize=18,pad=32,weight='bold')
+      if not handles: ax.text(0,0,'No completed results',ha='center',va='center',fontsize=16,color='#888888')
+      if mod=='ALL':
+       handles += [Line2D([0],[0], color=palettes[m][0], lw=line_widths[m], alpha=opacities[m], marker=markers[m], markersize=4, label={'V':'Video','A':'Audio','VA':'Audio-video'}[m]) for m in ('V','A','VA')]
+      if handles: ax.legend(handles=handles,loc='upper center',bbox_to_anchor=(.5,-.06),fontsize=8,frameon=False,ncol=2,handlelength=2.6)
+    if validation or test_selected:
+        fig.suptitle('[val]: historical validation  |  [test-selected]: checkpoint selected on test  |  Other curves: test',
+                     y=.988, fontsize=18)
+    fig.subplots_adjust(left=.04,right=.96,top=.95,bottom=.12,wspace=.38,hspace=.55)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output,dpi=190,bbox_inches='tight',pad_inches=.25);plt.close(fig)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="从任务根目录读取多个配置的最优主指标，绘制平滑归一化雷达图。",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--task", type=Path, required=True, help="包含多个任务子目录的根目录")
-    parser.add_argument("--configs", nargs="+", required=True, help="实验配置目录名，顺序同时决定配色")
+    parser.add_argument("--baselines", action="store_true", help="绘制对比模型八面板雷达图")
+    parser.add_argument("--task", type=Path, help="包含多个任务子目录的根目录")
+    parser.add_argument("--configs", nargs="+", help="实验配置目录名，顺序同时决定配色")
     parser.add_argument("--labels", nargs="+", help="图例显示名，数量必须与 --configs 相同")
     parser.add_argument("--tasks", nargs="+", help="只画指定任务，并保留此处给出的轴顺序")
     parser.add_argument("--classification-metric", default="val_f1_macro", help="单标签分类主指标")
     parser.add_argument("--multilabel-metric", default="val_f1_macro", help="多标签分类主指标")
     parser.add_argument("--regression-metric", default="val_rmse", help="回归主指标")
     parser.add_argument("--radial-min", type=float, help="径向刻度下限，默认根据数据自动取 5%% 整刻度")
-    parser.add_argument("--out", type=Path, default=DEFAULT_OUTPUT, help="SVG 输出路径")
+    parser.add_argument("--out", type=Path, help="输出路径；默认使用对应模式的输出路径")
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
+    if args.baselines:
+        sys.path.insert(0, str(PROJECT_ROOT))
+        from BASELINES.common.paths import OUTPUT_ROOT
+
+        output = args.out or OUTPUT_ROOT / "对比模型雷达图.png"
+        output = output if output.is_absolute() else PROJECT_ROOT / output
+        draw_baselines(OUTPUT_ROOT, output)
+        print(f"wrote {output.resolve()}")
+        return 0
+    if args.task is None or not args.configs:
+        raise SystemExit("常规模式需要 --task 和 --configs；对比模型图使用 --baselines")
+    args.out = args.out or DEFAULT_OUTPUT
     if len(args.configs) < 1:
         raise SystemExit("--configs 至少需要一项")
     if len(args.configs) > len(PRIMARY_COLORS):

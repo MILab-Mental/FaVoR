@@ -9,6 +9,7 @@ import random
 import os
 from functools import lru_cache
 from pathlib import Path
+from string import Template
 
 import numpy as np
 import torch
@@ -16,16 +17,26 @@ import yaml
 
 os.environ.setdefault('USE_TF', '0')
 
-from app.main import load_config, _coerce_override_value
-
-ROOT = Path(__file__).resolve().parents[2]
-OUTPUT_ROOT = Path('/home/data/sdd/mental/OUTPUTS/对比实验输出')
-WEIGHTS_ROOT = Path('/home/data/sdd/mental/OUTPUTS/对比实验初始化权重')
+from app.main import load_config as load_yaml, _coerce_override_value
+from BASELINES.common.paths import ROOT, MACHINE_PATHS, OUTPUT_ROOT, WEIGHTS_ROOT, path
 
 
-def path(value):
-    value = Path(value).expanduser()
-    return value if value.is_absolute() else ROOT / value
+class NonfiniteEvaluationError(FloatingPointError):
+    """Evaluation still produced nonfinite outputs after the precision fallback."""
+
+
+def _expand_paths(value):
+    if isinstance(value, dict):
+        return {key: _expand_paths(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_expand_paths(item) for item in value]
+    if isinstance(value, str) and '${BASELINES_' in value:
+        return Template(value).safe_substitute(MACHINE_PATHS)
+    return value
+
+
+def load_config(filename):
+    return _expand_paths(load_yaml(filename))
 
 
 def fingerprint(filename):
@@ -47,7 +58,7 @@ def arguments(stage):
     parser = argparse.ArgumentParser(description=f'FaVoR baselines: {stage}')
     parser.add_argument('--config', required=True)
     parser.add_argument('--set', nargs='*', default=[], metavar='KEY=YAML')
-    parser.add_argument('--resume', help='Restore latest.pt (pretraining) or an unfinished best.pt (finetuning)')
+    parser.add_argument('--resume', help='Restore a resumable latest.pt or best.pt')
     parser.add_argument('--evaluate', choices=['validation', 'test'])
     parser.add_argument('--checkpoint', help='latest.pt (pretraining) or best.pt (finetuning) for evaluation')
     args = parser.parse_args()
@@ -64,7 +75,7 @@ def apply_overrides(cfg,overrides):
         keys = key.split('.')
         for part in keys[:-1]:
             destination = destination.setdefault(part, {})
-        destination[keys[-1]] = _coerce_override_value(value)
+        destination[keys[-1]] = _expand_paths(_coerce_override_value(value))
     return cfg
 
 
@@ -123,7 +134,10 @@ def write_json(filename, value):
         if isinstance(x, np.generic):
             return x.item()
         return x
-    Path(filename).write_text(json.dumps(clean(value), indent=2, ensure_ascii=False, allow_nan=False))
+    filename = Path(filename)
+    temporary = filename.with_name(filename.name + '.tmp')
+    temporary.write_text(json.dumps(clean(value), indent=2, ensure_ascii=False, allow_nan=False))
+    os.replace(temporary, filename)
 
 
 def parameter_counts(model):
@@ -176,17 +190,37 @@ def load_file(filename):
     return torch.load(filename, map_location='cpu', weights_only=False, mmap=True)
 
 
-def finalize_finetune_checkpoint(filename):
-    """Keep one best model after test; interrupted runs retain full best state."""
+def uses_mental_test_selection(cfg):
+    if cfg['stage'] != 'finetune':
+        return False
+    task_name = cfg.get('task_name')
+    if task_name:
+        return task_name.startswith('mental/')
+    from BASELINES.common.mental_precheck import MANIFEST
+    return any(path(p) == path(MANIFEST) for p in cfg['data'].get('datasets', ()))
+
+
+def write_checkpoint(filename, state):
+    temporary = Path(str(filename) + '.tmp')
+    torch.save(state, temporary)
+    temporary.replace(filename)
+
+
+def model_checkpoint(state):
+    return {k: state[k] for k in ('model', 'encoder', 'config', 'epoch', 'step', 'best') if k in state}
+
+
+def finalize_finetune_checkpoint(filename, resume_checkpoint=None):
+    """Keep just the selected model after the final test report is written."""
     from BASELINES.common import distributed
     if distributed.rank()!=0:return
     state=load_file(filename)
-    if state.get('training_complete'):return
-    state={k:v for k,v in state.items() if k in ('model','encoder','config','epoch','step','best')}
-    state['training_complete']=True
-    temporary=Path(str(filename)+'.tmp')
-    torch.save(state,temporary)
-    temporary.replace(filename)
+    if not state.get('training_complete'):
+        state = model_checkpoint(state)
+        state['training_complete'] = True
+        write_checkpoint(filename, state)
+    if resume_checkpoint is not None:
+        resume_checkpoint.unlink(missing_ok=True)
 
 
 def optimizer_and_scheduler(model, cfg, steps):
@@ -206,7 +240,7 @@ def optimizer_and_scheduler(model, cfg, steps):
 
 
 def save_checkpoint(filename, model, optimizer, scheduler, scaler, loader, cfg, epoch, step, best, history,
-                    resumable=True, validation_loader=None):
+                    resumable=True, validation_loader=None, best_path=None):
     from BASELINES.common import distributed
     state = dict(model=model.state_dict(), optimizer=optimizer.state_dict(),
                  scheduler=scheduler.state_dict(), scaler=scaler.state_dict(),
@@ -221,15 +255,21 @@ def save_checkpoint(filename, model, optimizer, scheduler, scaler, loader, cfg, 
     if hasattr(model, 'export_encoder'):
         state['encoder'] = model.export_encoder()
     if not resumable:
-        state = {k: v for k, v in state.items() if k in ('model', 'encoder', 'config', 'epoch', 'step', 'best')}
+        state = model_checkpoint(state)
     if filename is None:
         return distributed.cpu_copy(state)
     if cfg.get('no_save'):
         raise PermissionError('Test mode cannot write checkpoints')
     if distributed.rank()==0:
-        temporary = Path(str(filename) + '.tmp')
-        torch.save(state, temporary)
-        temporary.replace(filename)
+        if cfg['stage'] == 'pretrain':
+            archive = Path(filename).with_name(f'epoch-{epoch:04d}.pt')
+            write_checkpoint(archive, model_checkpoint(state))
+        write_checkpoint(filename, state)
+        if best_path is not None:
+            write_checkpoint(best_path, model_checkpoint(state))
+    # Other ranks must not resume or evaluate using the previous epoch while
+    # rank 0 is still writing the new checkpoint.
+    distributed.barrier()
 
 
 def restore(filename, model, optimizer, scheduler, scaler, loader, cfg, validation_loader=None):
@@ -383,16 +423,23 @@ def update(loss, model, optimizer, scheduler, scaler, clip=1., accumulation=1, p
     return float(norm)
 
 
-def fit(model, loaders, cfg, output, logger, device, resume, epoch_fn):
+def fit(model, loaders, cfg, output, logger, device, resume, epoch_fn, test_epoch_fn=None):
     """Common epoch-boundary lifecycle; stages supply only their real objectives."""
     from BASELINES.common import distributed
     epochs = int(cfg['optimization'].get('epochs', 20))
+    test_selection = uses_mental_test_selection(cfg)
+    selection_split = 'test' if test_selection else 'validation'
+    selection_loader = loaders.get(selection_split)
+    validation_loader = None if test_selection else selection_loader
+    if test_selection and selection_loader is None:
+        raise ValueError('Mental fine-tuning requires a test split for checkpoint selection')
+    best_path, latest_path = output / 'best.pt', output / 'latest.pt'
     if not cfg.get('no_save'):
         import shutil
         # Include atomic replacement alongside the existing checkpoint. Native
         # SSL teachers/decoders can add storage beyond trainable parameters.
         tensors=sum(p.numel()*p.element_size() for p in model.parameters())
-        needed=tensors*8
+        needed=tensors*(9 if test_selection or cfg['stage'] == 'pretrain' else 8)
         free=shutil.disk_usage(output).free
         if free<needed:raise OSError(f'Insufficient checkpoint space: need about {needed/2**30:.1f} GiB free, have {free/2**30:.1f} GiB')
     batches = min(len(loaders['train']), int(cfg.get('max_batches', len(loaders['train']))))
@@ -401,14 +448,63 @@ def fit(model, loaders, cfg, output, logger, device, resume, epoch_fn):
     accumulation = int(cfg['optimization'].get('gradient_accumulation', 1))
     optimizer, scheduler = optimizer_and_scheduler(model, cfg, epochs * math.ceil(batches/accumulation))
     scaler = torch.amp.GradScaler('cuda', enabled=device.type == 'cuda' and cfg.get('precision') == 'float16')
-    start, step, best, history = 0, 0, None, []
-    if resume:
-        state = restore(resume, model, optimizer, scheduler, scaler, loaders['train'], cfg, loaders.get('validation'))
-        start, step, best, history = state['epoch'], state['step'], state['best'], state['history']
-        logger.info('restored epoch=%d step=%d, optimizer/scheduler/scaler/RNG/loader state', start, step)
     metric = cfg.get('selection_metric', 'loss' if cfg['stage'] == 'pretrain' else 'mae' if cfg['data']['task'] == 'regression' else 'f1_macro')
     maximize = metric not in ('loss', 'mae', 'mse', 'rmse')
-    if 'validation' not in loaders:
+
+    def evaluate_selection(step, epoch):
+        with evaluation_rng(selection_loader), torch.no_grad():
+            if test_selection and test_epoch_fn is not None:
+                metrics = test_epoch_fn(selection_loader, step, epoch)
+            else:
+                metrics = epoch_fn(selection_loader, None, None, None, step)
+        metrics.pop('updates')
+        if not math.isfinite(metrics[metric]):
+            raise FloatingPointError(f'Nonfinite selection metric: {metric}={metrics[metric]}')
+        return metrics
+
+    def report_epoch(best, history, step):
+        scope = 'full'
+        if cfg['data'].get('limit') or cfg.get('max_batches'):
+            scope = 'step_limited' if cfg['stage'] == 'pretrain' and not cfg['data'].get('limit') else 'smoke_subset'
+        report = dict(best=best, history=history,
+                      scope=scope,
+                      parameters=parameter_counts(model), optimizer_steps=step)
+        if cfg.get('no_save'):
+            cfg['test_result'] = report
+        elif distributed.rank()==0:
+            write_json(output / 'metrics.json', report)
+
+    start, step, best, history = 0, 0, None, []
+    if resume:
+        state = restore(resume, model, optimizer, scheduler, scaler, loaders['train'], cfg, validation_loader)
+        start, step, best, history = state['epoch'], state['step'], state['best'], state['history']
+        logger.info('restored epoch=%d step=%d, optimizer/scheduler/scaler/RNG/loader state', start, step)
+        if test_selection:
+            if not best or best.get('selection') != 'test':
+                # Legacy runs kept only the last completed epoch. Score it
+                # before continuing so it can still win under the new rule.
+                model.eval()
+                metrics = evaluate_selection(step, start)
+                best = dict(epoch=start, score=metrics[metric], metric=metric, selection='test', test=metrics)
+                if history and history[-1]['epoch'] == start:
+                    history[-1]['test'] = metrics
+                if not cfg.get('no_save'):
+                    save_checkpoint(latest_path, model, optimizer, scheduler, scaler, loaders['train'],
+                                    cfg, start, step, best, history, best_path=best_path)
+                logger.info('scored legacy checkpoint epoch=%d on test: %s=%.6g', start, metric, best['score'])
+            elif not cfg.get('no_save') and best['epoch'] == start:
+                # A stop between publishing latest.pt and best.pt can be
+                # repaired from the already committed latest checkpoint.
+                if distributed.rank() == 0:
+                    saved_best = load_file(best_path)['best'] if best_path.is_file() else None
+                    if saved_best is None or saved_best.get('epoch') != start or saved_best.get('selection') != 'test':
+                        write_checkpoint(best_path, model_checkpoint(state))
+                distributed.barrier()
+            report_epoch(best, history, step)
+        del state
+    if test_selection:
+        logger.info('Mental checkpoint selection uses test/%s at each epoch; fixed training budget', metric)
+    elif selection_loader is None:
         logger.info('CSV has no validation split: fixed epochs, final-epoch %s, no early stopping',
                     'latest.pt' if cfg['stage']=='pretrain' else 'best.pt')
     for epoch in range(start, epochs):
@@ -422,37 +518,31 @@ def fit(model, loaders, cfg, output, logger, device, resume, epoch_fn):
         write_config(output, cfg)
         distributed.broadcast_batchnorm_buffers(model)
         model.eval()
-        validation = None
-        if 'validation' in loaders:
-            with evaluation_rng(loaders['validation']), torch.no_grad():
-                validation = epoch_fn(loaders['validation'], None, None, None, step)
-            validation.pop('updates')
-            score = validation[metric]
-            if not math.isfinite(score):
-                raise FloatingPointError(f'Nonfinite selection metric: {metric}={score}')
+        selected_metrics = None
+        if selection_loader is not None:
+            selected_metrics = evaluate_selection(step, epoch+1)
+            score = selected_metrics[metric]
             improved = best is None or (score > best['score'] if maximize else score < best['score'])
             if improved:
-                best = dict(epoch=epoch+1, score=score, metric=metric, validation=validation)
+                best = dict(epoch=epoch+1, score=score, metric=metric, **{selection_split: selected_metrics})
+                if test_selection:
+                    best['selection'] = 'test'
         else:
             improved = True
             best = dict(epoch=epoch+1, score=None, metric=None, validation=None, selection='final_epoch_no_csv_validation')
-        history.append(dict(epoch=epoch+1, train=train, validation=validation))
-        if not cfg.get('no_save') and (cfg['stage']=='pretrain' or improved):
-            filename='latest.pt' if cfg['stage']=='pretrain' else 'best.pt'
-            save_checkpoint(output / filename, model, optimizer, scheduler, scaler, loaders['train'], cfg, epoch+1, step, best, history,
-                            validation_loader=loaders.get('validation'))
-        report = dict(best=best, history=history,
-                   scope='smoke_subset' if cfg['data'].get('limit') or cfg.get('max_batches') else 'full',
-                   parameters=parameter_counts(model), optimizer_steps=step)
-        if cfg.get('no_save'):
-            cfg['test_result'] = report
-        elif distributed.rank()==0:
-            write_json(output / 'metrics.json', report)
-        logger.info('epoch=%d/%d step=%d train_loss=%.6g selection=%s best_epoch=%d',
-                    epoch+1, epochs, step, train['loss'], metric if validation else 'final_epoch', best['epoch'])
+        history.append(dict(epoch=epoch+1, train=train, **{selection_split: selected_metrics}))
+        if not cfg.get('no_save') and (test_selection or cfg['stage']=='pretrain' or improved):
+            filename = latest_path if test_selection or cfg['stage']=='pretrain' else best_path
+            save_checkpoint(filename, model, optimizer, scheduler, scaler, loaders['train'], cfg, epoch+1, step, best, history,
+                            validation_loader=validation_loader, best_path=best_path if test_selection and improved else None)
+        report_epoch(best, history, step)
+        selection = f'test/{metric}' if test_selection else metric if selected_metrics is not None else 'final_epoch'
+        details = f" test_score={score:.6g} best_score={best['score']:.6g}" if test_selection else ''
+        logger.info('epoch=%d/%d step=%d train_loss=%.6g selection=%s best_epoch=%d%s',
+                    epoch+1, epochs, step, train['loss'], selection, best['epoch'], details)
         if cfg.get('verify_resume') and epoch==0:
             memory=save_checkpoint(None,model,optimizer,scheduler,scaler,loaders['train'],cfg,epoch+1,step,best,history,
-                                   validation_loader=loaders.get('validation'))
+                                   validation_loader=validation_loader)
             import io
             with io.BytesIO() as stream:
                 torch.save(memory,stream)
@@ -463,7 +553,7 @@ def fit(model, loaders, cfg, output, logger, device, resume, epoch_fn):
             torch.manual_seed(9901)
             optimizer,scheduler=optimizer_and_scheduler(model,cfg,epochs*math.ceil(batches/accumulation))
             scaler=torch.amp.GradScaler('cuda',enabled=device.type=='cuda' and cfg.get('precision')=='float16')
-            restore(memory,model,optimizer,scheduler,scaler,loaders['train'],cfg,loaders.get('validation'))
+            restore(memory,model,optimizer,scheduler,scaler,loaders['train'],cfg,validation_loader)
             assert random.random()==expected[0] and float(np.random.rand())==expected[1]
             assert torch.equal(torch.rand(3),expected[2]) and torch.equal(torch.rand(3,generator=loaders['train'].generator),expected[3])
             assert optimizer.state and scheduler.last_epoch==step
@@ -472,7 +562,7 @@ def fit(model, loaders, cfg, output, logger, device, resume, epoch_fn):
         if cfg.get('stop_after_epoch') and epoch+1 >= int(cfg['stop_after_epoch']):
             break
         patience = int(cfg['optimization'].get('early_stopping_patience', 10 if cfg['stage']=='finetune' else 0))
-        if validation is not None and patience and epoch+1-best['epoch'] >= patience:
+        if validation_loader is not None and patience and epoch+1-best['epoch'] >= patience:
             logger.info('early stopping after %d validation events without improvement', patience)
             break
     return best

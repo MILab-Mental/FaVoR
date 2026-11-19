@@ -68,9 +68,13 @@ def resource_errors(cfg,test=False):
     for branch in ('audio', 'video'):
         if isinstance(model.get(branch), dict):
             weights(model[branch])
-    requirements = dict(eat=['fairseq'], avhubert=['fairseq','python_speech_features','dlib','skimage'],
+    requirements = dict(eat=['fairseq'], avhubert=['fairseq','python_speech_features'],
                         languagebind=['peft','pytorchvideo'])
-    packages=requirements.get(kind,[])
+    packages=list(requirements.get(kind,[]))
+    if kind == 'wavjepa' and cfg.get('route') == 'continue_pretrain':
+        packages += ['pytorch_lightning', 'webdataset']
+    if kind == 'avhubert' and model.get('video_input', 'lips') == 'lips' and model.get('mouth_preprocessing'):
+        packages += ['dlib', 'skimage']
     interpreter=cfg.get('python',sys.executable)
     if interpreter!=sys.executable:
         if not Path(interpreter).is_file():
@@ -89,7 +93,7 @@ def resource_errors(cfg,test=False):
     if kind=='languagebind':
         if not environment['transformers'].startswith('4.30.'):
             issues.append('official LanguageBind needs its compatible transformers 4.30 environment; installed '+environment['transformers'])
-    if kind=='avhubert':
+    if kind=='avhubert' and model.get('video_input', 'lips') == 'lips':
         if cfg['data'].get('video_column')=='lip_video_path':
             import csv
             for manifest in cfg['data']['datasets']:

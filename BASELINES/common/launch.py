@@ -4,14 +4,15 @@ import os
 import subprocess
 import sys
 
-from app.main import load_config
-from BASELINES.common.runtime import ROOT,apply_overrides
+from BASELINES.common.runtime import ROOT, apply_overrides, load_config
 from BASELINES.common.experiments import resource_errors,task_catalog
 
 
 def python_environment(python,test=False):
     from pathlib import Path
     env=dict(os.environ,PYTHONDONTWRITEBYTECODE='1',OMP_NUM_THREADS='4')
+    if Path(python).parent.parent.name in ('baseline-legacy', 'baseline-avhubert'):
+        env['PATH']=str(Path(python).parent)+os.pathsep+env.get('PATH','')
     if '/environments/' in python:
         env['MPLCONFIGDIR']=str(Path(python).parents[1]/'.matplotlib')
     if test:env.update(HF_HUB_OFFLINE='1',TRANSFORMERS_OFFLINE='1',CUDA_CACHE_DISABLE='1',TORCHDYNAMO_DISABLE='1',TMPDIR='/dev/shm')
@@ -46,9 +47,9 @@ def run_ranks(command,gpus,test):
         with ThreadPoolExecutor(max_workers=gpus) as pool:
             futures=[pool.submit(p.wait) for p in children]
             for future in as_completed(futures):
-                if future.result()!=0:
+                if code := future.result():
                     stop_children(children)
-                    return 1
+                    return code
         return 0
     finally:
         stop_children(children)
@@ -78,6 +79,9 @@ def matrix(configs,args):
         if args.test:command.append('--test')
         if args.set:command.extend(['--set',*args.set])
         code=run_ranks(command,args.gpus,args.test)
+        if code == os.EX_TEMPFAIL and args.stage == 'finetune' and not args.test:
+            print('RETRY FINETUNE', config.stem, 'nonfinite evaluation; restarting once from saved checkpoints', flush=True)
+            code=run_ranks(command,args.gpus,args.test)
         print('MODEL_RESULT',config.stem,'FAILED' if code else 'PASSED',flush=True)
         if code:failures.append(config.stem)
         if code and not args.test:break

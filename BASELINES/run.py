@@ -10,15 +10,17 @@ import torch
 if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.main import load_config
-from BASELINES.common.runtime import ROOT, OUTPUT_ROOT, path, load_file, write_config, write_json,apply_overrides
+from BASELINES.common.runtime import (ROOT, OUTPUT_ROOT, path, load_config, load_file, write_config, write_json,
+                                      apply_overrides, uses_mental_test_selection)
 
 
 def verify(stage, config, experiment, device, extra=()):
     cfg = load_config(config)
+    effective = dict(apply_overrides(load_config(config), extra), stage=stage)
     run_name = experiment or cfg['experiment']+'-smoke-'+datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')
     output = OUTPUT_ROOT / stage / 'smoke' / cfg['model']['id'] / run_name
     checkpoint_name='latest.pt' if stage=='pretrain' else 'best.pt'
+    resume_name = 'latest.pt' if uses_mental_test_selection(effective) else checkpoint_name
     if output.exists():
         raise FileExistsError(f'{output}: choose a new --experiment name')
     base = [sys.executable, '-m', 'BASELINES.run', '--stage', stage, '--config', str(config)]
@@ -32,12 +34,12 @@ def verify(stage, config, experiment, device, extra=()):
             (output / 'smoke-failure.log').write_text(result.stdout)
             raise RuntimeError(f'{cfg["model"]["id"]}: {suffix} failed; see {output}/smoke-failure.log')
     run(['--set', *overrides, 'stop_after_epoch=1'], 'first update')
-    first = load_file(output / checkpoint_name)
+    first = load_file(output / resume_name)
     if first['step'] != 1 or not first['config'].get('gradient_check', {}).get('encoder'):
         raise AssertionError('First real update did not reach the encoder')
     del first
-    run(['--resume', str(output / checkpoint_name), '--set', *overrides, 'stop_after_epoch=2'], 'resume')
-    last = load_file(output / checkpoint_name)
+    run(['--resume', str(output / resume_name), '--set', *overrides, 'stop_after_epoch=2'], 'resume')
+    last = load_file(output / resume_name)
     report=json.loads((output/'metrics.json').read_text())
     # A validation-selected best.pt may correctly stay at epoch 1 even after
     # resumed training completes epoch 2. The run report tracks actual progress.
@@ -66,8 +68,11 @@ def verify(stage, config, experiment, device, extra=()):
 def remove_smoke_checkpoints(result):
     """Keep the evidence after restore/transfer checks, discard disposable weights."""
     output = path(result['output'])
-    for name in (('latest.pt',) if result['stage']=='pretrain' else ('best.pt',)):
-        (output / name).unlink()
+    for name in ('latest.pt', 'best.pt'):
+        (output / name).unlink(missing_ok=True)
+    if result['stage'] == 'pretrain':
+        for snapshot in output.glob('epoch-*.pt'):
+            snapshot.unlink(missing_ok=True)
     cfg = load_config(output / 'config.yaml')
     cfg['artifacts'] = dict(checkpoints_retained=False,
         note='Temporary smoke checkpoints removed after resume/evaluation/transfer checks.')
@@ -92,12 +97,12 @@ def main():
     parser.add_argument('--device', help='Override device, e.g. cuda:1 or cpu')
     parser.add_argument('--experiment', help='Run directory name; smoke defaults to configured task/route plus timestamp')
     parser.add_argument('--set', nargs='*', default=[], metavar='KEY=YAML')
-    parser.add_argument('--resume', help='Restore latest.pt (pretraining) or an unfinished best.pt (finetuning)')
+    parser.add_argument('--resume', help='Restore a resumable latest.pt or best.pt')
     parser.add_argument('--evaluate', choices=['validation', 'test'])
     parser.add_argument('--checkpoint', help='Checkpoint for evaluation')
     parser.add_argument('--smoke', action='store_true', help='Two updates, full resume, evaluation, and pretrain-to-finetune transfer')
     parser.add_argument('--finetune-config', help='Custom downstream config for a pretraining smoke check')
-    parser.add_argument('--keep-checkpoints', action='store_true', help='Keep temporary latest.pt (pretraining) or best.pt (finetuning) after --smoke')
+    parser.add_argument('--keep-checkpoints', action='store_true', help='Keep temporary weights after --smoke')
     args = parser.parse_args()
     directory = ROOT / 'BASELINES' / args.stage / 'configs'
     available = sorted(p for p in directory.glob('*.yaml') if p.stem != 'defaults')
@@ -127,7 +132,7 @@ def main():
     if args.resume and args.evaluate:
         parser.error('Choose either --resume or --evaluate')
     if args.keep_checkpoints and not args.smoke:
-        parser.error('--keep-checkpoints only applies to --smoke; training keeps latest.pt (pretraining) or best.pt (finetuning)')
+        parser.error('--keep-checkpoints only applies to --smoke')
     if args.finetune_config and not (args.smoke and args.stage=='pretrain'):
         parser.error('--finetune-config requires --stage pretrain --smoke')
     if not args.smoke:
