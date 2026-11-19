@@ -2,7 +2,14 @@
 
 `train_finetune.sh` reads `CONFIGS/tasks/finetune/tasks.csv` and launches `torchrun -m app.main` directly.
 The launcher is Bash; it does not call a Python wrapper or generate task YAMLs.
-Existing task/data configs are retained.
+The 177 standard task entry YAMLs are retained under
+`CONFIGS/archive/finetune-standard/`; the loader resolves their old paths for
+existing commands. The 71 historical task data fragments are archived under
+`CONFIGS/archive/finetune-data/`; the config loader maps individual old paths
+for special experiments. BASELINES also reads `tasks.csv` for task discovery.
+Sampling presets remain here.
+The data preparation utilities read `tasks.csv` and no longer generate per-task
+YAML files.
 
 ## Files and precedence
 
@@ -14,7 +21,7 @@ Existing task/data configs are retained.
   video/VA support the 53 tasks whose CSVs contain both modalities.
 
 Precedence: model/sampling/optimization fragments → shared defaults → entry YAML
-→ CSV fields and overrides → explicit CHECKPOINT → trailing KEY=VALUE arguments.
+→ CSV fields and overrides → selected CHECKPOINT → trailing KEY=VALUE arguments.
 
 `clip` uses individual clips. `instance` groups eight sentences, including mental,
 AVEC2014, Androids-Corpus, CMDC, EATD-Corpus and PDCH where applicable. Defaults
@@ -23,9 +30,10 @@ sampling, model and VA regression selection by MAE. Audio defaults to batch 16,
 video to 64, VA to 4, all **per GPU**. VA defaults to 20 epochs; audio to 100 and
 video to 80. These are not imports of the tuned `mental-auto/*-best.yaml` variants.
 
-CHECKPOINT is always explicit: `meta.read_checkpoint` for a/v,
-`finetune.pretrained_checkpoint` for va. RUN_NAME distinguishes experiments in
-the output path; use different names for different pretrained weights.
+CHECKPOINT is required for standard runs: `meta.read_checkpoint` for a/v,
+`finetune.pretrained_checkpoint` for va. Mental-auto routes include a default
+checkpoint; CHECKPOINT overrides it. RUN_NAME distinguishes experiments in the
+output path; use different names for different pretrained weights.
 
 ## CSV fields
 
@@ -101,6 +109,26 @@ RUN_NAME=jepa-75k bash train_finetune.sh va \
   optimization.epochs=100 \
   data.sync_preflight_file=OUTPUT/finetune_va/mental/va_sync_preflight.json
 ```
+
+Use the tuned mental-auto route for all 38 mental tasks, or add TASKS to select
+individual tasks. The three routes are `anxiety-best`, `depression-best` and
+`total-best`; the default scope is mental and the modality must be va:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1 MENTAL_AUTO=anxiety-best DRY_RUN=1 \
+  bash train_finetune.sh va
+
+CUDA_VISIBLE_DEVICES=0,1 MENTAL_AUTO=depression-best TASKS=DSM-Depression \
+  bash train_finetune.sh va
+```
+
+The default output is `OUTPUT/finetune_va/mental-transfer/<task>/<route>/`.
+An explicit RUN_NAME replaces `<route>`, and CHECKPOINT overrides the route's
+initialization. The original 108 entries are archived under
+`CONFIGS/archive/finetune-mental-auto/`; their old app.main paths still resolve.
+These routes use the transferred 100-epoch, patience-10 settings, not the
+original 5-epoch autoresearch runs. Existing unmarked outputs are backed up and
+restarted by this launcher; they are not automatically resumed.
 
 Filters: SCOPE=all/mental/nonmental, TYPE=regression (or another task type),
 TASKS='DSM-*,IEMOCAP-*'. Filters intersect. TASK_CSV selects another catalog.

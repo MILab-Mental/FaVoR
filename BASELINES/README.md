@@ -62,7 +62,7 @@ AVSiam Large 按[论文 Sec.3](https://www.ecva.net/papers/eccv_2024/papers_ECCV
 
 ## 数据与协议
 
-微调使用 `DATASET/splits-0901/csvs/` 原始 CSV 和 FaVoR 原有 33 个普通、38 个 Mental 任务定义。`<标签列>_split` 的 `0=train`、`1=test`、`2=validation`（如有）。普通任务没有验证集时固定轮数并使用最后一轮。Mental 每轮在测试集评估，按测试指标选点，仍跑满配置的轮数。Mental 的最终结果来自参与选点的测试集。
+微调使用 `DATASET/splits-0901/csvs/` 原始 CSV，任务定义从 `CONFIGS/tasks/finetune/tasks.csv` 读取：33 个普通、38 个 Mental 任务。`<标签列>_split` 的 `0=train`、`1=test`、`2=validation`（如有）。普通任务没有验证集时固定轮数并使用最后一轮。Mental 每轮在测试集评估，按测试指标选点，仍跑满配置的轮数。Mental 的最终结果来自参与选点的测试集。
 
 预训练直接读取 `DATASET/merged/pretrain_audios_0901.csv`、`pretrain_videos_0901.csv`、`pretrain_va_canonical.csv`，数字标签不用于监督或划分，不额外划验证集。复用 FaVoR mmap 清单索引、媒体路径注册、标签解析、损失和指标。音视频比较使用共同有真实 A/V 路径的样本，复用 FaVoR 通用解码器的同步校验、媒体时间起点和共同有效时间区间。`data.sync` 可显式覆盖解码器容差，生效来源记入 `data_audit`；不会把联合预训练模板的零偏移约束强加到下游 CSV（实查 1,121 对媒体，其中 543 对不满足该更严约束，主要包含 MP3 编码起点等差异）。
 

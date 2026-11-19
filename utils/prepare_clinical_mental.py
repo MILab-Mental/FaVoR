@@ -1,4 +1,4 @@
-"""Refresh the clinical split and its 38 mental finetuning configurations.
+"""Refresh the clinical split and paired manifest using the task catalog.
 
 Run from the repository root: python -m utils.prepare_clinical_mental
 """
@@ -7,11 +7,9 @@ import csv
 import hashlib
 import shutil
 from collections import Counter
-from copy import deepcopy
 from pathlib import Path
 
-import yaml
-from utils.instance_finetune_configs import select_instance_presets
+from utils.finetune_catalog import read_tasks
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -29,6 +27,10 @@ def prepare(source):
     tasks = [field[:-6] for field in fields if field.endswith('_split')]
     if len(tasks) != 38 or not rows:
         raise ValueError('Expected a nonempty clinical CSV with 38 task split columns')
+    catalog_tasks = {row['label_column']: row for row in read_tasks(PROJECT_ROOT)
+                     if row['scope'] == 'mental' and row['csv_path'] == str(SPLIT)}
+    if set(catalog_tasks) != set(tasks):
+        raise ValueError('Clinical task columns do not match the enabled task catalog')
     classes = {}
     for task in tasks:
         valid = [row for row in rows if row[task + '_split'] not in {'', '-1'}]
@@ -39,6 +41,8 @@ def prepare(source):
         if set(splits) != {'0', '1'}:
             raise ValueError(f'{task}: expected training split 0 and validation split 1')
         classes[task] = max(labels)
+        if int(catalog_tasks[task]['num_class']) != classes[task]:
+            raise ValueError(f'{task}: class count does not match the task catalog')
 
     paired_rows, seen = [], set()
     for row in rows:
@@ -75,31 +79,7 @@ def prepare(source):
         writer.writeheader()
         writer.writerows(entries)
 
-    for modality, app in [('audio', 'finetune_a'), ('video', 'finetune_v'), ('audio-video', 'finetune_va')]:
-        template_name = 'RAVDESS-emotion'
-        template_path = PROJECT_ROOT / f'CONFIGS/tasks/finetune/{modality}/classification/{template_name}.yaml'
-        template = yaml.safe_load(template_path.read_text())
-        for task in tasks:
-            data_path = Path(f'CONFIGS/data/finetune/audio-video/mental/{task}.yaml')
-            data = dict(task='classification', num_class=classes[task], label_column=task)
-            data['datasets'] = [str(SPLIT)]
-            data['datasets_weights'] = [1]
-            config = deepcopy(template)
-            config['folder'] = f'OUTPUT/{app}/mental/{task}'
-            if modality == 'audio-video':
-                config.pop('data', None)
-                config['finetune'].update(best_metric='f1_macro', best_metric_mode='max', branch_loss_weight=0.0)
-                # Keep task-specific data last and use the shared sampling preset.
-                config['yamls'].pop('data', None)
-                config['yamls']['sampling'] = 'CONFIGS/data/finetune/audio-video/sampling/va-6s.yaml'
-            config['yamls']['data'] = str(data_path)
-            select_instance_presets(config, data)
-            task_path = Path(f'CONFIGS/tasks/finetune/{modality}/mental/{task}.yaml')
-            for path, contents in [(data_path, {'data': data}), (task_path, config)]:
-                target = PROJECT_ROOT / path
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text(yaml.safe_dump(contents, sort_keys=False, allow_unicode=True), encoding='utf-8')
-    print(f'Replaced {SPLIT}: {len(rows)} rows; wrote {PAIRED}; generated 38 tasks × 3 modalities.')
+    print(f'Replaced {SPLIT}: {len(rows)} rows; wrote {PAIRED}; validated {len(tasks)} catalog tasks.')
 
 
 if __name__ == '__main__':

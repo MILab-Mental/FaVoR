@@ -132,7 +132,7 @@ DDP 每个 batch 取各 rank 有效样本数的最小值；任一 rank 没有有
 运行时需要该文件，或通过 `--set finetune.pretrained_checkpoint=/实际路径/checkpoint.pt` 指定。
 
 ```bash
-# 重新同步临床 CSV、生成配对清单和全部 mental 配置（会覆盖已有同名 mental 配置）
+# 根据 tasks.csv 验证临床任务、重新同步临床 CSV 并生成配对清单
 python -m utils.prepare_clinical_mental
 
 # 以 DSM-Depression 为例启动音频微调；视频 / 音视频改用对应模态目录
@@ -168,8 +168,8 @@ AVEC2014-PHQ；更早的 `vafinetune` 路径也直接映射到对应具体任务
 根目录，因此修改根目录会生成新的索引。已有 canonical CSV 仍可读取。
 
 ```bash
-# 生成 / 更新全部 53 个 VA 任务、配对清单和训练 / 验证样本数报告
-# 会覆盖已有同名 VA 入口和数据片段，不生成通用占位配置
+# 根据 tasks.csv 生成 / 更新 VA 配对清单和训练 / 验证样本数报告
+# 不生成或覆盖逐任务入口和数据片段
 python -m utils.prepare_va_finetune
 
 torchrun --nproc_per_node=2 -m app.main \
@@ -949,8 +949,8 @@ loss projectors 不参与下游预测，仍沿用已有微调行为。
 
 已切换 39 个 video、44 个 audio、39 个 audio-video 任务，共 122 个入口。
 各任务输出目录追加 `/instance-sentences8`，与旧片段级微调的 checkpoint 分开；
-预训练初始化 checkpoint 保持任务原设置。数据准备脚本重新生成长媒体任务时也会
-选择这些预设。
+预训练初始化 checkpoint 保持任务原设置。统一任务入口按 tasks.csv 的 profile
+选择长媒体采样预设；数据准备脚本不再生成逐任务配置。
 
 ### 13.3 评估与指标
 
@@ -985,52 +985,23 @@ batch size。实际完整模型训练的显存与吞吐需在目标 GPU 上测�
 
 ## Mental VA 最优参数迁移
 
-入口统一放在 `CONFIGS/tasks/finetune/audio-video/mental-auto/`：
-
-- `RESULT-total.yaml`、`RESULT-Anxiety.yaml`、`RESULT-Depression.yaml`：各自的最优参数。
-- 其余 35 个任务各三种配置，例如 `DSM-Anger-auto-anxiety-best.yaml`、
-  `DSM-Anger-auto-depression-best.yaml`、`DSM-Anger-auto-total-best.yaml`。
-
-全部入口复用现有采样、JEPA 骨干模型、优化和任务数据配置，只覆盖需要修改的字段。
-没有展开模型定义。各任务类别数和标签来自对应的共享数据 YAML。
-原来的 `mental-{total,anxiety,depression}-best.yaml` 已移除。
-
-按 total → Anxiety → Depression 顺序运行其余任务：
+`CONFIGS/tasks/finetune/audio-video/mental-auto/` 只保留三条共享路线：
+`anxiety-best.yaml`、`depression-best.yaml` 和 `total-best.yaml`。任务的
+数据集、标签及类别数由 `CONFIGS/tasks/finetune/tasks.csv` 提供；原 108 个入口
+保存在 `CONFIGS/archive/finetune-mental-auto/`，旧 `app.main --fname` 路径可通过映射加载。
 
 ```bash
-(
-  export CUDA_VISIBLE_DEVICES=0,1
-  for group in total anxiety depression; do
-    for config in CONFIGS/tasks/finetune/audio-video/mental-auto/*-auto-${group}-best.yaml; do
-      torchrun --standalone --nproc_per_node=2 -m app.main \
-        --fname "$config" || exit 1
-    done
-  done
-)
+# 预览 38 项临床任务，去掉 DRY_RUN=1 后启动
+CUDA_VISIBLE_DEVICES=0,1 MENTAL_AUTO=anxiety-best DRY_RUN=1 bash train_finetune.sh va
+
+# 只选一个任务；可选 CHECKPOINT 覆盖路线默认初始化权重
+CUDA_VISIBLE_DEVICES=0,1 MENTAL_AUTO=depression-best TASKS=DSM-Depression \
+  bash train_finetune.sh va
 ```
 
-三个 RESULT 任务可独立运行，不包含在上述迁移队列中：
-
-```bash
-for task in RESULT-total RESULT-Anxiety RESULT-Depression; do
-  torchrun --standalone --nproc_per_node=2 -m app.main \
-    --fname "CONFIGS/tasks/finetune/audio-video/mental-auto/${task}.yaml" || break
-done
-```
-
-每卡 batch=10；mental-auto 的全部 108 个入口共用
-`CONFIGS/optimization/finetune/audio-video/epochs100-warmup0-lr0.001.yaml`：
-最多训练 100 轮，连续 10 次验证未严格提升时早停。任务入口不再重复设置 epochs。
-这属于延长训练预算，原 autoresearch 的 5 轮结果仍保留为历史记录。
-支持 auto_resume。为保留续训路径，输出继续使用
-`OUTPUT/finetune_va/mental-transfer/<task>/<group>-best/`；严格同步预检缓存共用
-`OUTPUT/finetune_va/mental-transfer/va_sync_preflight.json`。
-先比较三套固定候选，只对少数需要的任务延长训练或局部调参；延长训练须使用独立
-输出目录记录新预算。
-
-三个 RESULT 入口的输出单独设为
-`OUTPUT/finetune_va/mental/RESULT-*/autoresearch-1026/`，其中归档了对应 autoresearch
-最优实验的原始参数快照、日志、指标和 `best.pt`。源实验最终轮次的 `latest.pt` 已清理；
-归档中的 `latest.pt` 是最佳轮次完整状态的独立副本，可从最佳轮次恢复，不能视为原实验
-最终轮次 checkpoint。来源、最佳轮次和恢复点说明记录在各目录的 `archive_origin.json`。
-其余 35 个任务的输出路径不变。
+`MENTAL_AUTO` 可选 `anxiety-best`、`depression-best` 或 `total-best`，仅用于 `va`，
+默认 `SCOPE=mental`。默认输出为 `OUTPUT/finetune_va/mental-transfer/<task>/<route>/`；
+`RUN_NAME` 可改写最后一级。三条路线均为每卡 batch=10、最多 100 轮、早停 patience=10，
+保留各自优化参数、同步设置和预训练初始化；原 autoresearch 的 5 轮结果为历史实验，不能混同。
+默认权重来自路线 YAML，`CHECKPOINT` 可显式覆盖。统一入口遇到没有完成标记的旧目录会先备份
+并从头训练，不会自动续训；直接使用已归档的旧入口时仍按其配置的续训规则运行。
