@@ -273,6 +273,10 @@ class WavJEPA(nn.Module):
         length = audio.shape[-1]
         audio = F.pad(audio, (0, 32160-length))
         audio = (audio-audio.mean((-2, -1), keepdim=True)) / (audio.std((-2, -1), keepdim=True)+1e-5)
+        if self.pretraining:
+            # The native SSL loss processes the padded waveform as a fixed
+            # window. Only downstream readout needs the unpadded token count.
+            return dict(audio=audio)
         real_tokens = min(200, max(1, self.encoder.extract_audio.total_patches(length)))
         mask = torch.arange(200)[None] >= real_tokens
         return dict(audio=audio, padding_mask=mask)

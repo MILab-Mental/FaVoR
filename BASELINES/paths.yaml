@@ -1,0 +1,4 @@
+BASELINES_WEIGHTS_ROOT: /mnt/ext/ext1/OUTPUTS/对比实验初始化权重
+BASELINES_OUTPUT_ROOT: OUTPUT/baselines
+BASELINES_LEGACY_PYTHON: .venv/baseline-legacy/bin/python
+BASELINES_AVHUBERT_PYTHON: .venv/baseline-avhubert/bin/python

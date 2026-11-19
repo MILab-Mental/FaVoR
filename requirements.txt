@@ -33,6 +33,7 @@ transformers         # Hugging Face 音频、视频及视觉基线模型
 huggingface-hub      # 下载固定版本的基线模型与源码快照
 lightning            # LeAVJEPA 官方模型基类
 pytorch-lightning    # WavJEPA 官方模型基类（使用 pytorch_lightning 导入名）
+webdataset==0.2.111  # WavJEPA 官方预训练包导入的数据模块
 torchmetrics         # LeAVJEPA 官方模型导入的指标组件
 fvcore               # MaskFeat / SlowFast 配置、注册器及权重初始化
 iopath               # MaskFeat / SlowFast 官方源码的文件访问

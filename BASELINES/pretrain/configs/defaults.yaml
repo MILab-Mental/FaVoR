@@ -1,6 +1,10 @@
 route: scratch_pretrain
 experiment: merged
 save_predictions: false
+max_batches: 10000
 data:
+  batch_size: 16
   datasets:
   - DATASET/merged/pretrain_audios_0901.csv
+optimization:
+  epochs: 20

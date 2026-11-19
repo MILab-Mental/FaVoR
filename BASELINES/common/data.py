@@ -1,11 +1,13 @@
 """Use FAVOR manifests/labels/identities, decoding raw media before native transforms.
 
-No failed sample substitution, no missing-modality padding, and no test-set selection.
+Supervised samples preserve their identities. Pretraining retries unreadable media.
 """
 import csv
 import hashlib
+import logging
 import math
 import random
+from bisect import bisect_right
 from collections import OrderedDict
 from functools import lru_cache
 from pathlib import Path
@@ -15,11 +17,16 @@ import torch
 from torch.utils.data import DataLoader, Dataset
 
 from datasets.audio_jepa.finetune_dataset import AudioCSVDataset
-from datasets.audio_jepa.pretrain_dataset import load_audio
+from datasets.audio_jepa.pretrain_dataset import load_audio, read_audio_manifest
 from datasets.common.instances import sentence_identity, sentence_windows, sample_sentence_indices
 from datasets.common.paths import get_dataset_paths
 from datasets.va_lejepa.av_decoder import AVDecoder
+from BASELINES.common.mental_precheck import MANIFEST as MENTAL_MANIFEST, load_mental_precheck
+from BASELINES.common.pretrain_media_errors import PretrainMediaErrors
 from BASELINES.common.runtime import path, fingerprint
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 @lru_cache(maxsize=4)
@@ -28,11 +35,71 @@ def _csv_rows(filename, size, mtime):
         return list(csv.DictReader(handle))
 
 
+_SOUNDFILE_SUFFIXES = {'.wav', '.flac', '.ogg', '.aif', '.aiff', '.au'}
+
+
+def _media_readable(filename, video):
+    target = Path(filename)
+    try:
+        if target.stat().st_size < 1024:
+            return False
+    except OSError:
+        return False
+    if video:
+        from decord import VideoReader, cpu
+        try:
+            return len(VideoReader(str(target), ctx=cpu(0), num_threads=1)) > 0
+        except Exception:
+            return False
+    if target.suffix.lower() not in _SOUNDFILE_SUFFIXES:
+        return True
+    import soundfile
+    try:
+        return soundfile.info(str(target)).frames > 0
+    except Exception:
+        return False
+
+
+def _ffprobe_duration(filename):
+    import json
+    import subprocess
+    result = subprocess.run(('ffprobe', '-v', 'error', '-select_streams', 'a:0',
+                             '-show_entries', 'stream=duration', '-of', 'json', str(filename)),
+                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=30)
+    result.check_returncode()
+    streams = json.loads(result.stdout.decode()).get('streams') or []
+    return float(streams[0]['duration'])
+
+
+def _sync_ok(audio_path, video_path):
+    # Mirror AVDecoder.validate_sync's default tolerance so mismatched pairs are
+    # dropped here instead of crashing a whole DDP group mid-training.
+    from decord import VideoReader, cpu
+    try:
+        reader = VideoReader(str(video_path), ctx=cpu(0), num_threads=1)
+        fps = float(reader.get_avg_fps())
+        video_duration = len(reader) / fps
+    except Exception:
+        return False
+    try:
+        if Path(audio_path).suffix.lower() in _SOUNDFILE_SUFFIXES:
+            import soundfile
+            info = soundfile.info(str(audio_path))
+            audio_duration = info.frames / info.samplerate
+        else:
+            audio_duration = _ffprobe_duration(audio_path)
+    except Exception:
+        return False
+    return abs(video_duration - audio_duration) <= max(0.5, 2 / fps)
+
+
 def configure_instances(cfg, modality):
     """Use FAVOR's long-media sampling and instance-head presets verbatim."""
     from app.main import load_config
     from utils.instance_finetune_configs import is_long_media_task, INSTANCE_PRESETS
     data = cfg['data']
+    if str(cfg.get('task_name', '')).startswith('ordinary/'):
+        return
     if not is_long_media_task(data) and not data.get('num_sentence', 0):
         return
     app = {'audio':'finetune_a', 'video':'finetune_v', 'audio-video':'finetune_va'}[modality]
@@ -50,15 +117,28 @@ def configure_instances(cfg, modality):
         prediction_unit='speaker_recording', csv_splits_unchanged=True)
 
 
-def read_rows(cfg, modality, supervised=True, max_records=None):
+def read_rows(cfg, modality, supervised=True, max_records=None, use_mental_cache=True):
     manifests = cfg['datasets']
     roots = cfg.get('rootpaths') or get_dataset_paths(manifests)
     if len(roots) != len(manifests):
         raise ValueError('datasets/rootpaths length mismatch')
+    # AV comparisons can enforce the same paired cohort for every branch.
+    required = ('audio', 'video') if cfg.get('cohort', 'paired') == 'paired' or modality == 'audio-video' else (modality,)
     records, missing = [], 0
     for manifest, root in zip(manifests, roots):
-        stat = path(manifest).stat()
-        for source in _csv_rows(str(path(manifest)), stat.st_size, stat.st_mtime_ns):
+        manifest_path = path(manifest)
+        excluded = None
+        precheck = None
+        if (use_mental_cache and supervised and required == ('audio', 'video')
+                and not cfg.get('video_column') and manifest_path == path(MENTAL_MANIFEST)):
+            precheck = load_mental_precheck(root)
+            key = 'invalid_av_rows' if modality == 'audio-video' else 'invalid_paired_rows'
+            excluded = set(precheck[key])
+        stat = manifest_path.stat()
+        if precheck and (stat.st_size != precheck['source']['size']
+                         or stat.st_mtime_ns != precheck['source']['mtime_ns']):
+            raise RuntimeError('Clinical CSV changed after loading its precheck')
+        for index, source in enumerate(_csv_rows(str(manifest_path), stat.st_size, stat.st_mtime_ns)):
             row = dict(source)
             if supervised:
                 split = row.get(cfg['label_column'] + '_split', '')
@@ -69,8 +149,6 @@ def read_rows(cfg, modality, supervised=True, max_records=None):
                 if cfg['video_column'] not in row:
                     raise ValueError(f'{manifest}: missing {cfg["video_column"]}; a lip model cannot consume full-face video')
                 row['video_path'] = row[cfg['video_column']]
-            # AV comparisons can enforce the same paired cohort for every branch.
-            required = ('audio', 'video') if cfg.get('cohort', 'paired') == 'paired' or modality == 'audio-video' else (modality,)
             if any(not row.get(m + '_path', '').strip() for m in required):
                 missing += 1
                 continue
@@ -80,6 +158,16 @@ def read_rows(cfg, modality, supervised=True, max_records=None):
                     if '|' in row[field]:
                         raise ValueError('Multi-path row needs an explicit segment manifest')
                     row[field] = str(value if value.is_absolute() else path(root) / value)
+            if excluded is not None:
+                readable = index not in excluded
+            elif modality == 'audio-video':
+                # _sync_ok opens the video itself, so it subsumes the video readability check.
+                readable = _media_readable(row['audio_path'], False) and _sync_ok(row['audio_path'], row['video_path'])
+            else:
+                readable = all(_media_readable(row[name + '_path'], name == 'video') for name in required)
+            if not readable:
+                missing += 1
+                continue
             row['_manifest'] = str(manifest)
             if supervised:
                 # Exactly FAVOR's one-based class, pipe-delimited multi-label contract.
@@ -220,8 +308,9 @@ class MediaDataset(Dataset):
 
 class PretrainDataset(MediaDataset):
     """Reuse FAVOR's mmap line index instead of materializing millions of rows."""
-    def __init__(self, cfg, spec):
+    def __init__(self, cfg, spec, *, writable_errors=True):
         from datasets.audio_jepa.pretrain_dataset import AudioPretrainDataset
+        from BASELINES.common import distributed
         self.cfg, self.spec = cfg, spec
         self.training, self.supervised, self.modality = True, False, spec['modality']
         self.records = AudioPretrainDataset([path(p) for p in cfg['datasets']])
@@ -234,22 +323,73 @@ class PretrainDataset(MediaDataset):
             if not {'pair_id', 'source_id', 'audio_path', 'video_path'}.issubset(self.columns):
                 raise ValueError('Expected the canonical paired pretraining CSV')
         self.full_size = len(self.records) - int(self.canonical)
-        self.size = min(self.full_size, int(cfg.get('limit') or self.full_size))
+        self.media_errors = PretrainMediaErrors(self.modality, writable=writable_errors)
+        excluded_shifts = None
+        if distributed.rank() == 0:
+            known = self.media_errors.known(refresh=True)
+            excluded_shifts = self._excluded_shifts(known) if known else []
+        self.excluded_shifts = distributed.gather(excluded_shifts)[0]
+        self.eligible_size = self.full_size - len(self.excluded_shifts)
+        self.size = min(self.eligible_size, int(cfg.get('limit') or self.eligible_size))
+
+    def _excluded_shifts(self, known):
+        values = (entry['path'] for filename in self.records.manifests
+                  for entry in read_audio_manifest(filename))
+        if self.canonical:
+            next(values)
+            column = self.columns.index('pair_id')
+            values = (row[column] if len(row) > column else ''
+                      for row in csv.reader(values))
+        shifts = []
+        for index, name in enumerate(values):
+            if name in known:
+                shifts.append(index - len(shifts))
+        return shifts
 
     def __len__(self):
         return self.size
 
     def __getitem__(self, index):
+        # A pretraining job started before the registry can use it in workers
+        # spawned for later epochs without resizing its existing sampler.
+        if not hasattr(self, 'media_errors'):
+            self.media_errors = PretrainMediaErrors(self.modality)
+            self.excluded_shifts = []
+        original = index
+        replacement_rng = None
+        for _ in range(self.records.max_retries):
+            row_index = index + bisect_right(self.excluded_shifts, index)
+            row = self._manifest_row(row_index)
+            name = row.get('pair_id', '') if self.canonical else row[self.modality + '_path']
+            if name in self.media_errors.known():
+                last_error = ValueError(f'Media is listed in {self.media_errors.filename}: {name}')
+            else:
+                try:
+                    clips = self._decode(row)
+                except Exception as exc:
+                    if not isinstance(exc, (OSError, ValueError, RuntimeError)) and type(exc).__module__.split('.')[0] != 'decord':
+                        raise
+                    self.media_errors.record(name, f'{type(exc).__name__}: {exc}')
+                    LOGGER.warning('Skipping pretraining row %d (%s): %s', row_index, name, exc)
+                    last_error = exc
+                else:
+                    return dict(sentences=[clips], windows=[[0]], label=None,
+                                id=row.get('video_path') or row['audio_path'])
+            if self.size <= 1:
+                break
+            if replacement_rng is None:
+                replacement_rng = random.Random(int(original))
+            candidate = replacement_rng.randrange(self.size - 1)
+            index = candidate + int(candidate >= index)
+        raise RuntimeError(f'Could not load pretraining row {original} or a replacement') from last_error
+
+    def _manifest_row(self, index):
         value = self.records._audio_path(index + int(self.canonical))
         if self.canonical:
-            from datasets.va_lejepa.va_manifest import validate_identity
-            row = dict(zip(self.columns, next(csv.reader([value]))))
-            validate_identity(row)
-        else:
-            row = {self.modality + '_path': value}
-        clips = self._decode(row)
-        return dict(sentences=[clips], windows=[[0]], label=None,
-                    id=row.get('video_path') or row['audio_path'])
+            row = dict.fromkeys(self.columns, '')
+            row.update(zip(self.columns, next(csv.reader([value]))))
+            return row
+        return {self.modality + '_path': value}
 
 
 def make_loaders(cfg, spec, pretrain=False):
@@ -262,15 +402,18 @@ def make_loaders(cfg, spec, pretrain=False):
     if spec.get('requires_lips') and data.get('video_column') != 'lip_video_path' and not spec.get('lip_preprocessing'):
         raise ValueError('AV-HuBERT requires real lip_video_path input or native mouth-preprocessing assets')
     if pretrain:
-        datasets = {'train': PretrainDataset(data, spec)}
-        missing, roots = 0, []
+        dataset = PretrainDataset(data, spec, writable_errors=not cfg.get('no_save'))
+        datasets = {'train': dataset}
+        missing, roots = len(dataset.excluded_shifts), []
     else:
-        rows, missing = read_rows(data, spec['modality'])
+        rows, missing = read_rows(data, spec['modality'], use_mental_cache=not cfg.get('no_save'))
         datasets = {name: MediaDataset(values, data, spec, name=='train')
                     for name, values in partition(rows).items()}
         roots = [str(path(p).resolve()) for p in (data.get('rootpaths') or get_dataset_paths(data['datasets']))]
     audit = dict(manifests={str(p):fingerprint(p) for p in data['datasets']}, media_roots=roots,
                  missing_modality_rows=missing, split_policy='csv_only', splits={})
+    if pretrain:
+        audit['media_error_policy'] = 'exclude_registered_and_retry'
     if spec['modality']=='audio-video':
         audit['synchronization']=dict(implementation='datasets.va_lejepa.av_decoder.validate_sync',
             overrides=data.get('sync',{}),timeline='shared_valid_intersection')
@@ -278,7 +421,7 @@ def make_loaders(cfg, spec, pretrain=False):
     for name, dataset in datasets.items():
         training = name == 'train'
         count = dataset.full_size if pretrain else sum(len(rows) for rows in dataset.rows)
-        audit['splits'][name] = dict(rows=count, instances=dataset.full_size if pretrain else len(dataset))
+        audit['splits'][name] = dict(rows=count, instances=dataset.eligible_size if pretrain else len(dataset))
         limit = int(data.get('limit', 0))
         if limit and not pretrain:
             dataset.rows, dataset.samples = dataset.rows[:limit], dataset.samples[:limit]

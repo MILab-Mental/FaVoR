@@ -1,4 +1,6 @@
 """Only implemented adapters are in the factory; availability lives in README."""
+from time import perf_counter
+
 import torch
 from torch import nn
 
@@ -41,7 +43,12 @@ class TaskModel(nn.Module):
                 indices=[]
                 for clip_index,clip in enumerate(clips):
                     key=(sample_index,id(clips),clip_index)
-                    if key not in prepared_cache:prepared_cache[key]=move(self.prepare(clip),device)
+                    if key not in prepared_cache:
+                        started = perf_counter() if hasattr(self, '_profile_prepare_s') else None
+                        prepared = self.prepare(clip)
+                        if started is not None:
+                            self._profile_prepare_s += perf_counter() - started
+                        prepared_cache[key]=move(prepared,device)
                     if self.training or key not in encoded_cache:
                         index=len(requests)
                         requests.append((clip,prepared_cache[key]))
@@ -115,7 +122,14 @@ def build_model(cfg, *, pretrain=False, initialize=True):
         cfg['upstream_code'] = {name: yaml.safe_load(LOCK.read_text())[name]}
         if kind in ('eat','avhubert'):
             fairseq_source='fairseq-avhubert' if kind=='avhubert' else 'fairseq'
-            cfg['upstream_code'][fairseq_source]=yaml.safe_load(LOCK.read_text())[fairseq_source]
+            fairseq_entry = yaml.safe_load(LOCK.read_text()).get(fairseq_source)
+            if fairseq_entry is None:
+                from importlib.metadata import distribution
+                import json
+                installed = distribution('fairseq')
+                origin = installed.read_text('direct_url.json')
+                fairseq_entry = {'version': installed.version, 'installed_from': json.loads(origin) if origin else None}
+            cfg['upstream_code'][fairseq_source] = fairseq_entry
     if kind not in factories:
         raise ValueError(f'No implemented adapter for {kind}; see README support table')
     transfer = model_cfg.get('encoder_checkpoint')

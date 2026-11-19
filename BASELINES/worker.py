@@ -7,8 +7,9 @@ from types import SimpleNamespace
 
 import torch
 
-from app.main import load_config
-from BASELINES.common.runtime import ROOT,OUTPUT_ROOT,path,setup,apply_overrides,strict_load,load_file,finalize_finetune_checkpoint
+from BASELINES.common.runtime import (ROOT, OUTPUT_ROOT, path, load_config, setup, apply_overrides, strict_load, load_file,
+                                      finalize_finetune_checkpoint, uses_mental_test_selection,
+                                      NonfiniteEvaluationError)
 from BASELINES.common import distributed
 from BASELINES.common.data import configure_instances,make_loaders,read_rows
 from BASELINES.common.experiments import task_catalog,task_config
@@ -128,7 +129,7 @@ def finetune(base,tasks,test,encoder_state=None):
             cfg['data']['limit']=max(4,distributed.world_size()*accumulation*cfg['data']['batch_size'])
             cfg['optimization'].update(epochs=1)
             cfg.update(max_batches=accumulation,stop_after_epoch=1)
-        rows,missing=read_rows(cfg['data'],modality,max_records=1)
+        rows,missing=read_rows(cfg['data'],modality,max_records=1,use_mental_cache=not test)
         if not rows and missing:
             outcomes.append(dict(task=name,status='not_applicable',reason='no real '+modality+' inputs'))
             continue
@@ -138,18 +139,21 @@ def finetune(base,tasks,test,encoder_state=None):
             cfg['optimization']['gradient_accumulation']=8//cfg['data']['batch_size']
         if cfg['data']['task']=='regression':cfg['data']['num_class']=1
         folder=OUTPUT_ROOT/'finetune'/cfg['model']['id']/cfg['experiment']
+        best_checkpoint = folder / 'best.pt'
+        latest_checkpoint = folder / 'latest.pt' if uses_mental_test_selection(cfg) else None
+        resume_checkpoint = latest_checkpoint if latest_checkpoint and latest_checkpoint.is_file() else best_checkpoint
         args=empty_args()
-        if not test and (folder/'best.pt').exists():
-            saved=load_file(folder/'best.pt')['config']
+        if not test and resume_checkpoint.is_file():
+            saved=load_file(resume_checkpoint)['config']
             for key in ('model','data','optimization','seed'):
                 if saved.get(key)!=cfg.get(key):raise ValueError('Existing run differs in '+key+': '+str(folder))
             report=json.loads((folder/'metrics.json').read_text()) if (folder/'metrics.json').exists() else {}
             if 'test' in report.get('evaluations',{}):
-                finalize_finetune_checkpoint(folder/'best.pt')
+                finalize_finetune_checkpoint(best_checkpoint, latest_checkpoint)
                 outcomes.append(dict(task=name,status='completed'))
                 if distributed.rank()==0:print('COMPLETE FINETUNE',cfg['model']['id'],name,flush=True)
                 continue
-            args.resume=str(folder/'best.pt')
+            args.resume=str(resume_checkpoint)
         if distributed.rank()==0:print('START FINETUNE',base['model']['id'],name,flush=True)
         backbone.load_state_dict(initial,strict=True)
         setup(cfg)
@@ -179,8 +183,8 @@ def finetune(base,tasks,test,encoder_state=None):
             else:
                 gc.collect()
                 torch.cuda.empty_cache()
-                main(cfg,SimpleNamespace(resume=None,evaluate='test',checkpoint=str(folder/'best.pt')),model=model)
-                finalize_finetune_checkpoint(folder/'best.pt')
+                main(cfg,SimpleNamespace(resume=None,evaluate='test',checkpoint=str(best_checkpoint)),model=model)
+                finalize_finetune_checkpoint(best_checkpoint, latest_checkpoint)
                 result=dict(task=name,status='passed')
             outcomes.append(result)
             if distributed.rank()==0:print('PASS FINETUNE',base['model']['id'],json.dumps(result),flush=True)
@@ -230,7 +234,7 @@ def main():
         if distributed.rank()==0:
             print('RESULT',json.dumps(dict(model=base['model']['id'],stage=args.stage,test=args.test,
                   world_size=distributed.world_size(),outcomes=outcomes)),flush=True)
-    except BaseException:
+    except BaseException as error:
         # A failed rank must exit before NCCL teardown can wait on a peer that
         # is still in backward. The parent then terminates the other rank.
         import os
@@ -239,7 +243,7 @@ def main():
         traceback.print_exc()
         sys.stdout.flush()
         sys.stderr.flush()
-        os._exit(1)
+        os._exit(os.EX_TEMPFAIL if isinstance(error, NonfiniteEvaluationError) else 1)
     finally:
         if args.test:
             import faulthandler

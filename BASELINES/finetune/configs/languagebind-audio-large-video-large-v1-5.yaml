@@ -1,4 +1,4 @@
-python: /home/data/sdd/mental/OUTPUTS/对比实验初始化权重/environments/legacy/bin/python
+python: ${BASELINES_LEGACY_PYTHON}
 yamls:
 - ../../common/defaults.yaml
 - defaults.yaml
@@ -8,9 +8,9 @@ model:
   audio:
     hub_id: LanguageBind/LanguageBind_Audio_FT
     revision: 4820c496563c46acfb1ff9a486fae5319f16257e
-    weights: /home/data/sdd/mental/OUTPUTS/对比实验初始化权重/languagebind-audio-large
+    weights: ${BASELINES_WEIGHTS_ROOT}/languagebind-audio-large
   video:
     hub_id: LanguageBind/LanguageBind_Video_V1.5_FT
     revision: 5d53aab2ec8944c4babd16fb30cab845686e296f
-    weights: /home/data/sdd/mental/OUTPUTS/对比实验初始化权重/languagebind-video-large-v1-5
+    weights: ${BASELINES_WEIGHTS_ROOT}/languagebind-video-large-v1-5
   version: Audio-Large+Video-Large V1.5 full FT, no text branches

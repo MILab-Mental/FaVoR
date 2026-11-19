@@ -77,7 +77,11 @@ def test_resume_reproduces_next_update_and_random_draws(tmp_path):
 
 
 def test_real_task_schema_allows_regression_without_class_count(tmp_path):
+    import wave
     from BASELINES.common.data import read_rows
+    with wave.open(str(tmp_path / 'a.wav'), 'wb') as audio:
+        audio.setparams((1, 2, 16000, 0, 'NONE', 'not compressed'))
+        audio.writeframes(bytes(3200))
     manifest = tmp_path/'regression.csv'
     manifest.write_text('audio_path,PHQ,PHQ_split,participant\na.wav,12.5,0,P01\n')
     cfg = dict(datasets=[str(manifest)], rootpaths=[str(tmp_path)], task='regression',
@@ -104,12 +108,228 @@ def test_no_validation_uses_final_epoch_without_reading_test(tmp_path,stage,file
         return dict(loss=float(step+1),updates=1,samples=2)
     fit(model,dict(train=train,test=object()),cfg,tmp_path,logging.getLogger('test'),
         torch.device('cpu'),None,epoch)
-    assert sorted(p.name for p in tmp_path.glob('*.pt'))==[filename]
+    archives = ['epoch-0001.pt', 'epoch-0002.pt'] if stage == 'pretrain' else []
+    assert sorted(p.name for p in tmp_path.glob('*.pt')) == [*archives, filename]
     best=load_file(tmp_path/filename)
     assert {'optimizer','scheduler','scaler','rng','loader_rng'}<=best.keys()
     assert calls==[0,1] and best['epoch']==2
     assert best['best']['score'] is None and best['best']['validation'] is None
     assert best['best']['selection']=='final_epoch_no_csv_validation'
+
+
+def test_pretrain_archives_weights_and_logs_each_update_after_resume(tmp_path, monkeypatch):
+    import csv
+    from types import SimpleNamespace
+    from BASELINES.common.runtime import load_file
+    from BASELINES.pretrain import trainer
+
+    class ToyEncoder(nn.Module):
+        input_spec = {'modality': 'audio'}
+
+        def __init__(self):
+            super().__init__()
+            self.encoder = nn.Linear(1, 1, bias=False)
+            nn.init.constant_(self.encoder.weight, .5)
+            self.batch_losses = []
+
+        def prepare(self, clip):
+            return clip
+
+        def pretrain_loss(self, batch, step):
+            loss = self.encoder(torch.stack([clip['audio'] for clip in batch])).square().mean()
+            self.batch_losses.append(float(loss.detach()))
+            return loss
+
+        def export_encoder(self):
+            return self.encoder.state_dict()
+
+    samples = [dict(sentences=[[dict(audio=torch.tensor([float(i)]))]]) for i in range(1, 8)]
+    def make_loaders(cfg, spec, pretrain):
+        loader = DataLoader(samples, batch_size=2, collate_fn=list,
+                            generator=torch.Generator().manual_seed(42))
+        return {'train': loader}
+
+    monkeypatch.setattr(trainer, 'make_loaders', make_loaders)
+    monkeypatch.setattr(trainer, 'STEP_LOSS_FLUSH_INTERVAL', 1)
+    cfg = dict(stage='pretrain', route='scratch_pretrain', data={}, max_batches=4,
+               model=dict(id='toy'), output=str(tmp_path), device='cpu',
+               optimization=dict(lr=.01, epochs=2, gradient_accumulation=2), stop_after_epoch=1)
+    model = ToyEncoder()
+    args = SimpleNamespace(resume=None, evaluate=None)
+    trainer.main(cfg, args, model=model)
+    loss_file = tmp_path / 'step_loss.csv'
+    with loss_file.open('a', newline='') as stream:
+        csv.writer(stream).writerow((2, 3, 99))
+
+    latest = tmp_path / 'latest.pt'
+    cfg['stop_after_epoch'] = 2
+    args.resume = latest
+    trainer.main(cfg, args, model=model)
+    with loss_file.open(newline='') as stream:
+        records = list(csv.DictReader(stream))
+    assert [(int(row['epoch']), int(row['step'])) for row in records] == [(1, 1), (1, 2), (2, 3), (2, 4)]
+    losses = model.batch_losses
+    assert [float(row['loss']) for row in records] == pytest.approx([
+        (losses[0] + losses[1]) / 2, (2 * losses[2] + losses[3]) / 3,
+        (losses[4] + losses[5]) / 2, (2 * losses[6] + losses[7]) / 3,
+    ])
+    for number in (1, 2):
+        archived = load_file(tmp_path / f'epoch-{number:04d}.pt')
+        assert archived['epoch'] == number and archived['step'] == 2 * number
+        assert 'model' in archived and 'encoder' in archived and 'optimizer' not in archived
+    assert load_file(latest)['epoch'] == 2 and 'optimizer' in load_file(latest)
+
+
+def test_wavjepa_prepares_a_short_clip_without_counting_unpadded_tokens():
+    from BASELINES.build_model.audio import WavJEPA
+
+    model = WavJEPA.__new__(WavJEPA)
+    nn.Module.__init__(model)
+    model.pretraining = True
+    model.processor = lambda clips, **_: {'input_values': torch.from_numpy(clips[0])[None]}
+
+    result = model.prepare({'audio': torch.arange(16, dtype=torch.float32)})
+    assert result['audio'].shape == (1, 1, 32160)
+    assert torch.isfinite(result['audio']).all()
+
+
+def test_pretraining_replaces_and_remembers_empty_audio(tmp_path, caplog, monkeypatch):
+    import csv
+    import wave
+    from BASELINES.common.data import PretrainDataset
+    from BASELINES.common import pretrain_media_errors
+
+    monkeypatch.setattr(pretrain_media_errors, 'OUTPUT_ROOT', tmp_path)
+    empty, good = tmp_path / 'empty.wav', tmp_path / 'good.wav'
+    for filename, count in ((empty, 0), (good, 1600)):
+        with wave.open(str(filename), 'wb') as audio:
+            audio.setparams((1, 2, 16000, 0, 'NONE', 'not compressed'))
+            audio.writeframes(bytes(2 * count))
+    manifest = tmp_path / 'audio.csv'
+    manifest.write_text(f'{empty} 0\n{good} 0\n')
+    cfg = {'datasets': [str(manifest)]}
+    spec = {'modality': 'audio', 'seconds': 0.1, 'sample_rate': 16000}
+    dataset = PretrainDataset(cfg, spec)
+    peer = PretrainDataset(cfg, spec)
+    assert len(dataset) == 2
+    assert dataset[0]['id'] == str(good)
+    assert 'Skipping pretraining row 0' in caplog.text
+    peer.media_errors.known(refresh=True)
+    assert peer[0]['id'] == str(good)
+    assert caplog.text.count('Skipping pretraining row 0') == 1
+    reloaded = PretrainDataset(cfg, spec)
+    assert len(reloaded) == 1 and reloaded[0]['id'] == str(good)
+    with (tmp_path / 'pretrain/error_media_a.csv').open(newline='') as handle:
+        records = list(csv.DictReader(handle))
+    assert len(records) == 1 and records[0]['name'] == str(empty)
+    assert 'Empty media' in records[0]['reason']
+    for modality in ('v', 'va'):
+        assert (tmp_path / f'pretrain/error_media_{modality}.csv').read_text() == 'name,reason\n'
+
+
+def test_pretraining_excludes_registered_video_pairs_by_id(tmp_path, monkeypatch):
+    import csv
+    from BASELINES.common.data import PretrainDataset
+    from BASELINES.common import pretrain_media_errors
+
+    monkeypatch.setattr(pretrain_media_errors, 'OUTPUT_ROOT', tmp_path)
+    media_errors = pretrain_media_errors.PretrainMediaErrors('audio-video')
+    for name in ('drop1', 'drop2', 'drop3'):
+        media_errors.record(name, 'invalid pair')
+    manifest = tmp_path / 'paired.csv'
+    with manifest.open('w', newline='') as handle:
+        writer = csv.writer(handle)
+        writer.writerow(['pair_id', 'source_id', 'audio_path', 'video_path'])
+        for name in ('drop1', 'drop2', 'keep1', 'drop3', 'keep2'):
+            writer.writerow([name, 'subject', 'subject.wav', 'subject.mp4'])
+    dataset = PretrainDataset({'datasets': [str(manifest)]}, {'modality': 'audio-video'})
+    monkeypatch.setattr(dataset, '_decode', lambda row: [row['pair_id']])
+    assert len(dataset) == 2
+    assert [dataset[i]['sentences'][0][0] for i in range(2)] == ['keep1', 'keep2']
+
+
+@pytest.mark.parametrize('codes,attempts,failed', [
+    ((75, 0), 2, False),
+    ((75, 75), 2, True),
+    ((1,), 1, True),
+])
+def test_matrix_retries_only_nonfinite_evaluation_once(tmp_path, monkeypatch, codes, attempts, failed):
+    from types import SimpleNamespace
+    from BASELINES.common import launch
+
+    monkeypatch.setattr(launch, 'task_catalog', lambda: {})
+    monkeypatch.setattr(launch, 'load_config', lambda _: {})
+    monkeypatch.setattr(launch, 'resource_errors', lambda *_: [])
+    calls = []
+    def run(command, gpus, test):
+        calls.append(command)
+        return codes[len(calls) - 1]
+    monkeypatch.setattr(launch, 'run_ranks', run)
+    args = SimpleNamespace(stage='finetune', tasks=['ordinary'], gpus=2, test=False, set=[],
+                           resume=None, evaluate=None, checkpoint=None, smoke=False)
+    configs = [tmp_path / 'toy.yaml']
+    if failed:
+        with pytest.raises(SystemExit, match='1'):
+            launch.matrix(configs, args)
+    else:
+        launch.matrix(configs, args)
+    assert len(calls) == attempts and all(call == calls[0] for call in calls)
+
+
+@pytest.mark.parametrize('task,metric,scores', [
+    ('classification', 'f1_macro', (.6, .5, .7)),
+    ('regression', 'mae', (2., 3., 1.)),
+])
+def test_mental_test_selection_keeps_best_and_resumes_latest(tmp_path, task, metric, scores):
+    import logging
+    from BASELINES.common.runtime import fit, load_file
+
+    cfg = dict(model={'kind': 'test'}, data=dict(task=task),
+               optimization=dict(lr=.01, epochs=3), stage='finetune', seed=42,
+               stop_after_epoch=1)
+    model = nn.Linear(2, 2)
+    loader_args = dict(batch_size=2, generator=torch.Generator().manual_seed(42))
+    train = DataLoader(TensorDataset(torch.ones(2, 2)), **loader_args)
+    test = DataLoader(TensorDataset(torch.ones(2, 2)), **loader_args)
+    calls = []
+    inference_epochs = []
+
+    def epoch(loader, optimizer, scheduler, scaler, step):
+        if loader is train:
+            update(model(torch.ones(2, 2)).square().mean(), model, optimizer, scheduler, scaler)
+            return dict(loss=1., updates=1, samples=2)
+        assert loader is test and not model.training and not torch.is_grad_enabled()
+        calls.append(step)
+        return {metric: scores[step - 1], 'updates': 0}
+
+    def run(resume=None):
+        def test_epoch(loader, step, number):
+            inference_epochs.append(number)
+            return epoch(loader, None, None, None, step)
+
+        return fit(model, dict(train=train, test=test), cfg, tmp_path,
+                   logging.getLogger('test'), torch.device('cpu'), resume, epoch,
+                   test_epoch_fn=test_epoch)
+
+    best_path, latest_path = tmp_path / 'best.pt', tmp_path / 'latest.pt'
+    run()
+    assert not calls and not latest_path.exists()
+    cfg.update(task_name='mental/test-task', stop_after_epoch=2)
+    run(best_path)
+    assert calls == [1, 2]
+    assert load_file(best_path)['epoch'] == 1
+    latest = load_file(latest_path)
+    assert latest['epoch'] == 2 and 'optimizer' in latest
+    assert latest['best']['test'][metric] == scores[0]
+    assert 'optimizer' not in load_file(best_path)
+    cfg['stop_after_epoch'] = 3
+    run(latest_path)
+    assert calls == [1, 2, 3] and load_file(best_path)['epoch'] == 3
+
+    best_path.unlink()
+    run(latest_path)
+    assert calls == [1, 2, 3] and load_file(best_path)['epoch'] == 3
+    assert inference_epochs == [1, 2, 3]
 
 
 def test_mental_instances_match_favor_and_train_attention_before_classification(tmp_path):
@@ -157,3 +377,16 @@ def test_mental_instances_match_favor_and_train_attention_before_classification(
     with (tmp_path/'predictions.csv').open() as handle:predictions=list(csv.DictReader(handle))
     assert metrics['samples']==2 and len(predictions)==2
     assert all('-s' not in p['path'] for p in predictions)
+
+    infer = tmp_path / 'infer.csv'
+    model.eval()
+    with torch.no_grad():
+        for number in (1, 2, 2):
+            run_epoch(model, loader, nn.CrossEntropyLoss(), cfg, torch.device('cpu'),
+                      predictions_path=infer, prediction_epoch=number)
+    with infer.open(newline='') as handle:
+        reader = csv.DictReader(handle)
+        assert reader.fieldnames == ['epoch', *predictions[0]]
+        records = list(reader)
+    assert [row['epoch'] for row in records] == ['1', '1', '2', '2']
+    assert len({(row['epoch'], row['path']) for row in records}) == 4

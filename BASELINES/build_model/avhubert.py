@@ -1,4 +1,4 @@
-"""AV-HuBERT's native encoder and CPU mouth preprocessing on real CSV frames."""
+"""AV-HuBERT encoder with configurable preprocessed video input."""
 from collections import OrderedDict
 from functools import lru_cache
 
@@ -105,8 +105,12 @@ class AVHubert(nn.Module):
         self.output_dim = self.encoder.encoder_embed_dim
         if self.output_dim != 1024:
             raise ValueError('AV-HuBERT requires Large clean PT')
+        self.video_input = cfg.get('video_input', 'lips')
+        if self.video_input not in ('face', 'lips'):
+            raise ValueError('AV-HuBERT video_input must be face or lips')
         self.input_spec = dict(modality='audio-video', sample_rate=16000, seconds=4,
-                              frames=100, fps=25, size=88, requires_lips=True)
+                              frames=100, fps=25, size=88, video_input=self.video_input,
+                              requires_lips=self.video_input == 'lips')
         if cfg.get('mouth_preprocessing'):
             assets=cfg['mouth_preprocessing']
             for key,digest in cfg.get('mouth_preprocessing_sha256',{}).items():
@@ -114,7 +118,8 @@ class AVHubert(nn.Module):
             self.input_spec['lip_preprocessing']=assets
 
     def prepare(self, clip):
-        if not clip.get('lip_roi'):raise ValueError('AV-HuBERT requires a real mouth ROI from the data pipeline')
+        if self.video_input == 'lips' and not clip.get('lip_roi'):
+            raise ValueError('AV-HuBERT requires a real mouth ROI from the data pipeline')
         from python_speech_features import logfbank
         from torchvision.transforms import functional as TF
         import numpy as np
@@ -124,14 +129,18 @@ class AVHubert(nn.Module):
         audio = F.pad(audio, (0, 0, 0, (-len(audio)) % 4)).reshape(-1, 104)
         audio = F.layer_norm(audio, audio.shape[1:])
         frames = clip['video'].permute(0, 3, 1, 2).float() / 255
-        if min(frames.shape[-2:]) < 88:
-            raise ValueError('Lip ROI must be at least 88x88; do not pad a missing crop')
         video=TF.rgb_to_grayscale(frames)
-        if self.training:
-            from torchvision.transforms import RandomCrop
-            video=TF.crop(video,*RandomCrop.get_params(video,(88,88)))
-            if torch.rand(())<.5:video=TF.hflip(video)
-        else:video=TF.center_crop(video,[88,88])
+        if self.video_input == 'face':
+            video=TF.resize(video,[88,88],antialias=True)
+        else:
+            if min(frames.shape[-2:]) < 88:
+                raise ValueError('Lip ROI must be at least 88x88; do not pad a missing crop')
+            if self.training:
+                from torchvision.transforms import RandomCrop
+                video=TF.crop(video,*RandomCrop.get_params(video,(88,88)))
+            else:
+                video=TF.center_crop(video,[88,88])
+        if self.training and torch.rand(())<.5:video=TF.hflip(video)
         video=(video-.421)/.165
         # The source clip can be 24/30fps. Match genuine ROI frames to the
         # native stacked-audio 25Hz timeline rather than discard its tail.

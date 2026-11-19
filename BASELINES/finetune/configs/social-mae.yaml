@@ -6,4 +6,4 @@ model:
   kind: socialmae
   version: Native 768-dim Social-MAE, 8 frames, tubelet 2; research-pretrained encoder
   architecture_source: https://github.com/HuBohy/SocialMAE
-  encoder_checkpoint: /home/data/sdd/mental/OUTPUTS/对比实验输出/pretrain/social-mae/merged-scratch/latest.pt
+  encoder_checkpoint: ${BASELINES_OUTPUT_ROOT}/pretrain/social-mae/merged-scratch/latest.pt

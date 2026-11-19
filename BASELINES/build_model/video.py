@@ -176,9 +176,14 @@ class MAEDFER(nn.Module):
 class VJEPA21(nn.Module):
     def __init__(self, cfg, initialize=True):
         super().__init__()
+        size = int(cfg.get('input_size', 384))
+        frames = int(cfg.get('frames', 64))
+        fps = float(cfg.get('fps', 4))
+        if size < 32 or size % 16 or frames < 2 or frames % 2 or fps <= 0:
+            raise ValueError('V-JEPA 2.1 requires input_size divisible by 16 (at least 32), even frames, and positive fps')
         with official('vjepa2') as source:
             self.encoder = source('app.vjepa_2_1.models.vision_transformer').vit_large(
-                img_size=(384, 384), num_frames=64, tubelet_size=2,
+                img_size=(size, size), num_frames=frames, tubelet_size=2,
                 use_sdpa=True, use_silu=False, wide_silu=True, uniform_power=False,
                 use_rope=True, img_temporal_dim_size=1, interpolate_rope=True,
                 use_activation_checkpointing=True)
@@ -190,11 +195,10 @@ class VJEPA21(nn.Module):
             state = {k.removeprefix('module.').removeprefix('backbone.'): v for k, v in checkpoint['ema_encoder'].items()}
             strict_load(self.encoder, state)
         self.output_dim = 1024
-        # The published 2.1 ViT-L 64-frame cooldown recipe samples at 4 fps.
-        self.input_spec = dict(modality='video', seconds=64/4, frames=64, size=384,fps=4)
+        self.input_spec = dict(modality='video', seconds=frames / fps, frames=frames, size=size, fps=fps)
 
     def prepare(self, clip):
-        return dict(video=frames_tensor(clip['video'], 384, training=self.training).permute(1, 0, 2, 3)[None],
+        return dict(video=frames_tensor(clip['video'], self.input_spec['size'], training=self.training).permute(1, 0, 2, 3)[None],
                     valid=torch.as_tensor(clip.get('video_valid_frames',len(clip['video']))).reshape(1))
 
     def forward(self, batch):
