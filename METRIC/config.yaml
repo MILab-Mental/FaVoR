@@ -1,0 +1,65 @@
+# All output paths are fixed under METRIC/. Paths below are read-only inputs.
+seed: 42
+modality: audio                # audio | video | audio-video
+device: cuda:0
+trajectory: audio-lejepa
+samples_per_task: 100          # total across probe-train + probe-val; 0 disables cap
+samples_per_class: 100         # additional per-class/bin maximum
+val_fraction: 0.25
+regression_bins: 5
+batch_size: 4
+decode_workers: 4              # video decoding; audio and audio-video remain serial
+num_sentences: 1               # one fixed sentence per recording for pretraining metrics
+num_audio_clips: 1
+video_frames: 48
+video_fps: 8
+video_size: 112
+va_branch: feature
+
+# Five checkpoints from the same pretraining trajectory. Change these together.
+checkpoints:
+  - {id: step-10000, path: /home/data/sdd/mental/OUTPUTS/pretrain_a_lejepa/emotion2vec-plus-large/FaVoR-4s-local2s/step-10000.pt}
+  - {id: step-20000, path: /home/data/sdd/mental/OUTPUTS/pretrain_a_lejepa/emotion2vec-plus-large/FaVoR-4s-local2s/step-20000.pt}
+  - {id: step-30000, path: /home/data/sdd/mental/OUTPUTS/pretrain_a_lejepa/emotion2vec-plus-large/FaVoR-4s-local2s/step-30000.pt}
+  - {id: step-40000, path: /home/data/sdd/mental/OUTPUTS/pretrain_a_lejepa/emotion2vec-plus-large/FaVoR-4s-local2s/step-40000.pt}
+  - {id: step-50000, path: /home/data/sdd/mental/OUTPUTS/pretrain_a_lejepa/emotion2vec-plus-large/FaVoR-4s-local2s/step-50000.pt}
+
+# Five private-clinical tasks plus five catalog nonmental tasks (two emotion,
+# three other downstream tasks); chosen because reliable subject IDs exist.
+tasks:
+  - DSM-Depression
+  - DSM-Anxiety
+  - SCL-Depression
+  - RESULT-total
+  - MINI
+  - RAVDESS-emotion
+  - RAVDESS-intensity
+  - CMDC-label
+  - CMDC-PHQ
+  - EATD-Corpus-SDS
+
+# Sources are used only for in-memory media-path -> subject-ID joins. "registry"
+# means original_csv_path in CONFIGS/datasets.csv. IDs never appear in results.
+subject_rules:
+  3_私有临床数据_LV:
+    source: /home/data/sdb/基座模型数据集/3心理数据集/临床/split_new.csv
+    columns: [Case_id]
+  2_RAVDESS_SV: {source: registry, columns: [actor]}
+  2_ASVP-ESD_SA: {source: registry, columns: [actor]}
+  2_CSEMOTIONS_SA: {source: registry, columns: [speaker]}
+  2_IEMOCAP_SV: {source: registry, columns: [session, speaker]}
+  3_EATD-Corpus_SA: {source: registry, columns: [patient]}
+  3_MODMA_SA: {source: registry, columns: [patient]}
+  3_Androids-Corpus_LA: {source: registry, columns: [patient]}
+  3_PDCH_LA: {source: registry, columns: [patient_id]}
+  # Same patient convention as DATASET/scripts/add_cmdc_patient_task_splits.py.
+  3_CMDC_LA: {pattern: '^([^_]+)_'}
+
+# Optional standardized CSV: trajectory,modality,task_id,checkpoint,
+# finetune_metric,finetune_mode,finetune_split,finetune_value
+finetune_csv: null
+
+# Historical MER results include incomplete runs and mixed batches; inspect
+# them explicitly with analyze_history.py instead of silently treating them as
+# comparable completed fine-tuning outcomes.
+finetune_sources: []

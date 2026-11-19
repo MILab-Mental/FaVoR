@@ -1,0 +1,5 @@
+/cache/
+/logs/
+/results/
+/archive/
+__pycache__/

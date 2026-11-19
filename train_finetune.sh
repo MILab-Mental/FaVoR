@@ -23,7 +23,8 @@ usage() {
 
 多种筛选条件同时生效。显卡数量根据 CUDA_VISIBLE_DEVICES 自动确定。
 参数优先级：默认配置 < CSV < CHECKPOINT < 命令末尾的 KEY=VALUE。
-训练失败立即停止；所有选中任务先检查完，再开始第一项训练。
+训练失败后继续下一个任务；全部任务结束后如有失败则返回非零状态。
+仅跳过带完成标记的任务；无标记的旧目录会保留并从头重跑。
 EOF
 }
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
@@ -108,6 +109,7 @@ build_command() {
   folder=${row[output_dir]//\{modality\}/$mode}
   folder=${folder//\{task_id\}/$id}
   folder=${folder//\{run\}/$run}
+  job_folder=$folder
   # 数据集路径是 YAML 列表：单引号在 YAML 中写成两个单引号。
   dataset_path=${row[csv_path]//\'/\'\'}
   dataset_yaml="['$dataset_path']"
@@ -125,12 +127,17 @@ build_command() {
     for item in "${overrides[@]}"; do
       [[ $item == ?*=* ]] || die "Invalid CSV override for $id: $item"
       cmd+=("$item")
+      [[ $item != folder=* ]] || job_folder=${item#folder=}
     done
   fi
   # 最后加入权重和命令行参数，保证覆盖优先级。
   if [[ $mode == va ]]; then cmd+=("finetune.pretrained_checkpoint=$checkpoint")
   else cmd+=("meta.read_checkpoint=$checkpoint"); fi
   cmd+=("${extra[@]}")
+  for item in "${extra[@]}"; do
+    [[ $item != folder=* ]] || job_folder=${item#folder=}
+  done
+  [[ -n $job_folder ]] || die "Empty output folder for $id"
 }
 
 # 3. 先扫描完整 CSV：筛选任务、检查配置，再保存待运行的 CSV 行。
@@ -165,17 +172,45 @@ done < "$catalog"
 ((${#queue[@]} > 0)) || die 'No tasks selected; check SCOPE, TYPE, TASKS and modality.'
 printf 'Selected %d tasks; modality=%s; run=%s; GPUs=%s\n' "${#queue[@]}" "$mode" "$run" "${CUDA_VISIBLE_DEVICES:-all visible}"
 
-# 4. 按 CSV 原顺序训练；预览只打印，真实运行遇到失败就停止。
+# 4. 仅成功退出且产物完整才标记完成，未完成目录移走以免混用历史记录。
+failed=0
 for i in "${!queue[@]}"; do
   read_row "${queue[i]}"
   build_command
   printf '\n[%d/%d] %s\n' "$((i+1))" "${#queue[@]}" "${row[task_id]}"
+  if [[ -f $job_folder/.finetune-complete && -s $job_folder/best.pt && -s $job_folder/logs/history.csv && -s $job_folder/logs/best.csv ]]; then
+    printf 'Skipped completed task: %s (%s)\n' "${row[task_id]}" "$job_folder"
+    continue
+  fi
   printf '%q ' "${cmd[@]}"; printf '\n'
   if [[ $dry_run == 0 ]]; then
-    "${cmd[@]}" || {
+    if [[ -e $job_folder || -L $job_folder ]]; then
+      backup="${job_folder}.incomplete-$(date +%Y%m%d-%H%M%S)"
+      suffix=0
+      while [[ -e $backup || -L $backup ]]; do
+        suffix=$((suffix+1))
+        backup="${job_folder}.incomplete-$(date +%Y%m%d-%H%M%S)-$suffix"
+      done
+      mv -- "$job_folder" "$backup"
+      printf 'Preserved incomplete output: %s\n' "$backup"
+    fi
+    if "${cmd[@]}"; then
+      if [[ -s $job_folder/best.pt && -s $job_folder/logs/history.csv && -s $job_folder/logs/best.csv ]]; then
+        touch -- "$job_folder/.finetune-complete"
+      else
+        printf 'Failed: %s (missing expected training output).\n' "${row[task_id]}" >&2
+        failed=$((failed+1))
+      fi
+    else
       status=$?
-      printf 'Failed: %s (exit %d); queue stopped.\n' "${row[task_id]}" "$status" >&2
-      exit "$status"
-    }
+      printf 'Failed: %s (exit %d); continuing.\n' "${row[task_id]}" "$status" >&2
+      failed=$((failed+1))
+    fi
+  elif [[ -e $job_folder || -L $job_folder ]]; then
+    printf 'Would preserve incomplete output and restart: %s\n' "$job_folder"
   fi
 done
+if ((failed)); then
+  printf '\n%d task(s) failed.\n' "$failed" >&2
+  exit 1
+fi

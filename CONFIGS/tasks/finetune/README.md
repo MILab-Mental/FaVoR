@@ -105,7 +105,12 @@ RUN_NAME=jepa-75k bash train_finetune.sh va \
 Filters: SCOPE=all/mental/nonmental, TYPE=regression (or another task type),
 TASKS='DSM-*,IEMOCAP-*'. Filters intersect. TASK_CSV selects another catalog.
 Trailing overrides take priority for every selected job. The launcher validates
-the selected queue before starting, stops on the first failed job, and does not
-automatically skip existing outputs. Checkpoints/resume follow the chosen
-default and explicit overrides. A preview validates command/config construction,
-not GPU memory, media integrity or checkpoint compatibility.
+the selected queue before starting. After a successful process exit, the launcher
+marks an output complete only if `best.pt`, `logs/history.csv` and `logs/best.csv`
+are nonempty. Subsequent runs skip marked, intact outputs. Any existing output
+without the marker (including legacy outputs whose completion cannot be proven)
+is moved to a sibling `.incomplete-<timestamp>` directory and trained from
+scratch. Failed jobs do not stop the queue; the launcher returns a nonzero status
+afterward if any job failed. A preview makes no filesystem changes and validates
+command/config construction, not GPU memory, media integrity or checkpoint
+compatibility.

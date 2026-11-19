@@ -8,7 +8,7 @@ import shutil
 from pathlib import Path
 
 
-CACHE_DIRECTORIES = {"__pycache__", ".ipynb_checkpoints"}
+CACHE_DIRECTORIES = {"__pycache__", ".ipynb_checkpoints", ".pytest_cache"}
 
 
 def clean(root: Path) -> int:
