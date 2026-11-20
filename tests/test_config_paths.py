@@ -9,7 +9,7 @@ from app import main
 
 
 ROOT = Path(__file__).resolve().parents[1]
-with (ROOT / 'CONFIGS/path-mapping.csv').open(newline='', encoding='utf-8') as mapping_file:
+with (ROOT / 'CONFIGS/archive/path-mapping.csv').open(newline='', encoding='utf-8') as mapping_file:
     CONFIG_PATHS = [row for row in csv.DictReader(mapping_file) if row['old_path'].endswith('.yaml')]
 
 

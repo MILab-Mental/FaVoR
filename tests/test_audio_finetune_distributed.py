@@ -35,7 +35,7 @@ def _train_worker(rank, backend, init_file, folder, manifest):
                             world_size=2, timeout=timedelta(seconds=120))
     try:
         cfg = dict(
-            folder=folder, meta=dict(dtype='float32', frozen_encoder=False),
+            folder=folder, meta=dict(dtype='float32', frozen_encoder=False, save_latest=True),
             data=dict(datasets=[manifest], rootpaths=[str(Path(manifest).parent)],
                       label_column='label', task='classification', num_class=2,
                       sample_rate=100, process_seconds=2, num_clips=1,

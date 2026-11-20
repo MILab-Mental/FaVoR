@@ -10,7 +10,7 @@ from utils.instance_finetune_configs import is_long_media_task
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCES = sorted(path for group in ('classification', 'multilabel', 'regression', 'mental')
-                 for path in (ROOT / f'CONFIGS/data/finetune/audio-video/{group}').glob('*.yaml'))
+                 for path in (ROOT / f'CONFIGS/archive/finetune-data/audio-video/{group}').glob('*.yaml'))
 
 
 @pytest.mark.parametrize('source', SOURCES, ids=lambda path: f'{path.parent.name}/{path.stem}')

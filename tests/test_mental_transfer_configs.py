@@ -1,13 +1,18 @@
 """Mental-auto entries retain tuned parameters and each task definition."""
 from pathlib import Path
+import csv
+import os
+import shlex
+import subprocess
 
 import pytest
 import yaml
 
 from app.main import load_config
+from app.main import apply_overrides
 
 ROOT = Path(__file__).resolve().parents[1]
-ENTRIES = ROOT / 'CONFIGS/tasks/finetune/audio-video/mental-auto'
+ENTRIES = ROOT / 'CONFIGS/archive/finetune-mental-auto'
 RESULTS = {'total-best': 'RESULT-total', 'anxiety-best': 'RESULT-Anxiety',
            'depression-best': 'RESULT-Depression'}
 SOURCES = {
@@ -15,7 +20,7 @@ SOURCES = {
     'anxiety-best': 'lr31e5-Anxiety/Anxiety.yaml',
     'depression-best': 'init75k-Depression/Depression.yaml',
 }
-TASKS = sorted(p for p in (ROOT / 'CONFIGS/data/finetune/audio-video/mental').glob('*.yaml')
+TASKS = sorted(p for p in (ROOT / 'CONFIGS/archive/finetune-data/audio-video/mental').glob('*.yaml')
                if not p.stem.startswith('RESULT-'))
 
 
@@ -68,3 +73,52 @@ def test_mental_auto_layout():
     assert {p.name for p in ENTRIES.glob('*.yaml')} == expected
     assert len(expected) == 108
     assert all(not (ENTRIES.parent / f'mental-{group}.yaml').exists() for group in SOURCES)
+
+
+@pytest.mark.parametrize('route', SOURCES)
+def test_launcher_reproduces_transferred_configs(route, tmp_path):
+    source = ROOT / 'CONFIGS/tasks/finetune/tasks.csv'
+    with source.open(newline='', encoding='utf-8') as handle:
+        reader = csv.DictReader(handle)
+        fields, rows = reader.fieldnames, list(reader)
+    dataset = tmp_path / 'dataset.csv'
+    dataset.touch()
+    catalog = tmp_path / 'tasks.csv'
+    with catalog.open('w', newline='', encoding='utf-8') as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(dict(row, csv_path=str(dataset)) for row in rows)
+    checkpoint = tmp_path / 'checkpoint.pt'
+    checkpoint.touch()
+    env = {**os.environ, 'MENTAL_AUTO': route, 'SCOPE': 'mental', 'DRY_RUN': '1',
+           'CUDA_VISIBLE_DEVICES': '0', 'CHECKPOINT': str(checkpoint),
+           'TASK_CSV': str(catalog), 'TASKS': '', 'TYPE': 'all'}
+    result = subprocess.run(['bash', str(ROOT / 'train_finetune.sh'), 'va',
+                             f'folder={tmp_path / "preview"}'], cwd=ROOT, env=env,
+                            text=True, capture_output=True, check=True)
+    commands = [shlex.split(line) for line in result.stdout.splitlines() if line.startswith('torchrun ')]
+    assert len(commands) == 38
+    by_label = {}
+    for command in commands:
+        options = command[command.index('--set') + 1:]
+        label = next(item.split('=', 1)[1] for item in options if item.startswith('data.label_column='))
+        by_label[label] = (command, options)
+    assert len(by_label) == 38
+    legacy = [(task.stem, ENTRIES / f'{task.stem}-auto-{route}.yaml') for task in TASKS]
+    legacy.append((RESULTS[route], ENTRIES / f'{RESULTS[route]}.yaml'))
+    for label, old_path in legacy:
+        command, options = by_label[label]
+        current = load_config(ROOT / command[command.index('--fname') + 1])
+        apply_overrides(current, options)
+        original = load_config(old_path)
+        route_config = load_config(ROOT / f'CONFIGS/tasks/finetune/audio-video/mental-auto/{route}.yaml')
+        assert route_config['finetune']['pretrained_checkpoint'] == original['finetune']['pretrained_checkpoint']
+        original['folder'] = str(tmp_path / 'preview')
+        original['data']['datasets'] = [str(dataset)]
+        original['finetune']['pretrained_checkpoint'] = str(checkpoint)
+        assert current == original
+
+
+def test_mental_auto_only_has_three_shared_routes():
+    entries = ROOT / 'CONFIGS/tasks/finetune/audio-video/mental-auto'
+    assert {p.name for p in entries.glob('*.yaml')} == {f'{route}.yaml' for route in SOURCES}

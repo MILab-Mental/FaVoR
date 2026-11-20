@@ -296,7 +296,7 @@ def test_training_entry_instance_reports_checkpoint_and_resume(tmp_path, monkeyp
     monkeypatch.setattr(torch.cuda, 'is_available', lambda: False)
     aggregator = {'pooling': 'attention', 'hidden_dim': 8}
     folder = tmp_path / modality
-    config = dict(folder=str(folder), meta=dict(dtype='float32', frozen_encoder=False),
+    config = dict(folder=str(folder), meta=dict(dtype='float32', frozen_encoder=False, save_latest=True),
                   data=dict(task='classification', num_class=2, batch_size=2, num_workers=0, datasets=['unused'],
                             label_column='emotion', num_sentence=8, sample_rate=100, process_seconds=2,
                             crop_size=16, patch_size=8, tubelet_size=1, dataset_fpcs=[4]),
@@ -349,7 +349,7 @@ def test_training_entry_instance_reports_checkpoint_and_resume(tmp_path, monkeyp
 
 def test_all_long_tasks_select_instance_presets_and_full_finetuning():
     counts = {}
-    for path in Path('CONFIGS/tasks/finetune').rglob('*.yaml'):
+    for path in Path('CONFIGS/archive/finetune-standard').rglob('*.yaml'):
         config = load_config(path)
         if is_long_media_task(config['data']):
             counts[config['app']] = counts.get(config['app'], 0) + 1

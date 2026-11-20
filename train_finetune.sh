@@ -13,7 +13,9 @@ usage() {
       bash train_finetune.sh a|v|va [KEY=VALUE ...]
 
 环境变量（不填则使用默认值）：
-  CHECKPOINT  必填，已有的预训练权重路径；预览也需要
+  CHECKPOINT  预训练权重路径；普通任务必填，mental-auto 可使用路线默认值
+  MENTAL_AUTO 音视频临床路线：anxiety-best / depression-best / total-best；
+              仅用于 va，默认使用该路线的预训练权重，可由 CHECKPOINT 覆盖
   RUN_NAME    实验名，默认取权重文件名（去掉扩展名）
   SCOPE       all / mental / nonmental，默认 all
   TASKS       任务名筛选，支持逗号和通配符，例如 'DSM-*,IEMOCAP-*'
@@ -36,12 +38,25 @@ extra=("$@")
 for item in "${extra[@]}"; do
   [[ $item == ?*=* ]] || die "Override must be KEY=VALUE: $item"
 done
+mental_auto=${MENTAL_AUTO:-}
 checkpoint=${CHECKPOINT:-}
+if [[ -n $mental_auto ]]; then
+  [[ $mode == va ]] || die 'MENTAL_AUTO requires modality va.'
+  case "$mental_auto" in anxiety-best|depression-best|total-best) ;; *) die "Invalid MENTAL_AUTO: $mental_auto" ;; esac
+  route_config="CONFIGS/tasks/finetune/audio-video/mental-auto/$mental_auto.yaml"
+  [[ -f $route_config ]] || die "Missing mental-auto route: $route_config"
+  if [[ -z $checkpoint ]]; then
+    checkpoint=$(python -c 'import sys,yaml; print(yaml.safe_load(open(sys.argv[1], encoding="utf-8"))["finetune"]["pretrained_checkpoint"])' "$route_config")
+  fi
+  run=${RUN_NAME:-$mental_auto}
+else
+  run=${RUN_NAME:-$(basename -- "${checkpoint%.*}")}
+fi
 [[ -n $checkpoint && -f $checkpoint ]] || die 'Set CHECKPOINT to an existing pretrained checkpoint.'
-run=${RUN_NAME:-$(basename -- "${checkpoint%.*}")}
 [[ $run =~ ^[a-zA-Z0-9_.-]+$ ]] || die 'RUN_NAME may contain letters, numbers, dot, underscore and hyphen.'
 catalog=${TASK_CSV:-CONFIGS/tasks/finetune/tasks.csv}
-scope=${SCOPE:-all}
+scope=${SCOPE:-$([[ -n $mental_auto ]] && printf mental || printf all)}
+[[ -z $mental_auto || $scope == mental ]] || die 'MENTAL_AUTO requires SCOPE=mental.'
 type=${TYPE:-all}
 dry_run=${DRY_RUN:-0}
 case "$scope" in all|mental|nonmental) ;; *) die "Invalid SCOPE: $scope" ;; esac
@@ -105,10 +120,17 @@ build_command() {
   case ${row[task_type]} in classification|regression|multi_label_classification) ;; *) die "Invalid task type for $id" ;; esac
   case ${row[profile]} in clip|instance) ;; *) die "Invalid profile for $id" ;; esac
   default="CONFIGS/tasks/finetune/defaults/$mode/${row[profile]}/default.yaml"
+  if [[ -n $mental_auto ]]; then
+    [[ ${row[scope]} == mental && ${row[profile]} == instance ]] || die "Invalid mental-auto task profile for $id"
+    default=$route_config
+  fi
   [[ -f $default ]] || die "Missing default: $default"
   folder=${row[output_dir]//\{modality\}/$mode}
   folder=${folder//\{task_id\}/$id}
   folder=${folder//\{run\}/$run}
+  if [[ -n $mental_auto ]]; then
+    folder="OUTPUT/finetune_va/mental-transfer/$id/$run"
+  fi
   job_folder=$folder
   # 数据集路径是 YAML 列表：单引号在 YAML 中写成两个单引号。
   dataset_path=${row[csv_path]//\'/\'\'}

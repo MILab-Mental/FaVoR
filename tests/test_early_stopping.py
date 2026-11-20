@@ -50,7 +50,7 @@ def _video_worker(rank, init_file, folder):
             return result
         train.classification_metrics = constant_score
         config = dict(
-            folder=folder, meta=dict(dtype='float32', eval_freq=2),
+            folder=folder, meta=dict(dtype='float32', eval_freq=2, save_latest=True),
             data=dict(task='classification', num_class=2, batch_size=1, num_workers=0,
                       datasets=['unused'], label_column='emotion', num_sentence=8,
                       crop_size=16, patch_size=8, tubelet_size=1, dataset_fpcs=[4]),

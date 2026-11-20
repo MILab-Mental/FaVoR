@@ -66,3 +66,37 @@ if [[ $task == second && ! -f $RETRY ]]; then exit 7; fi
     assert calls.read_text().splitlines() == ['first', 'second', 'third', 'second']
     assert (outputs / 'second/run/.finetune-complete').is_file()
     assert len(list((outputs / 'second').glob('run.incomplete-*'))) == 1
+
+
+def test_mental_auto_route_and_checkpoint_override(tmp_path):
+    checkpoint = tmp_path / 'custom.pt'
+    checkpoint.touch()
+    dataset = tmp_path / 'dataset.csv'
+    dataset.touch()
+    source = ROOT / 'CONFIGS/tasks/finetune/tasks.csv'
+    with source.open(newline='', encoding='utf-8') as handle:
+        reader = csv.DictReader(handle)
+        fields = reader.fieldnames
+        task = next(row for row in reader if row['task_id'] == 'DSM-Depression')
+    task['csv_path'] = str(dataset)
+    catalog = tmp_path / 'tasks.csv'
+    with catalog.open('w', newline='', encoding='utf-8') as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        writer.writerow(task)
+    env = {**os.environ, 'MENTAL_AUTO': 'depression-best', 'SCOPE': 'mental',
+           'TASKS': 'DSM-Depression', 'DRY_RUN': '1', 'CHECKPOINT': str(checkpoint),
+           'RUN_NAME': 'custom', 'CUDA_VISIBLE_DEVICES': '0', 'TASK_CSV': str(catalog)}
+    command = ['bash', str(ROOT / 'train_finetune.sh')]
+    result = subprocess.run(command + ['va'], cwd=ROOT, env=env, text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    assert 'mental-auto/depression-best.yaml' in result.stdout
+    assert f'finetune.pretrained_checkpoint={checkpoint}' in result.stdout
+    assert 'mental-transfer/DSM-Depression/custom' in result.stdout
+    wrong_mode = subprocess.run(command + ['a'], cwd=ROOT, env=env, text=True, capture_output=True)
+    assert wrong_mode.returncode != 0
+    assert 'requires modality va' in wrong_mode.stderr
+    wrong_scope = subprocess.run(command + ['va'], cwd=ROOT, env={**env, 'SCOPE': 'all'},
+                                 text=True, capture_output=True)
+    assert wrong_scope.returncode != 0
+    assert 'requires SCOPE=mental' in wrong_scope.stderr

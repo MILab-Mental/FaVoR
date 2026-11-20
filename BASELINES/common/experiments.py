@@ -7,25 +7,33 @@ import json
 import subprocess
 import sys
 
-from app.main import load_config
 from BASELINES.common.runtime import ROOT, path
+from utils.finetune_catalog import read_tasks, task_data
 
 
 @lru_cache(maxsize=1)
 def task_catalog():
-    tasks, seen = {}, set()
-    for mode in ('audio', 'audio-video'):
-        for group in ('classification', 'multilabel', 'regression'):
-            for filename in sorted((ROOT / f'CONFIGS/data/finetune/{mode}/{group}').glob('*.yaml')):
-                data = load_config(filename)['data']
-                identity = (tuple(data['datasets']), data['label_column'], data['task'])
-                if identity not in seen:
-                    seen.add(identity)
-                    tasks['ordinary/'+filename.stem] = data
-    for filename in sorted((ROOT / 'CONFIGS/data/finetune/audio-video/mental').glob('*.yaml')):
-        tasks['mental/'+filename.stem] = load_config(filename)['data']
-    assert sum(k.startswith('ordinary/') for k in tasks)==33
-    assert sum(k.startswith('mental/') for k in tasks)==38
+    rows = read_tasks(ROOT)
+    # Keep the former audio-only, paired, then mental order for existing queues.
+    group_order = {'classification': 0, 'multi_label_classification': 1, 'regression': 2}
+    rows.sort(key=lambda row: (2 if row['scope'] == 'mental' else
+                               1 if 'va' in row['modalities'].split('|') else 0,
+                               group_order[row['task_type']] if row['scope'] != 'mental' else 0,
+                               row['task_id']))
+    tasks = {}
+    for row in rows:
+        prefix = 'mental' if row['scope'] == 'mental' else 'ordinary'
+        name = prefix + '/' + row['task_id']
+        if name in tasks:
+            raise ValueError('Duplicate task: ' + name)
+        data = task_data(row)
+        # The old audio-only fragments omitted these defaults. Preserve the
+        # serialized run configuration and checkpoint compatibility.
+        if prefix == 'ordinary' and 'va' not in row['modalities'].split('|'):
+            data.pop('datasets_weights')
+            if row['task_type'] == 'regression':
+                data.pop('num_class')
+        tasks[name] = data
     return tasks
 
 

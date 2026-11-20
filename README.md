@@ -1,5 +1,10 @@
 # FAVOR
 
+标准微调任务使用 `train_finetune.sh` 和 `CONFIGS/tasks/finetune/tasks.csv`；
+原逐任务入口已归档至 `CONFIGS/archive/finetune-standard/`，旧的 `app.main`
+配置路径仍可解析。逐任务数据片段也已归档，`app.main` 通过路径映射兼容旧引用；
+实验专用配置和采样预设仍保留在原目录。
+
 FaVoR 音视频内部消融与晚期概率融合见 [内部对照说明](CONFIGS/tasks/finetune/audio-video/ablations/README.md)，由根项目运行。
 
 **多模态语音 / 视频情感与心理数据集** —— 视频 V-JEPA 与音频 AudioJEPA 预训练 + 下游微调。
@@ -242,12 +247,14 @@ GPU；rank 崩溃会立即报错并终止整组，不用再干等 NCCL 默认 60
 音视频预训练继续使用带表头的 canonical paired manifest。微调的三种模态统一通过 `data.datasets` 指定 `DATASET/splits-0901/csvs/xxx.csv`；媒体根目录按文件路径从 `CONFIGS/datasets.csv` 查询，无需填写 `rootpaths`。下游分类标签沿用 FAVOR 的 one-based 约定。
 默认主配置需要已训练的 VIDEO-LeJEPA/AUDIO-LeJEPA 权重；I0 配置使用官方 V-JEPA/emotion2vec。
 
-微调数据片段集中在 `CONFIGS/data/finetune/audio-video/`，供 audio、video、audio-video 共用；
-`CONFIGS/data/finetune/audio/` 仅保留音频独有数据集的任务片段，各模态保留自己的采样预设。
+标准任务的数据定义集中在 `CONFIGS/tasks/finetune/tasks.csv`；旧数据片段归档在
+`CONFIGS/archive/finetune-data/`，旧实验配置通过路径映射读取归档文件。
+比较模型也使用 `tasks.csv` 发现任务，不依赖这些归档目录。
+各模态的采样预设继续保留在 `CONFIGS/data/finetune/`。
 
 音视频微调已提供 15 个普通下游任务（7 个分类、1 个多标签、7 个回归）和 `mental/` 下的
-38 个临床任务。运行 `python -m utils.prepare_va_finetune` 可生成全部配对清单及任务配置；
-训练入口为 `CONFIGS/tasks/finetune/audio-video/{classification,multilabel,regression,mental}/<任务名>.yaml`。
+38 个临床任务。运行 `python -m utils.prepare_va_finetune` 可按任务表生成配对清单及划分统计；
+标准训练由 `train_finetune.sh` 读取任务表和共享配置启动。
 微调需要 VA 预训练 checkpoint，默认 `OUTPUT/pretrain_va_lejepa/I3-C1/latest.pt`，可用
 `--set finetune.pretrained_checkpoint=/实际路径/va-pretrain.pt` 覆盖。配置和数据准备细节见
 [CONFIGS 配置说明](CONFIGS/README.md)。

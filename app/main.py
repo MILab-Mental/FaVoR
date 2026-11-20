@@ -97,7 +97,9 @@ def _merge_config(base, override):
 
 def _resolve_legacy_config_path(path):
     """Keep old commands and saved YAML includes usable after config moves."""
-    path = Path(path).expanduser().resolve()
+    # Keep the logical path until mappings have been checked: an archived
+    # directory symlink may contain an old (now mapped) missing filename.
+    path = Path(os.path.abspath(Path(path).expanduser()))
     if path.is_file():
         return path
     try:
@@ -105,12 +107,21 @@ def _resolve_legacy_config_path(path):
     except ValueError:
         return path
     mapping_path = PROJECT_ROOT / "CONFIGS/path-mapping.csv"
+    if not mapping_path.is_file():
+        mapping_path = PROJECT_ROOT / "CONFIGS/archive/path-mapping.csv"
     if not relative.startswith("CONFIGS/") or not mapping_path.is_file():
         return path
     with mapping_path.open(newline="", encoding="utf-8") as mapping_file:
-        for row in csv.DictReader(mapping_file):
-            if row["old_path"] == relative:
-                return PROJECT_ROOT / row["new_path"]
+        mapping = {row["old_path"]: row["new_path"] for row in csv.DictReader(mapping_file)}
+    seen = set()
+    while relative in mapping:
+        if relative in seen:
+            raise ValueError(f"Cyclic config path mapping: {relative}")
+        seen.add(relative)
+        relative = mapping[relative]
+        path = PROJECT_ROOT / relative
+        if path.is_file():
+            return path
     return path
 
 
