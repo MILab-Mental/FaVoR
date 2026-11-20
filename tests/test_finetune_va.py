@@ -103,6 +103,15 @@ def test_eval_sampler_no_duplicate_padding():
     assert sorted(indices[0]+indices[1])==list(range(5))
 
 
+def test_instance_head_accepts_single_clip_batches():
+    model = VAFinetuner(tiny_va(), 3,
+                        {'instance_aggregator': {'pooling': 'attention', 'hidden_dim': 8}})
+    output = model(batch_data())
+    assert output['logits'].shape == (2, 3)
+    output['logits'].square().mean().backward()
+    assert model.heads['feature'][-1].weight.grad is not None
+
+
 @pytest.mark.parametrize('task',['classification','regression','multi_label_classification'])
 def test_finetune_entry_best_latest_predictions_resume(tmp_path,monkeypatch,task):
     import app.finetune_va.train as train

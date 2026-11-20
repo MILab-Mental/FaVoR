@@ -1,10 +1,18 @@
 import csv
 import os
+import shlex
 import subprocess
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_nonmental_tasks_use_single_sentence_profile():
+    with (ROOT / 'CONFIGS/tasks/finetune/tasks.csv').open(newline='', encoding='utf-8') as handle:
+        rows = list(csv.DictReader(handle))
+    assert all(row['profile'] == 'clip' for row in rows if row['scope'] == 'nonmental')
+    assert all(row['profile'] == 'instance' for row in rows if row['scope'] == 'mental')
 
 
 def test_launcher_retries_incomplete_and_continues_after_failure(tmp_path):
@@ -100,3 +108,34 @@ def test_mental_auto_route_and_checkpoint_override(tmp_path):
                                  text=True, capture_output=True)
     assert wrong_scope.returncode != 0
     assert 'requires SCOPE=mental' in wrong_scope.stderr
+
+
+def test_va_route_selects_ordinary_tasks_and_preserves_profiles(tmp_path):
+    checkpoint = tmp_path / 'custom.pt'
+    dataset = tmp_path / 'dataset.csv'
+    checkpoint.touch()
+    dataset.touch()
+    with (ROOT / 'CONFIGS/tasks/finetune/tasks.csv').open(newline='', encoding='utf-8') as handle:
+        reader = csv.DictReader(handle)
+        fields, rows = reader.fieldnames, list(reader)
+    catalog = tmp_path / 'tasks.csv'
+    with catalog.open('w', newline='', encoding='utf-8') as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(dict(row, csv_path=str(dataset)) for row in rows)
+    env = {**os.environ, 'VA_ROUTE': 'total-best', 'MENTAL_AUTO': '', 'SCOPE': 'nonmental',
+           'TASKS': '', 'TYPE': 'all', 'DRY_RUN': '1', 'CHECKPOINT': str(checkpoint),
+           'RUN_NAME': 'total-best-b1', 'CUDA_VISIBLE_DEVICES': '0', 'TASK_CSV': str(catalog)}
+    result = subprocess.run(['bash', str(ROOT / 'train_finetune.sh'), 'va',
+                             'data.batch_size=1', f'folder={tmp_path / "output"}'],
+                            cwd=ROOT, env=env, text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    commands = [shlex.split(line) for line in result.stdout.splitlines() if line.startswith('torchrun ')]
+    assert len(commands) == 15
+    for command in commands:
+        assert 'mental-auto/total-best.yaml' in command[command.index('--fname') + 1]
+        args = command[command.index('--set') + 1:]
+        assert 'data.batch_size=1' in args
+        assert 'data.num_sentence=0' in args
+        if 'data.task=regression' in args:
+            assert 'finetune.best_metric=mae' in args

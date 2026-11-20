@@ -23,9 +23,9 @@ YAML files.
 Precedence: model/sampling/optimization fragments → shared defaults → entry YAML
 → CSV fields and overrides → selected CHECKPOINT → trailing KEY=VALUE arguments.
 
-`clip` uses individual clips. `instance` groups eight sentences, including mental,
-AVEC2014, Androids-Corpus, CMDC, EATD-Corpus and PDCH where applicable. Defaults
-match the canonical old task configurations, including seed, batch size, epochs,
+All nonmental tasks use `clip`, with one sentence or clip per example. Mental
+tasks use `instance` and group eight sentences. Defaults follow the shared
+configurations for seed, batch size, epochs,
 sampling, model and VA regression selection by MAE. Audio defaults to batch 16,
 video to 64, VA to 4, all **per GPU**. VA defaults to 20 epochs; audio to 100 and
 video to 80. These are not imports of the tuned `mental-auto/*-best.yaml` variants.
@@ -120,6 +120,10 @@ CUDA_VISIBLE_DEVICES=0,1 MENTAL_AUTO=anxiety-best DRY_RUN=1 \
 
 CUDA_VISIBLE_DEVICES=0,1 MENTAL_AUTO=depression-best TASKS=DSM-Depression \
   bash train_finetune.sh va
+
+# The same route can also fine-tune the 15 ordinary VA tasks.
+CUDA_VISIBLE_DEVICES=0,1 VA_ROUTE=total-best SCOPE=nonmental \
+  RUN_NAME=total-best-b1 DRY_RUN=1 bash train_finetune.sh va data.batch_size=1
 ```
 
 The default output is `OUTPUT/finetune_va/mental-transfer/<task>/<route>/`.
@@ -129,6 +133,9 @@ initialization. The original 108 entries are archived under
 These routes use the transferred 100-epoch, patience-10 settings, not the
 original 5-epoch autoresearch runs. Existing unmarked outputs are backed up and
 restarted by this launcher; they are not automatically resumed.
+`VA_ROUTE` is the general alias of `MENTAL_AUTO`. Ordinary clip tasks use one
+clip per example with the route's instance head, including AVEC2014-PHQ.
+Ordinary output uses `OUTPUT/finetune_va/catalog/<task>/<run>/`.
 
 Filters: SCOPE=all/mental/nonmental, TYPE=regression (or another task type),
 TASKS='DSM-*,IEMOCAP-*'. Filters intersect. TASK_CSV selects another catalog.

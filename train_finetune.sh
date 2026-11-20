@@ -14,8 +14,9 @@ usage() {
 
 环境变量（不填则使用默认值）：
   CHECKPOINT  预训练权重路径；普通任务必填，mental-auto 可使用路线默认值
-  MENTAL_AUTO 音视频临床路线：anxiety-best / depression-best / total-best；
-              仅用于 va，默认使用该路线的预训练权重，可由 CHECKPOINT 覆盖
+  VA_ROUTE    音视频路线：anxiety-best / depression-best / total-best；
+              仅用于 va，可选 SCOPE=mental 或 nonmental，默认 mental
+  MENTAL_AUTO VA_ROUTE 的兼容别名；默认权重可由 CHECKPOINT 覆盖
   RUN_NAME    实验名，默认取权重文件名（去掉扩展名）
   SCOPE       all / mental / nonmental，默认 all
   TASKS       任务名筛选，支持逗号和通配符，例如 'DSM-*,IEMOCAP-*'
@@ -38,7 +39,8 @@ extra=("$@")
 for item in "${extra[@]}"; do
   [[ $item == ?*=* ]] || die "Override must be KEY=VALUE: $item"
 done
-mental_auto=${MENTAL_AUTO:-}
+[[ -z ${VA_ROUTE:-} || -z ${MENTAL_AUTO:-} || $VA_ROUTE == "$MENTAL_AUTO" ]] || die 'VA_ROUTE and MENTAL_AUTO disagree.'
+mental_auto=${VA_ROUTE:-${MENTAL_AUTO:-}}
 checkpoint=${CHECKPOINT:-}
 if [[ -n $mental_auto ]]; then
   [[ $mode == va ]] || die 'MENTAL_AUTO requires modality va.'
@@ -56,7 +58,7 @@ fi
 [[ $run =~ ^[a-zA-Z0-9_.-]+$ ]] || die 'RUN_NAME may contain letters, numbers, dot, underscore and hyphen.'
 catalog=${TASK_CSV:-CONFIGS/tasks/finetune/tasks.csv}
 scope=${SCOPE:-$([[ -n $mental_auto ]] && printf mental || printf all)}
-[[ -z $mental_auto || $scope == mental ]] || die 'MENTAL_AUTO requires SCOPE=mental.'
+[[ -z $mental_auto || $scope == mental || $scope == nonmental ]] || die 'VA_ROUTE requires SCOPE=mental or nonmental.'
 type=${TYPE:-all}
 dry_run=${DRY_RUN:-0}
 case "$scope" in all|mental|nonmental) ;; *) die "Invalid SCOPE: $scope" ;; esac
@@ -121,14 +123,14 @@ build_command() {
   case ${row[profile]} in clip|instance) ;; *) die "Invalid profile for $id" ;; esac
   default="CONFIGS/tasks/finetune/defaults/$mode/${row[profile]}/default.yaml"
   if [[ -n $mental_auto ]]; then
-    [[ ${row[scope]} == mental && ${row[profile]} == instance ]] || die "Invalid mental-auto task profile for $id"
+    [[ ${row[scope]} != mental || ${row[profile]} == instance ]] || die "Invalid mental-auto task profile for $id"
     default=$route_config
   fi
   [[ -f $default ]] || die "Missing default: $default"
   folder=${row[output_dir]//\{modality\}/$mode}
   folder=${folder//\{task_id\}/$id}
   folder=${folder//\{run\}/$run}
-  if [[ -n $mental_auto ]]; then
+  if [[ -n $mental_auto && ${row[scope]} == mental ]]; then
     folder="OUTPUT/finetune_va/mental-transfer/$id/$run"
   fi
   job_folder=$folder
@@ -139,6 +141,9 @@ build_command() {
        "data.datasets=$dataset_yaml" 'data.datasets_weights=[1]'
        "data.task=${row[task_type]}" "data.num_class=${row[num_class]}"
        "data.label_column=${row[label_column]}" "folder=$folder")
+  if [[ -n $mental_auto && ${row[profile]} == clip ]]; then
+    cmd+=("data.num_sentence=0")
+  fi
   if [[ $mode == va ]]; then
     [[ ${row[best_metric_mode]} == min || ${row[best_metric_mode]} == max ]] || die "Invalid best_metric_mode for $id"
     cmd+=("finetune.best_metric=${row[best_metric]}" "finetune.best_metric_mode=${row[best_metric_mode]}")

@@ -1005,3 +1005,8 @@ CUDA_VISIBLE_DEVICES=0,1 MENTAL_AUTO=depression-best TASKS=DSM-Depression \
 保留各自优化参数、同步设置和预训练初始化；原 autoresearch 的 5 轮结果为历史实验，不能混同。
 默认权重来自路线 YAML，`CHECKPOINT` 可显式覆盖。统一入口遇到没有完成标记的旧目录会先备份
 并从头训练，不会自动续训；直接使用已归档的旧入口时仍按其配置的续训规则运行。
+
+相同路线也可用于普通任务，例如 `VA_ROUTE=total-best SCOPE=nonmental bash train_finetune.sh va`。
+普通任务（包括 AVEC2014-PHQ）每个样本输入一个片段并沿用路线的实例聚合头；
+输出位于 `OUTPUT/finetune_va/catalog/<任务>/<RUN_NAME>/`。可用 `data.batch_size=1`
+覆盖每卡 batch，显存需要在目标设备实测。
