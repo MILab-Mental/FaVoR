@@ -1000,7 +1000,7 @@ CUDA_VISIBLE_DEVICES=0,1 MENTAL_AUTO=depression-best TASKS=DSM-Depression \
 ```
 
 `MENTAL_AUTO` 可选 `anxiety-best`、`depression-best` 或 `total-best`，仅用于 `va`，
-默认 `SCOPE=mental`。默认输出为 `OUTPUT/finetune_va/mental-transfer/<task>/<route>/`；
+默认 `SCOPE=mental`。默认输出为 `OUTPUT/finetune_va/mental/<task>/<route>/`；
 `RUN_NAME` 可改写最后一级。三条路线均为每卡 batch=10、最多 100 轮、早停 patience=10，
 保留各自优化参数、同步设置和预训练初始化；原 autoresearch 的 5 轮结果为历史实验，不能混同。
 默认权重来自路线 YAML，`CHECKPOINT` 可显式覆盖。统一入口遇到没有完成标记的旧目录会先备份
@@ -1008,5 +1008,5 @@ CUDA_VISIBLE_DEVICES=0,1 MENTAL_AUTO=depression-best TASKS=DSM-Depression \
 
 相同路线也可用于普通任务，例如 `VA_ROUTE=total-best SCOPE=nonmental bash train_finetune.sh va`。
 普通任务（包括 AVEC2014-PHQ）每个样本输入一个片段并沿用路线的实例聚合头；
-输出位于 `OUTPUT/finetune_va/catalog/<任务>/<RUN_NAME>/`。可用 `data.batch_size=1`
+输出位于 `OUTPUT/finetune_va/ordinary/<任务>/<RUN_NAME>/`。可用 `data.batch_size=1`
 覆盖每卡 batch，显存需要在目标设备实测。

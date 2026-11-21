@@ -319,6 +319,7 @@ def test_training_entry_instance_reports_checkpoint_and_resume(tmp_path, monkeyp
         config['finetune'] = dict(pretrained_checkpoint=str(pretrained))
         monkeypatch.setattr(train, 'build_va_lejepa', lambda *a, **k: tiny_va())
         monkeypatch.setattr(train, 'AVCSVDataset', lambda cfg, split, training: Sentences('audio-video'))
+        monkeypatch.setattr(train, 'filter_paired_datasets', lambda *a, **k: None)
         monkeypatch.setattr(train, 'prepare_sync_metadata', lambda *a, **k: 0)
     if early_stop:
         config['optimization']['early_stopping_patience'] = 1

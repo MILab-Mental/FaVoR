@@ -114,13 +114,18 @@ read_row() {
 
 # 2. 把一条任务记录组装成命令；这里只检查参数，不启动训练。
 build_command() {
-  local id=${row[task_id]} default folder dataset_path dataset_yaml item
+  local id=${row[task_id]} default folder output_group dataset_path dataset_yaml item
   local -a overrides=()
   [[ ${row[num_class]} =~ ^[1-9][0-9]*$ ]] || die "Invalid num_class for $id"
   [[ -f ${row[csv_path]} ]] || die "Missing dataset CSV for $id: ${row[csv_path]}"
   [[ -n ${row[label_column]} && -n ${row[output_dir]} ]] || die "Missing label/output for $id"
   case ${row[task_type]} in classification|regression|multi_label_classification) ;; *) die "Invalid task type for $id" ;; esac
   case ${row[profile]} in clip|instance) ;; *) die "Invalid profile for $id" ;; esac
+  case ${row[scope]} in
+    nonmental) output_group=ordinary ;;
+    mental) output_group=mental ;;
+    *) die "Invalid scope for $id: ${row[scope]}" ;;
+  esac
   default="CONFIGS/tasks/finetune/defaults/$mode/${row[profile]}/default.yaml"
   if [[ -n $mental_auto ]]; then
     [[ ${row[scope]} != mental || ${row[profile]} == instance ]] || die "Invalid mental-auto task profile for $id"
@@ -128,11 +133,9 @@ build_command() {
   fi
   [[ -f $default ]] || die "Missing default: $default"
   folder=${row[output_dir]//\{modality\}/$mode}
+  folder=${folder//\{catalog\}/$output_group}
   folder=${folder//\{task_id\}/$id}
   folder=${folder//\{run\}/$run}
-  if [[ -n $mental_auto && ${row[scope]} == mental ]]; then
-    folder="OUTPUT/finetune_va/mental-transfer/$id/$run"
-  fi
   job_folder=$folder
   # 数据集路径是 YAML 列表：单引号在 YAML 中写成两个单引号。
   dataset_path=${row[csv_path]//\'/\'\'}
@@ -165,6 +168,13 @@ build_command() {
     [[ $item != folder=* ]] || job_folder=${item#folder=}
   done
   [[ -n $job_folder ]] || die "Empty output folder for $id"
+  legacy_folder=
+  if [[ $job_folder == "OUTPUT/finetune_$mode/$output_group/$id/$run" ]]; then
+    legacy_folder="OUTPUT/finetune_$mode/catalog/$id/$run"
+    if [[ -n $mental_auto && $output_group == mental ]]; then
+      legacy_folder="OUTPUT/finetune_va/mental-transfer/$id/$run"
+    fi
+  fi
 }
 
 # 3. 先扫描完整 CSV：筛选任务、检查配置，再保存待运行的 CSV 行。
@@ -199,14 +209,23 @@ done < "$catalog"
 ((${#queue[@]} > 0)) || die 'No tasks selected; check SCOPE, TYPE, TASKS and modality.'
 printf 'Selected %d tasks; modality=%s; run=%s; GPUs=%s\n' "${#queue[@]}" "$mode" "$run" "${CUDA_VISIBLE_DEVICES:-all visible}"
 
+is_complete() {
+  local folder=$1
+  [[ -f $folder/.finetune-complete && -s $folder/best.pt && -s $folder/logs/history.csv && -s $folder/logs/best.csv ]]
+}
+
 # 4. 仅成功退出且产物完整才标记完成，未完成目录移走以免混用历史记录。
 failed=0
 for i in "${!queue[@]}"; do
   read_row "${queue[i]}"
   build_command
   printf '\n[%d/%d] %s\n' "$((i+1))" "${#queue[@]}" "${row[task_id]}"
-  if [[ -f $job_folder/.finetune-complete && -s $job_folder/best.pt && -s $job_folder/logs/history.csv && -s $job_folder/logs/best.csv ]]; then
+  if is_complete "$job_folder"; then
     printf 'Skipped completed task: %s (%s)\n' "${row[task_id]}" "$job_folder"
+    continue
+  fi
+  if [[ -n $legacy_folder && ! -e $job_folder && ! -L $job_folder ]] && is_complete "$legacy_folder"; then
+    printf 'Skipped completed task: %s (%s)\n' "${row[task_id]}" "$legacy_folder"
     continue
   fi
   printf '%q ' "${cmd[@]}"; printf '\n'

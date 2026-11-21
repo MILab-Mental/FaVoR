@@ -30,7 +30,7 @@ def test_launcher_retries_incomplete_and_continues_after_failure(tmp_path):
             writer.writerow(dict(enabled=1, task_id=task, dataset='test', scope='nonmental',
                                  task_type='classification', num_class=2, csv_path=dataset,
                                  label_column=task, modalities='a', profile='clip',
-                                 output_dir=str(tmp_path / 'outputs' / '{task_id}' / '{run}'),
+                                 output_dir=str(tmp_path / 'outputs' / '{catalog}' / '{task_id}' / '{run}'),
                                  best_metric='f1_macro', best_metric_mode='max', overrides=''))
     bin_dir = tmp_path / 'bin'
     bin_dir.mkdir()
@@ -60,7 +60,7 @@ if [[ $task == second && ! -f $RETRY ]]; then exit 7; fi
     first = run()
     assert first.returncode != 0
     assert calls.read_text().splitlines() == ['first', 'second', 'third']
-    outputs = tmp_path / 'outputs'
+    outputs = tmp_path / 'outputs' / 'ordinary'
     assert (outputs / 'first/run/.finetune-complete').is_file()
     assert not (outputs / 'second/run/.finetune-complete').exists()
     assert (outputs / 'third/run/.finetune-complete').is_file()
@@ -100,7 +100,7 @@ def test_mental_auto_route_and_checkpoint_override(tmp_path):
     assert result.returncode == 0, result.stderr
     assert 'mental-auto/depression-best.yaml' in result.stdout
     assert f'finetune.pretrained_checkpoint={checkpoint}' in result.stdout
-    assert 'mental-transfer/DSM-Depression/custom' in result.stdout
+    assert 'folder=OUTPUT/finetune_va/mental/DSM-Depression/custom' in result.stdout
     wrong_mode = subprocess.run(command + ['a'], cwd=ROOT, env=env, text=True, capture_output=True)
     assert wrong_mode.returncode != 0
     assert 'requires modality va' in wrong_mode.stderr
@@ -135,6 +135,7 @@ def test_va_route_selects_ordinary_tasks_and_preserves_profiles(tmp_path):
     for command in commands:
         assert 'mental-auto/total-best.yaml' in command[command.index('--fname') + 1]
         args = command[command.index('--set') + 1:]
+        assert any(arg.startswith('folder=OUTPUT/finetune_va/ordinary/') for arg in args)
         assert 'data.batch_size=1' in args
         assert 'data.num_sentence=0' in args
         if 'data.task=regression' in args:

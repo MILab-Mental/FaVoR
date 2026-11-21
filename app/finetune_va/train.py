@@ -14,6 +14,7 @@ from app.pretrain_audio_lejepa.train import _state, _unwrap, _schedule, _append_
 from app.pretrain_va_lejepa.train import _optimizer, _save_all, _restore_rng, _grad_norm, _record_skipped
 from app.finetune_a.train import _criterion, _regression_metrics
 from datasets.va_lejepa.finetune_dataset import AVCSVDataset
+from datasets.va_lejepa.pair_filter import filter_paired_datasets
 from datasets.va_lejepa.sync_preflight import prepare_sync_metadata, sync_preflight_path
 from datasets.va_lejepa import collate_va_lejepa, to_device, synchronize_training_batch
 from models.va_lejepa import build_va_lejepa, load_checkpoint
@@ -231,6 +232,9 @@ def main(args):
     mixed = device.type == 'cuda'
     scaler = torch.amp.GradScaler('cuda', enabled=False)
     train_dataset, val_dataset = AVCSVDataset(data, 0, True), AVCSVDataset(data, 1, False)
+    filter_paired_datasets((('train', train_dataset), ('validation', val_dataset)),
+                           folder / 'logs' / 'filtered_pairs.csv',
+                           workers=int(data.get('sync_preflight_workers', 8)))
     count = prepare_sync_metadata((train_dataset, val_dataset), data,
         sync_preflight_path(data, folder), rank=rank,
         workers=int(data.get('sync_preflight_workers', 8)))

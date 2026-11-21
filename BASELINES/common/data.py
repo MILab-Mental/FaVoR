@@ -21,6 +21,9 @@ from datasets.audio_jepa.pretrain_dataset import load_audio, read_audio_manifest
 from datasets.common.instances import sentence_identity, sentence_windows, sample_sentence_indices
 from datasets.common.paths import get_dataset_paths
 from datasets.va_lejepa.av_decoder import AVDecoder
+from datasets.va_lejepa.pair_filter import (
+    _SOUNDFILE_SUFFIXES, _media_readable, _ffprobe_duration, _sync_ok, paired_media_readable,
+)
 from BASELINES.common.mental_precheck import MANIFEST as MENTAL_MANIFEST, load_mental_precheck
 from BASELINES.common.pretrain_media_errors import PretrainMediaErrors
 from BASELINES.common.runtime import path, fingerprint
@@ -33,64 +36,6 @@ LOGGER = logging.getLogger(__name__)
 def _csv_rows(filename, size, mtime):
     with open(filename, encoding='utf-8-sig', newline='') as handle:
         return list(csv.DictReader(handle))
-
-
-_SOUNDFILE_SUFFIXES = {'.wav', '.flac', '.ogg', '.aif', '.aiff', '.au'}
-
-
-def _media_readable(filename, video):
-    target = Path(filename)
-    try:
-        if target.stat().st_size < 1024:
-            return False
-    except OSError:
-        return False
-    if video:
-        from decord import VideoReader, cpu
-        try:
-            return len(VideoReader(str(target), ctx=cpu(0), num_threads=1)) > 0
-        except Exception:
-            return False
-    if target.suffix.lower() not in _SOUNDFILE_SUFFIXES:
-        return True
-    import soundfile
-    try:
-        return soundfile.info(str(target)).frames > 0
-    except Exception:
-        return False
-
-
-def _ffprobe_duration(filename):
-    import json
-    import subprocess
-    result = subprocess.run(('ffprobe', '-v', 'error', '-select_streams', 'a:0',
-                             '-show_entries', 'stream=duration', '-of', 'json', str(filename)),
-                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=30)
-    result.check_returncode()
-    streams = json.loads(result.stdout.decode()).get('streams') or []
-    return float(streams[0]['duration'])
-
-
-def _sync_ok(audio_path, video_path):
-    # Mirror AVDecoder.validate_sync's default tolerance so mismatched pairs are
-    # dropped here instead of crashing a whole DDP group mid-training.
-    from decord import VideoReader, cpu
-    try:
-        reader = VideoReader(str(video_path), ctx=cpu(0), num_threads=1)
-        fps = float(reader.get_avg_fps())
-        video_duration = len(reader) / fps
-    except Exception:
-        return False
-    try:
-        if Path(audio_path).suffix.lower() in _SOUNDFILE_SUFFIXES:
-            import soundfile
-            info = soundfile.info(str(audio_path))
-            audio_duration = info.frames / info.samplerate
-        else:
-            audio_duration = _ffprobe_duration(audio_path)
-    except Exception:
-        return False
-    return abs(video_duration - audio_duration) <= max(0.5, 2 / fps)
 
 
 def configure_instances(cfg, modality):
@@ -161,8 +106,7 @@ def read_rows(cfg, modality, supervised=True, max_records=None, use_mental_cache
             if excluded is not None:
                 readable = index not in excluded
             elif modality == 'audio-video':
-                # _sync_ok opens the video itself, so it subsumes the video readability check.
-                readable = _media_readable(row['audio_path'], False) and _sync_ok(row['audio_path'], row['video_path'])
+                readable = paired_media_readable(row)
             else:
                 readable = all(_media_readable(row[name + '_path'], name == 'video') for name in required)
             if not readable:

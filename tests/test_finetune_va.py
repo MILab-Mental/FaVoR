@@ -133,6 +133,7 @@ def test_finetune_entry_best_latest_predictions_resume(tmp_path,monkeypatch,task
     monkeypatch.setattr(torch.cuda,'is_available',lambda:False)
     monkeypatch.setattr(train,'build_va_lejepa',lambda *args,**kwargs:tiny_va())
     monkeypatch.setattr(train,'AVCSVDataset',Samples)
+    monkeypatch.setattr(train,'filter_paired_datasets',lambda *args,**kwargs:None)
     monkeypatch.setattr(train,'prepare_sync_metadata',lambda *args,**kwargs:0)
     cfg=dict(folder=str(tmp_path/'ft'),model={},data=dict(task=task,num_class=2,num_workers=0,batch_size=2),
         optimization=dict(epochs=1,lr=.001),finetune=dict(pretrained_checkpoint=str(pretrained)),meta=dict(auto_resume=True,save_latest=True))
