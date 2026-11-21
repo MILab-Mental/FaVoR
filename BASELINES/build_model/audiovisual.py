@@ -194,7 +194,10 @@ class LeAVJEPA(nn.Module):
         if len(clip['video']) < 16:
             clip = dict(clip, video=torch.cat([clip['video'], clip['video'].new_zeros(16-len(clip['video']), *clip['video'].shape[1:])]))
         waveform = F.pad(clip['audio'], (0, max(0, 128000-len(clip['audio']))))[:128000]
-        spec = (self.spectrogram.cpu()(waveform[None]) + 20.437003) / 24.496246
+        # Keep the registered buffers on the model device for DDP broadcasts.
+        device = next(self.spectrogram.buffers()).device
+        with torch.autocast(device.type, enabled=False):
+            spec = (self.spectrogram(waveform[None].to(device)) + 20.437003) / 24.496246
         frames = clip['video'].permute(0, 3, 1, 2)
         video = frames_tensor(clip['video'], training=False).permute(1, 0, 2, 3)[None]
         result = dict(video=video, audio=spec[None])
