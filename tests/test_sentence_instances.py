@@ -15,8 +15,8 @@ from app.main import load_config
 from datasets.common.instances import (
     SentenceInstanceDataset, as_sentence_instances, sentence_identity, sentence_windows,
 )
-from models.finetune_a_model import AudioFineTuneModel
-from models.finetune_v_model import ClipEncoder
+from models.finetune_a_model import AudioFineTuneModel, MultiClipAttentionHead
+from models.finetune_v_model import AttentiveRegressor, ClipEncoder, build_model, vit
 from models.instance_aggregator import InstanceAggregator, InstancePredictionHead
 from models.va_lejepa.finetune import VAFinetuner
 from models.video_jepa.vision_transformer import VisionTransformer
@@ -56,6 +56,59 @@ def tiny_video():
     backbone = VisionTransformer(img_size=16, patch_size=8, num_frames=4, tubelet_size=1,
                                  embed_dim=24, depth=2, num_heads=3, out_layers=[0, 1])
     return ClipEncoder(backbone, instance_enabled=True)
+
+
+@pytest.mark.parametrize('layer_norm_first', [False, True])
+def test_audio_regression_layer_readout_keeps_block_outputs_trainable(layer_norm_first):
+    torch.manual_seed(19)
+    cfg = tiny_audio()
+    cfg['encoder'].update(depth=3, layer_norm_first=layer_norm_first)
+    default_model = AudioFineTuneModel(cfg, 'regression')
+    assert isinstance(default_model.head, MultiClipAttentionHead)
+
+    model = AudioFineTuneModel(dict(cfg, regression_head='layer_weighted'), 'regression').eval()
+    clips = torch.randn(2, 4, 200)
+    block_outputs = []
+    for block in model.backbone.context_encoder.layers:
+        block.register_forward_hook(lambda module, inputs, output: block_outputs.append(output[0]))
+    predictions = model(clips)
+    if layer_norm_first:
+        block_outputs[-1] = model.backbone.context_encoder.norm(block_outputs[-1])
+    pooled = torch.stack([tokens[:, 2:].mean(dim=1) for tokens in block_outputs], dim=1)
+    pooled = pooled.reshape(2, 4, 3, -1).mean(dim=1)
+    assert predictions.shape == (2, 1)
+    torch.testing.assert_close(predictions, model.head.output(pooled.mean(dim=1)))
+
+    predictions.square().mean().backward()
+    assert model.head.layer_logits.grad.abs().sum() > 0
+    assert all(p.grad is not None for p in model.backbone.parameters() if p.requires_grad)
+
+
+def test_video_regression_layer_readout_is_optional_and_learns_layer_weights(monkeypatch):
+    from app.finetune_v.train import _task_outputs
+
+    def tiny_backbone(**kwargs):
+        return VisionTransformer(embed_dim=24, depth=2, num_heads=3, **kwargs)
+
+    monkeypatch.setattr(vit, 'tiny_test_backbone', tiny_backbone, raising=False)
+    kwargs = dict(model_name='tiny_test_backbone', crop_size=16, patch_size=8,
+                  max_num_frames=4, tubelet_size=1, task='regression', out_layers=[0, 1])
+    _, default_head = build_model(None, **kwargs)
+    assert isinstance(default_head, AttentiveRegressor)
+
+    encoder, head = build_model(None, **kwargs, regression_head='layer_weighted')
+    clips = [[torch.randn(2, 3, 4, 16, 16)]]
+    pooled, = encoder(clips)
+    layer_outputs = encoder.backbone(clips[0][0])
+    assert pooled.shape == (2, 2, 24)
+    torch.testing.assert_close(pooled[:, 0], layer_outputs[0].mean(1))
+    torch.testing.assert_close(pooled[:, 1], layer_outputs[1].mean(1))
+    outputs = _task_outputs(encoder, head, clips, frozen_encoder=False)
+    torch.testing.assert_close(outputs, head.output(pooled.mean(1)))
+    assert outputs.shape == (2, 1)
+    outputs.square().mean().backward()
+    assert head.layer_logits.grad.abs().sum() > 0
+    assert encoder.backbone.patch_embed.proj.weight.grad is not None
 
 
 def instance_pair(modality, task='classification'):

@@ -30,6 +30,13 @@ sampling, model and VA regression selection by MAE. Audio defaults to batch 16,
 video to 64, VA to 4, all **per GPU**. VA defaults to 20 epochs; audio to 100 and
 video to 80. These are not imports of the tuned `mental-auto/*-best.yaml` variants.
 
+Ordinary video regression defaults to `model.regression_head=layer_weighted`
+using `model.out_layers`. To reproduce the attention head, pass
+`model.regression_head=attentive`. Audio regression can opt into
+`model.regression_head=layer_weighted` using all global Transformer blocks.
+The layered head averages tokens and clips per layer, learns one softmax weight
+per layer, and predicts with a small MLP.
+
 VA fine-tuning filters unreadable audio and pairs whose audio/video durations
 differ by more than `max(0.5 seconds, two video frames)` in both training and
 validation. It uses the same filter as BASELINES; `logs/filtered_pairs.csv`

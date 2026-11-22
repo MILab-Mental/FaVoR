@@ -45,4 +45,6 @@ def test_catalog_matches_archived_task(task, modality):
         old['data'].setdefault('datasets_weights', [1])
         if task['task_type'] == 'regression':
             old['data'].setdefault('num_class', 1)
+    if modality == 'v' and task['profile'] == 'clip':
+        assert current['model'].pop('regression_head') == 'layer_weighted'
     assert current == old
