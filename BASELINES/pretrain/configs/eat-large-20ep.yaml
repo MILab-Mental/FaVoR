@@ -1,4 +1,5 @@
 python: ${BASELINES_LEGACY_PYTHON}
+loader_timeout: 1200
 yamls:
 - ../../common/defaults.yaml
 - defaults.yaml

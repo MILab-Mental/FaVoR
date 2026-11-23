@@ -16,7 +16,9 @@ EAT、LanguageBind 使用项目内 `.venv/baseline-legacy/bin/python`，AV-HuBER
 
 输出保存在输出根目录的 `{pretrain,finetune}/<model>/<experiment>/`。迁移微调默认从同一输出根目录读取对应预训练的 `latest.pt`。个别运行可用 `--set model.weights=/权重文件` 或 `--set model.encoder_checkpoint=/预训练检查点` 指定文件，联合模型也可按分支覆盖。
 
-`python PLOT/增加radar.py --baselines` 在同一输出根目录读取 `对比模型进度表.md` 和微调指标，默认也将雷达图写到该目录。
+结果表和 `对比模型进度.md` 放在 `OUTPUT/figs/结果图表/`，总雷达图和 `audio33雷达图.png` 放在 `OUTPUT/figs/雷达图/`。结果目录根路径可用 `BASELINES_FIGS_ROOT` 覆盖。
+
+`python PLOT/增加radar.py --baselines` 将 `FAVOR结果.csv` 中的验证指标同步到 `对比模型结果.csv`，再从后者读取 53 个共有任务的结果。完整音频图另外 18 个任务的指标来自测试产物和 `FAVOR结果.csv`。需要从测试产物更新对比模型效果时，运行 `python PLOT/增加radar.py --baselines --refresh-results`。
 
 数据读自 `CONFIGS/datasets.csv` 和相应的清单 CSV。更换机器时，数据注册表的媒体根目录和清单中的绝对路径需要在目标机器上可访问。
 

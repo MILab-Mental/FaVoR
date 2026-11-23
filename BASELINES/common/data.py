@@ -362,6 +362,8 @@ def make_loaders(cfg, spec, pretrain=False):
         audit['synchronization']=dict(implementation='datasets.va_lejepa.av_decoder.validate_sync',
             overrides=data.get('sync',{}),timeline='shared_valid_intersection')
     loaders = {}
+    num_workers = int(cfg.get('loader_num_workers', data.get('num_workers', 0)))
+    loader_timeout = float(cfg.get('loader_timeout', data.get('loader_timeout', 180))) if num_workers else 0
     for name, dataset in datasets.items():
         training = name == 'train'
         count = dataset.full_size if pretrain else sum(len(rows) for rows in dataset.rows)
@@ -379,9 +381,9 @@ def make_loaders(cfg, spec, pretrain=False):
         sampler = (DistributedSampler(dataset, shuffle=True, seed=int(cfg.get('seed',42))) if training
                    else distributed.EvaluationSampler(dataset)) if distributed.active() else None
         loaders[name] = DataLoader(dataset, batch_size=batch_size, shuffle=training and sampler is None, sampler=sampler,
-            num_workers=int(data.get('num_workers', 0)), collate_fn=list, generator=generator,
-            persistent_workers=False, multiprocessing_context='spawn' if int(data.get('num_workers',0)) else None,
-            timeout=float(data.get('loader_timeout',180)) if int(data.get('num_workers',0)) else 0,
+            num_workers=num_workers, collate_fn=list, generator=generator,
+            persistent_workers=False, multiprocessing_context='spawn' if num_workers else None,
+            timeout=loader_timeout,
             pin_memory=True, drop_last=training and (distributed.active() or spec.get('minimum_batch_size', 1)>1))
     cfg['data_audit'] = audit
     audit['prediction_unit'] = cfg.get('instance_protocol', {}).get('prediction_unit', 'clip') if not pretrain else 'pretraining_clip'
