@@ -39,9 +39,9 @@ class AudioFineTuneModel(nn.Module):
         regression_head = cfg.get("regression_head", "attentive")
         if regression_head not in {"attentive", "layer_weighted"}:
             raise ValueError("model.regression_head must be attentive or layer_weighted")
-        self.layer_weighted = regression_head == "layer_weighted"
+        self.layer_weighted = task == "regression" and regression_head == "layer_weighted"
         if self.layer_weighted:
-            if task != "regression" or self.instance_enabled:
+            if self.instance_enabled:
                 raise ValueError("model.regression_head=layer_weighted requires audio regression without instance aggregation")
             num_layers = len(self.backbone.context_encoder.layers)
             if num_layers < 1:

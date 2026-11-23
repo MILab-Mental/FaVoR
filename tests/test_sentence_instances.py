@@ -11,13 +11,14 @@ import torch
 import yaml
 from torch.utils.data import DataLoader, Dataset
 
-from app.main import load_config
+from app.main import apply_overrides, load_config
 from datasets.common.instances import (
     SentenceInstanceDataset, as_sentence_instances, sentence_identity, sentence_windows,
 )
 from models.finetune_a_model import AudioFineTuneModel, MultiClipAttentionHead
 from models.finetune_v_model import AttentiveRegressor, ClipEncoder, build_model, vit
 from models.instance_aggregator import InstanceAggregator, InstancePredictionHead
+from models.regression_head import LayerWeightedRegressor
 from models.va_lejepa.finetune import VAFinetuner
 from models.video_jepa.vision_transformer import VisionTransformer
 from utils.instance_evaluation import average_window_outputs, predict_instance_batch
@@ -56,6 +57,17 @@ def tiny_video():
     backbone = VisionTransformer(img_size=16, patch_size=8, num_frames=4, tubelet_size=1,
                                  embed_dim=24, depth=2, num_heads=3, out_layers=[0, 1])
     return ClipEncoder(backbone, instance_enabled=True)
+
+
+def test_ordinary_audio_default_selects_layered_head_only_for_regression():
+    config = load_config('CONFIGS/tasks/finetune/defaults/a/clip/default.yaml')
+    model_cfg = dict(tiny_audio(), regression_head=config['model']['regression_head'])
+    assert isinstance(AudioFineTuneModel(model_cfg, 'regression').head, LayerWeightedRegressor)
+    for task in ('classification', 'multi_label_classification'):
+        assert isinstance(AudioFineTuneModel(model_cfg, task, 2).head, MultiClipAttentionHead)
+    apply_overrides(config, ['model.regression_head=attentive'])
+    model_cfg['regression_head'] = config['model']['regression_head']
+    assert isinstance(AudioFineTuneModel(model_cfg, 'regression').head, MultiClipAttentionHead)
 
 
 @pytest.mark.parametrize('layer_norm_first', [False, True])
