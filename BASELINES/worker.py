@@ -66,6 +66,7 @@ def pretrain(base,test):
         del saved
     model=build_model(cfg,pretrain=True,initialize=not bool(args.resume))
     distributed.checkpoint_blocks(model)
+    distributed.compile_model(model)
     main(cfg,args,model=model)
     checked_parameters(model)
     if distributed.rank()==0:

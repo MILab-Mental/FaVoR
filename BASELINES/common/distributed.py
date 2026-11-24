@@ -75,7 +75,8 @@ def training_step(model, forward):
         # adapters explicitly move their prepared inputs to the local GPU.
         step = DistributedDataParallel(step, device_ids=None,
             broadcast_buffers=any(isinstance(m,nn.modules.batchnorm._BatchNorm) for m in model.modules()),
-            find_unused_parameters=True, gradient_as_bucket_view=True)
+            find_unused_parameters=bool(getattr(model, 'ddp_find_unused_parameters', True)),
+            gradient_as_bucket_view=True)
     return step
 
 
@@ -103,6 +104,15 @@ def checkpoint_blocks(model):
         if block and not stateful and not getattr(module,'_baseline_checkpoint',False) and any(p.requires_grad for p in module.parameters()):
             module.forward=partial(checkpoint,module.forward,use_reentrant=False)
             module._baseline_checkpoint=True
+
+
+def compile_model(model):
+    """In-place torch.compile for opt-in adapters without changing state_dict keys."""
+    if os.environ.get('TORCHDYNAMO_DISABLE') == '1' or os.environ.get('BASELINES_COMPILE', '1') == '0':
+        return
+    if hasattr(model, 'compile_modules') and not getattr(model, '_baseline_compiled', False):
+        model.compile_modules()
+        model._baseline_compiled = True
 
 
 def cpu_copy(value):

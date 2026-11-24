@@ -390,3 +390,116 @@ def test_mental_instances_match_favor_and_train_attention_before_classification(
         records = list(reader)
     assert [row['epoch'] for row in records] == ['1', '1', '2', '2']
     assert len({(row['epoch'], row['path']) for row in records}) == 4
+
+
+def test_beats_batches_variable_length_waveforms_with_padding_mask():
+    from BASELINES.build_model import TaskModel
+    from BASELINES.build_model.audio import BEATsEncoder
+
+    calls = []
+
+    class DummyBEATs(nn.Module):
+        def extract_features(self, source, padding_mask=None):
+            calls.append((tuple(source.shape), None if padding_mask is None else padding_mask.clone()))
+            tokens = torch.ones((source.shape[0], 4, 8), dtype=torch.float32)
+            mask = None if padding_mask is None else torch.zeros((source.shape[0], 4), dtype=torch.bool)
+            return tokens, mask
+
+    adapter = BEATsEncoder.__new__(BEATsEncoder)
+    nn.Module.__init__(adapter)
+    adapter.encoder = DummyBEATs()
+    adapter.output_dim = 8
+    adapter.minimum_samples = 2800
+    adapter.input_spec = dict(modality='audio', sample_rate=16000, seconds=10, minimum_samples=2800)
+
+    model = TaskModel(adapter, 2, encoder_batch_size=8)
+    samples = [
+        dict(sentences=[[dict(audio=torch.ones(3000))]], windows=[[0]]),
+        dict(sentences=[[dict(audio=torch.ones(5000))]], windows=[[0]]),
+        dict(sentences=[[dict(audio=torch.ones(1000))]], windows=[[0]]),
+    ]
+    outputs = model.predict_samples(samples, 'classification', torch.device('cpu'))
+    assert len(outputs) == 3
+    assert len(calls) == 1
+    shape, mask = calls[0]
+    assert shape == (3, 5000)
+    assert mask is not None and mask.shape == (3, 5000)
+    assert (~mask[0, :3000]).all() and mask[0, 3000:].all()
+    assert (~mask[1]).all()
+    assert (~mask[2, :2800]).all() and mask[2, 2800:].all()
+
+    same = adapter.batch_inputs([adapter.prepare(dict(audio=torch.ones(3200))) for _ in range(2)])
+    assert same['source'].shape == (2, 3200) and 'padding_mask' not in same
+
+
+def test_leavjepa_prepare_views_avoids_redundant_video_and_audio_transforms(monkeypatch):
+    from torchvision.transforms import v2
+    from BASELINES.build_model import audiovisual
+
+    model = audiovisual.LeAVJEPA.__new__(audiovisual.LeAVJEPA)
+    nn.Module.__init__(model)
+    model.pretraining = True
+    spec_batches = []
+
+    class DummySpec(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.register_buffer('buf', torch.zeros(1))
+
+        def forward(self, wav):
+            spec_batches.append(tuple(wav.shape))
+            return torch.zeros((wav.shape[0], 128, 801), device=wav.device)
+
+    counts = dict(global_calls=0, local_calls=0)
+    base_global = v2.Compose([v2.Resize(256, antialias=True), v2.CenterCrop(224),
+                              v2.ToDtype(torch.float32, scale=True)])
+    base_local = v2.Compose([v2.RandomResizedCrop(224, scale=(.4, 1.), antialias=True),
+                             v2.ToDtype(torch.float32, scale=True)])
+
+    def count_global(frames):
+        counts['global_calls'] += 1
+        return base_global(frames)
+
+    def count_local(frames):
+        counts['local_calls'] += 1
+        return base_local(frames)
+
+    model.spectrogram = DummySpec()
+    model.global_transform = count_global
+    model.local_transform = count_local
+    monkeypatch.setattr(audiovisual, 'frames_tensor',
+                        lambda *a, **kw: (_ for _ in ()).throw(AssertionError('frames_tensor unused in pretrain')))
+
+    clips = [dict(audio=torch.zeros(16000), video=torch.zeros((8, 64, 64, 3), dtype=torch.uint8)) for _ in range(4)]
+    views = model.prepare_views(clips)
+    assert spec_batches == [(3, 128000)]
+    assert counts == dict(global_calls=2, local_calls=1)
+    assert views['global_video'].shape == (1, 2, 3, 16, 224, 224)
+    assert views['global_audio'].shape == (1, 2, 1, 128, 801)
+    assert views['local_audio'].shape == (1, 1, 128, 801)
+    assert views['local_video'].shape == (1, 3, 16, 224, 224)
+
+
+def test_compile_model_is_idempotent_and_respects_disable_flags(monkeypatch):
+    from BASELINES.common.distributed import compile_model
+
+    calls = []
+
+    class Dummy(nn.Module):
+        def compile_modules(self):
+            calls.append(1)
+
+    m = Dummy()
+    monkeypatch.setenv('TORCHDYNAMO_DISABLE', '1')
+    compile_model(m)
+    assert calls == []
+
+    monkeypatch.delenv('TORCHDYNAMO_DISABLE', raising=False)
+    monkeypatch.setenv('BASELINES_COMPILE', '0')
+    compile_model(m)
+    assert calls == []
+
+    monkeypatch.setenv('BASELINES_COMPILE', '1')
+    compile_model(m)
+    compile_model(m)
+    assert calls == [1]

@@ -236,6 +236,70 @@ class HieraVideo(nn.Module):
         return self.encoder(batch['video'])
 
 
+def _patch_slowfast_rel_pos(attention_module):
+    """Build relative-position index tables directly on the GPU device (exact math)."""
+    if getattr(attention_module, '_favor_rel_pos_cached', False):
+        return
+    get_rel_pos = attention_module.get_rel_pos
+    dist_cache = {}
+
+    def _dist_1d(q_size, k_size, device):
+        if not torch.compiler.is_compiling():
+            key = (q_size, k_size, device)
+            cached = dist_cache.get(key)
+            if cached is not None:
+                return cached
+        q_ratio = max(k_size / q_size, 1.0)
+        k_ratio = max(q_size / k_size, 1.0)
+        dist = (
+            torch.arange(q_size, device=device)[:, None] * q_ratio
+            - torch.arange(k_size, device=device)[None, :] * k_ratio
+            + (k_size - 1) * k_ratio
+        ).long()
+        if not torch.compiler.is_compiling():
+            dist_cache[(q_size, k_size, device)] = dist
+        return dist
+
+    def cal_rel_pos_spatial(attn, q, k, has_cls_embed, q_shape, k_shape, rel_pos_h, rel_pos_w):
+        sp_idx = 1 if has_cls_embed else 0
+        q_t, q_h, q_w = q_shape
+        k_t, k_h, k_w = k_shape
+        dh, dw = int(2 * max(q_h, k_h) - 1), int(2 * max(q_w, k_w) - 1)
+        Rh = get_rel_pos(rel_pos_h, dh)[_dist_1d(q_h, k_h, rel_pos_h.device)]
+        Rw = get_rel_pos(rel_pos_w, dw)[_dist_1d(q_w, k_w, rel_pos_w.device)]
+        B, n_head, _, dim = q.shape
+        r_q = q[:, :, sp_idx:].reshape(B, n_head, q_t, q_h, q_w, dim)
+        rel_h_q = torch.einsum("bythwc,hkc->bythwk", r_q, Rh)
+        rel_w_q = torch.einsum("bythwc,wkc->bythwk", r_q, Rw)
+        attn[:, :, sp_idx:, sp_idx:] = (
+            attn[:, :, sp_idx:, sp_idx:].view(B, -1, q_t, q_h, q_w, k_t, k_h, k_w)
+            + rel_h_q[:, :, :, :, :, None, :, None]
+            + rel_w_q[:, :, :, :, :, None, None, :]
+        ).view(B, -1, q_t * q_h * q_w, k_t * k_h * k_w)
+        return attn
+
+    def cal_rel_pos_temporal(attn, q, has_cls_embed, q_shape, k_shape, rel_pos_t):
+        sp_idx = 1 if has_cls_embed else 0
+        q_t, q_h, q_w = q_shape
+        k_t, k_h, k_w = k_shape
+        dt = int(2 * max(q_t, k_t) - 1)
+        Rt = get_rel_pos(rel_pos_t, dt)[_dist_1d(q_t, k_t, rel_pos_t.device)]
+        B, n_head, _, dim = q.shape
+        r_q = q[:, :, sp_idx:].reshape(B, n_head, q_t, q_h, q_w, dim)
+        r_q = r_q.permute(2, 0, 1, 3, 4, 5).reshape(q_t, B * n_head * q_h * q_w, dim)
+        rel = torch.matmul(r_q, Rt.transpose(1, 2)).transpose(0, 1)
+        rel = rel.view(B, n_head, q_h, q_w, q_t, k_t).permute(0, 1, 4, 2, 3, 5)
+        attn[:, :, sp_idx:, sp_idx:] = (
+            attn[:, :, sp_idx:, sp_idx:].view(B, -1, q_t, q_h, q_w, k_t, k_h, k_w)
+            + rel[:, :, :, :, :, :, None, None]
+        ).view(B, -1, q_t * q_h * q_w, k_t * k_h * k_w)
+        return attn
+
+    attention_module.cal_rel_pos_spatial = cal_rel_pos_spatial
+    attention_module.cal_rel_pos_temporal = cal_rel_pos_temporal
+    attention_module._favor_rel_pos_cached = True
+
+
 class MaskFeat(nn.Module):
     def gradient_components(self):
         return {'hog_predictor':self.encoder.pred_head} if self.pretraining else {}
@@ -245,10 +309,12 @@ class MaskFeat(nn.Module):
         from BASELINES.common.official import checkout
         import yaml
         self.pretraining = pretrain
+        self.ddp_find_unused_parameters = not pretrain
         checkpoint=load_file(cfg['weights'])
         released=yaml.safe_load(checkpoint['cfg'])
         state=checkpoint['model_state']
-        with slowfast_classification_imports(), official('SlowFast') as source, official('pytorchvideo'):
+        with slowfast_classification_imports(), official('SlowFast', keep_packages=('slowfast',)) as source, official('pytorchvideo'):
+            _patch_slowfast_rel_pos(source('slowfast.models.attention'))
             config = source('slowfast.config.defaults').get_cfg()
             suffix = 'MaskFeat_PT' if pretrain else 'FT'
             config.merge_from_file(str(checkout('SlowFast') / f'configs/masked_ssl/k400_MVITv2_L_16x4_{suffix}.yaml'))
@@ -284,9 +350,17 @@ class MaskFeat(nn.Module):
             self.load_encoder(state)
         self.input_spec = dict(modality='video', seconds=16*4/30, frames=16, size=224,frame_stride=4)
 
+    def compile_modules(self):
+        if self.pretraining:
+            for block in self.encoder.blocks:
+                block.compile()
+
     def prepare(self, clip):
-        return dict(video=frames_tensor(clip['video'], mean=(.45,)*3, std=(.225,)*3,
-                    training=self.training).permute(1, 0, 2, 3)[None])
+        device = next(self.encoder.parameters()).device
+        video = clip['video'].to(device)
+        with torch.autocast(device.type, enabled=False):
+            return dict(video=frames_tensor(video, mean=(.45,)*3, std=(.225,)*3,
+                        training=self.training).permute(1, 0, 2, 3)[None])
 
     def forward(self, batch):
         return self.encoder([batch['video']])
