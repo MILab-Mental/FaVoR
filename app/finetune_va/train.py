@@ -234,7 +234,8 @@ def main(args):
     train_dataset, val_dataset = AVCSVDataset(data, 0, True), AVCSVDataset(data, 1, False)
     filter_paired_datasets((('train', train_dataset), ('validation', val_dataset)),
                            folder / 'logs' / 'filtered_pairs.csv',
-                           workers=int(data.get('sync_preflight_workers', 8)))
+                           workers=int(data.get('sync_preflight_workers', 8)),
+                           minimum_seconds=float(data.get('minimum_seconds', .1)))
     count = prepare_sync_metadata((train_dataset, val_dataset), data,
         sync_preflight_path(data, folder), rank=rank,
         workers=int(data.get('sync_preflight_workers', 8)))

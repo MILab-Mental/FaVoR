@@ -74,7 +74,7 @@ def _pair_filter_ddp_worker(rank, init_file, directory):
     dist.init_process_group('gloo', init_method=f'file://{init_file}', rank=rank,
                             world_size=2, timeout=timedelta(seconds=30))
     try:
-        def check(row):
+        def check(row, **kwargs):
             assert rank == 0
             return not row['pair_id'].endswith('bad')
         pair_filter.paired_media_readable = check

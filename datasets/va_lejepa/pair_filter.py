@@ -4,6 +4,7 @@ import csv
 import hashlib
 import logging
 import subprocess
+from functools import partial
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -12,6 +13,8 @@ import torch.distributed as dist
 LOGGER = logging.getLogger(__name__)
 
 _SOUNDFILE_SUFFIXES = {'.wav', '.flac', '.ogg', '.aif', '.aiff', '.au'}
+# Matches the default data.minimum_seconds used by the FaVoR sync preflight.
+MINIMUM_SECONDS = 0.1
 
 
 def _media_readable(filename, video):
@@ -45,7 +48,7 @@ def _ffprobe_duration(filename):
     return float(streams[0]['duration'])
 
 
-def _sync_ok(audio_path, video_path):
+def _sync_ok(audio_path, video_path, minimum_seconds=MINIMUM_SECONDS):
     from decord import VideoReader, cpu
     try:
         reader = VideoReader(str(video_path), ctx=cpu(0), num_threads=1)
@@ -57,16 +60,19 @@ def _sync_ok(audio_path, video_path):
             audio_duration = info.frames / info.samplerate
         else:
             audio_duration = _ffprobe_duration(audio_path)
+        if min(video_duration, audio_duration) < minimum_seconds:
+            return False
         return abs(video_duration - audio_duration) <= max(0.5, 2 / fps)
     except Exception:
         return False
 
 
-def paired_media_readable(row):
-    return _media_readable(row['audio_path'], False) and _sync_ok(row['audio_path'], row['video_path'])
+def paired_media_readable(row, minimum_seconds=MINIMUM_SECONDS):
+    return (_media_readable(row['audio_path'], False)
+            and _sync_ok(row['audio_path'], row['video_path'], minimum_seconds))
 
 
-def filter_paired_datasets(datasets, report_path, workers=8):
+def filter_paired_datasets(datasets, report_path, workers=8, minimum_seconds=MINIMUM_SECONDS):
     """Filter train/evaluation rows once and share the decision with all ranks."""
     rows = [(split, row) for split, dataset in datasets for row in dataset.rows]
     ids = [row['pair_id'] for _, row in rows]
@@ -79,7 +85,7 @@ def filter_paired_datasets(datasets, report_path, workers=8):
     if rank == 0:
         try:
             with ThreadPoolExecutor(max_workers=workers) as pool:
-                valid = list(pool.map(paired_media_readable, (row for _, row in rows)))
+                valid = list(pool.map(partial(paired_media_readable, minimum_seconds=minimum_seconds), (row for _, row in rows)))
             rejected = [(split, row) for (split, row), ok in zip(rows, valid) if not ok]
             report_path = Path(report_path)
             report_path.parent.mkdir(parents=True, exist_ok=True)
