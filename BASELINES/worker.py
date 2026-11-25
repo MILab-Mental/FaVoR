@@ -12,7 +12,7 @@ from BASELINES.common.runtime import (ROOT, OUTPUT_ROOT, path, load_config, setu
                                       NonfiniteEvaluationError)
 from BASELINES.common import distributed
 from BASELINES.common.data import configure_instances,make_loaders,read_rows
-from BASELINES.common.experiments import task_catalog,task_config
+from BASELINES.common.experiments import mental_core_task_names,task_catalog,task_config
 from BASELINES.build_model import build_model,TaskModel
 
 
@@ -85,7 +85,10 @@ def selected_tasks(selectors):
     if selectors==['all']:return list(catalog)
     selected=[]
     for selector in selectors:
-        matches=[name for name in catalog if name==selector or name.startswith(selector+'/') or name.rsplit('/',1)[-1]==selector]
+        if selector=='mental_core':
+            matches=list(mental_core_task_names())
+        else:
+            matches=[name for name in catalog if name==selector or name.startswith(selector+'/') or name.rsplit('/',1)[-1]==selector]
         if not matches:raise ValueError('Unknown task: '+selector)
         selected.extend(name for name in matches if name not in selected)
     return selected

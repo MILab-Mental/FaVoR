@@ -503,3 +503,30 @@ def test_compile_model_is_idempotent_and_respects_disable_flags(monkeypatch):
     compile_model(m)
     compile_model(m)
     assert calls == [1]
+
+
+def test_selected_tasks_supports_mental_core():
+    from BASELINES.common.experiments import task_catalog
+    from BASELINES.worker import selected_tasks
+
+    expected = {
+        'mental/RESULT-total',
+        'mental/RESULT-Depression',
+        'mental/RESULT-Anxiety',
+        'mental/SCL-Overall',
+        'mental/DSMxSCL-Depression',
+        'mental/DSMxSCL-Anxiety',
+        'mental/DSMxSCL-SomaticSymptoms',
+        'mental/DSMxSCL-ObsessiveCompulsive',
+        'mental/DSMxSCL-AngerHostility',
+        'mental/DSMxSCL-PersonalityInterpersonal',
+        'mental/DSM-SleepProblems',
+        'mental/DSM-SuicidalIdeation',
+        'mental/MINI',
+    }
+    chosen = selected_tasks(['mental_core'])
+    assert len(chosen) == 13
+    assert set(chosen) == expected
+    catalog = task_catalog()
+    assert all(name in catalog for name in chosen)
+    assert selected_tasks(['mental_core', 'mental/MINI']) == chosen

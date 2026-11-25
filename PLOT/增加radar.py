@@ -737,11 +737,11 @@ def draw_baselines(root: Path, output: Path, *, results_root: Path | None = None
     opacities={'V':.85, 'A':.85, 'VA':1.0}
     line_width = 1.1
     legend_marker_size = 2.2
-    fig, axes=plt.subplots(2,4,figsize=(44,24),subplot_kw={'projection':'polar'})
-    fig.subplots_adjust(left=.025, right=.975, top=.95, bottom=.095, wspace=.14, hspace=.40)
+    fig, axes=plt.subplots(3,4,figsize=(44,36),subplot_kw={'projection':'polar'})
+    fig.subplots_adjust(left=.025, right=.975, top=.96, bottom=.065, wspace=.14, hspace=.42)
     figures = [(fig, output)]
     panels = [(ax, scope, mod, mod == 'ALL' or (scope, mod) == ('nonmental', 'A'))
-              for scope, panel_row in zip(('mental', 'nonmental'), axes)
+              for scope, panel_row in zip(('mental', 'mental_core', 'nonmental'), axes)
               for mod, ax in zip(('V', 'A', 'VA', 'ALL'), panel_row)]
     if audio33_output is not None:
         audio_fig, audio_ax = plt.subplots(figsize=(12, 12), subplot_kw={'projection': 'polar'})
@@ -751,12 +751,14 @@ def draw_baselines(root: Path, output: Path, *, results_root: Path | None = None
 
     for ax, scope, mod, shared_only in panels:
       required = {'v', 'a', 'va'} if shared_only else {mod.lower()}
-      tasks = [row['task_id'] for row in rows if row['scope'] == scope
+      metric_scope = 'mental' if scope == 'mental_core' else scope
+      tasks = [row['task_id'] for row in rows if row['scope'] == metric_scope
+               and (scope != 'mental_core' or row.get('mental_core') == '1')
                and required.issubset(row['modalities'].split('|'))]
       n = len(tasks)
       if not n: continue
       theta=2*np.pi*np.arange(n)/n
-      task_values = [[metrics[m,rt,scope,t] for (m,rt),mo in models.items() if (mo==mod or mod=='ALL') and (m,rt,scope,t) in metrics] for t in tasks]
+      task_values = [[metrics[m,rt,metric_scope,t] for (m,rt),mo in models.items() if (mo==mod or mod=='ALL') and (m,rt,metric_scope,t) in metrics] for t in tasks]
       lower=np.array([min(values,default=np.nan) for values in task_values])
       upper=np.array([max(values,default=np.nan) for values in task_values])
       span = upper - lower
@@ -780,7 +782,7 @@ def draw_baselines(root: Path, output: Path, *, results_root: Path | None = None
       for (model,route),mo in models.items():
        if mo != mod and mod != 'ALL':
         continue
-       vals = np.array([metrics.get((model, route, scope, task), np.nan) for task in tasks])
+       vals = np.array([metrics.get((model, route, metric_scope, task), np.nan) for task in tasks])
        valid = np.isfinite(vals)
        has_results = valid.any()
        is_favor = model == 'FaVoR'
@@ -815,7 +817,8 @@ def draw_baselines(root: Path, output: Path, *, results_root: Path | None = None
        ax.text(angle, 100, label, ha=align, va='center', multialignment='center',
                fontsize=7.2 if n == 38 else 8, linespacing=.8 if n == 38 else .95,
                color='#16723C' if regression[i] else '#A61B29', clip_on=False)
-      ax.set_title(('Mental' if scope=='mental' else 'Ordinary')+' · '+{'V':'Video','A':'Audio','VA':'Audio-video','ALL':'All modalities'}[mod]+f' ({n} tasks)',fontsize=18,pad=16,weight='bold')
+      scope_title = {'mental': 'Mental', 'mental_core': 'Mental Core', 'nonmental': 'Ordinary'}[scope]
+      ax.set_title(scope_title+' · '+{'V':'Video','A':'Audio','VA':'Audio-video','ALL':'All modalities'}[mod]+f' ({n} tasks)',fontsize=18,pad=16,weight='bold')
       if not np.isfinite(lower).any():
        ax.text(0, 0, 'No completed results', ha='center', va='center', fontsize=16, color='#888888')
       if mod == 'ALL':
@@ -845,7 +848,7 @@ def parse_args() -> argparse.Namespace:
         description="从任务根目录读取多个配置的最优主指标，绘制平滑归一化雷达图。",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--baselines", action="store_true", help="绘制对比模型八面板雷达图和完整普通音频雷达图")
+    parser.add_argument("--baselines", action="store_true", help="绘制对比模型十二面板雷达图和完整普通音频雷达图")
     parser.add_argument("--refresh-results", action="store_true", help=f"绘图前从测试产物和 {FAVOR_CSV_NAME} 重建 {RESULT_CSV_NAME}")
     parser.add_argument("--audio33-out", type=Path, help="对比模型模式下完整普通音频雷达图的输出路径")
     parser.add_argument("--task", type=Path, help="包含多个任务子目录的根目录")
