@@ -15,10 +15,10 @@ usage() {
 环境变量（不填则使用默认值）：
   CHECKPOINT  预训练权重路径；普通任务必填，mental-auto 可使用路线默认值
   VA_ROUTE    音视频路线：anxiety-best / depression-best / total-best；
-              仅用于 va，可选 SCOPE=mental 或 nonmental，默认 mental
+              仅用于 va，可选 SCOPE=mental / mental_core / nonmental，默认 mental
   MENTAL_AUTO VA_ROUTE 的兼容别名；默认权重可由 CHECKPOINT 覆盖
   RUN_NAME    实验名，默认取权重文件名（去掉扩展名）
-  SCOPE       all / mental / nonmental，默认 all
+  SCOPE       all / mental / mental_core / nonmental，默认 all
   TASKS       任务名筛选，支持逗号和通配符，例如 'DSM-*,IEMOCAP-*'
   TYPE        all / classification / regression / multi_label_classification
   TASK_CSV    任务列表，默认 CONFIGS/tasks/finetune/tasks.csv
@@ -58,10 +58,10 @@ fi
 [[ $run =~ ^[a-zA-Z0-9_.-]+$ ]] || die 'RUN_NAME may contain letters, numbers, dot, underscore and hyphen.'
 catalog=${TASK_CSV:-CONFIGS/tasks/finetune/tasks.csv}
 scope=${SCOPE:-$([[ -n $mental_auto ]] && printf mental || printf all)}
-[[ -z $mental_auto || $scope == mental || $scope == nonmental ]] || die 'VA_ROUTE requires SCOPE=mental or nonmental.'
+[[ -z $mental_auto || $scope == mental || $scope == mental_core || $scope == nonmental ]] || die 'VA_ROUTE requires SCOPE=mental, mental_core, or nonmental.'
 type=${TYPE:-all}
 dry_run=${DRY_RUN:-0}
-case "$scope" in all|mental|nonmental) ;; *) die "Invalid SCOPE: $scope" ;; esac
+case "$scope" in all|mental|mental_core|nonmental) ;; *) die "Invalid SCOPE: $scope" ;; esac
 case "$type" in all|classification|regression|multi_label_classification) ;; *) die "Invalid TYPE: $type" ;; esac
 [[ $dry_run == 0 || $dry_run == 1 ]] || die 'DRY_RUN must be 0 or 1.'
 [[ -f $catalog ]] || die "Missing catalog: $catalog"
@@ -189,7 +189,7 @@ while IFS= read -r line || [[ -n $line ]]; do
   if ((line_number == 1)); then
     csv_parse "$line"
     header=("${CSV_FIELDS[@]}")
-    expected='enabled task_id dataset scope task_type num_class csv_path label_column modalities profile output_dir best_metric best_metric_mode overrides'
+    expected='enabled task_id dataset scope mental_core task_type num_class csv_path label_column modalities profile output_dir best_metric best_metric_mode overrides'
     [[ ${header[*]} == "$expected" ]] || die "Unexpected CSV header; expected: $expected"
     continue
   fi
@@ -198,8 +198,13 @@ while IFS= read -r line || [[ -n $line ]]; do
   [[ -n $id && ! ${seen[$id]+exists} ]] || die "Empty/duplicate task_id at line $line_number: $id"
   seen[$id]=1
   [[ ${row[enabled]} == 0 || ${row[enabled]} == 1 ]] || die "Invalid enabled for $id"
+  [[ ${row[mental_core]} == 0 || ${row[mental_core]} == 1 ]] || die "Invalid mental_core for $id"
   [[ ${row[enabled]} == 1 ]] || continue
-  [[ $scope == all || ${row[scope]} == "$scope" ]] || continue
+  if [[ $scope == mental_core ]]; then
+    [[ ${row[scope]} == mental && ${row[mental_core]} == 1 ]] || continue
+  elif [[ $scope != all ]]; then
+    [[ ${row[scope]} == "$scope" ]] || continue
+  fi
   [[ $type == all || ${row[task_type]} == "$type" ]] || continue
   [[ "|${row[modalities]}|" == *"|$mode|"* ]] || continue
   matches_task "$id" || continue
