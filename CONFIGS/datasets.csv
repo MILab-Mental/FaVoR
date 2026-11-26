@@ -28,4 +28,4 @@ DATASET/splits-0901/csvs/3_Androids-Corpus_LA.csv,/home/data/sdb/基座模型数
 DATASET/splits-0901/csvs/3_AVEC2014_LV.csv,/home/data/sdb/基座模型数据集/3心理数据集/AVEC2014/,/home/data/sdb/基座模型数据集/3心理数据集/AVEC2014/split_new.csv
 DATASET/splits-0901/csvs/3_CMDC_LA.csv,/home/data/sdb/基座模型数据集/3心理数据集/CMDC/,/home/data/sdb/基座模型数据集/3心理数据集/CMDC/split_new.csv
 DATASET/splits-0901/csvs/3_PDCH_LA.csv,/home/data/sdb/基座模型数据集/3心理数据集/PDCH/,/home/data/sdb/基座模型数据集/3心理数据集/PDCH/split_new.csv
-DATASET/splits-0901/csvs/3_私有临床数据_LV.csv,/home/lx/mental/FaVoR/DATASET/临床/,/home/data/sdb/基座模型数据集/3心理数据集/临床/split-0901.csv
+DATASET/splits-0901/csvs/3_私有临床数据_LV.csv,/home/data-sdb/lx/mental/FaVoR/DATASET/临床/,/home/data/sdb/基座模型数据集/3心理数据集/临床/split-0901.csv
