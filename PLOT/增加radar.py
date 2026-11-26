@@ -22,7 +22,7 @@
       --labels FaVoR "V-JEPA 2.1" \
       --tasks RAVDESS-emotion MER2023-emotion MER242526-26openset \
               MER2023-pos_intensity \
-      --out PLOT/output/radar/main.svg
+      --out OUTPUT/figs/雷达图/main.svg
 """
 
 from __future__ import annotations
@@ -35,6 +35,7 @@ import math
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 import matplotlib
 
@@ -43,13 +44,52 @@ import matplotlib.pyplot as plt
 import numpy as np
 import yaml
 from matplotlib import font_manager
+from matplotlib.colors import to_hex, to_rgb
 from matplotlib.lines import Line2D
 from scipy.interpolate import CubicSpline
 
 
-PLOT_ROOT = Path(__file__).resolve().parent
-PROJECT_ROOT = PLOT_ROOT.parent
-DEFAULT_OUTPUT = PLOT_ROOT / "output" / "radar" / "radar.svg"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+AUDIO33_RADAR_NAME = "audio33雷达图.png"
+RESULT_CSV_NAME = "对比模型结果.csv"
+FAVOR_CSV_NAME = "FAVOR结果.csv"
+
+MODEL_DISPLAY_NAMES = {
+    "audiomae-base": "AudioMAE",
+    "audiomae-large": "AudioMAE Large",
+    "wav2vec2-large-lv60": "wav2vec 2.0",
+    "wavlm-large": "WavLM",
+    "hubert-large-ll60k": "HuBERT",
+    "wavjepa-base": "WavJEPA",
+    "whisper-large-v3": "Whisper",
+    "data2vec-audio-large": "data2vec",
+    "beats-iter3": "BEATs",
+    "eat-large-20ep": "EAT",
+    "clip-vit-large-patch14": "CLIP",
+    "dinov2-vit-large-patch14": "DINOv2",
+    "dinov3-vit-large-patch16": "DINOv3",
+    "videomae-vit-large-patch16": "VideoMAE",
+    "hiera-large-16x224": "Hiera",
+    "mae-dfer-lgi-former": "MAE-DFER",
+    "vjepa2-1-vit-large-patch16-384": "V-JEPA 2.1",
+    "maskfeat-mvit-large": "MaskFeat",
+    "cav-mae-scale-plus-plus": "CAV-MAE Scale++",
+    "avsiam-base-plus": "AVSiam",
+    "avsiam-large": "AVSiam Large",
+    "languagebind-audio-large-video-large-v1-5": "LanguageBind",
+    "av-hubert-large": "AV-HuBERT",
+    "leavjepa-large": "LeAVJEPA",
+    "social-mae": "Social-MAE",
+    "emotion2vec": "Emotion2Vec",
+}
+
+FAVOR_VA_ROUTES = ("anxiety-best", "depression-best", "total-best")
+BASELINE_KINDS = {
+    "A": {"audiomae", "beats", "eat", "waveform", "wavjepa", "whisper"},
+    "V": {"clip", "dinov2", "dinov3", "hiera", "maedfer", "maskfeat", "videomae", "vjepa21"},
+    "VA": {"avhubert", "avsiam", "avsiam_large", "cavmae", "languagebind", "leavjepa", "socialmae"},
+}
+BASELINE_UNSTARTED, BASELINE_INCOMPLETE = "-/-/-", "～/～/～"
 
 # PLOT/color.md：给定配置按列表顺序使用 Primary palette。
 PRIMARY_COLORS = (
@@ -60,6 +100,8 @@ EDGE_COLORS = (
     "#C94F8B", "#6673A8", "#6FA987", "#D17E32",
     "#707780", "#A98F5C", "#805F9F", "#D5D5D5",
 )
+BASELINE_FAMILY_COLORS = {"V": "#F08800", "A": "#009BF0", "VA": "#5EF000", "FaVoR": "#E800F0"}
+FAVOR_MODALITY_COLORS = {"V": "#F054F5", "A": "#99009E", "VA": BASELINE_FAMILY_COLORS["FaVoR"]}
 
 
 @dataclass(frozen=True)
@@ -387,107 +429,340 @@ def draw_radar(
     plt.close(fig)
 
 
-def read_baseline_validation(text, task_catalog):
-    """Read the source-labelled validation tables attached to the report."""
-    _, _, section = text.partition('\n## 历史验证集结果\n')
-    scopes = {'### 普通任务': 'nonmental', '### 心理临床任务': 'mental'}
-    scope = None
-    tasks = []
-    for line in section.splitlines():
-        if line in scopes:
-            scope = scopes[line]
-            tasks = []
-        if not line.startswith('| '):
+def remove_bold(cell):
+    return cell[2:-2] if cell.startswith('**') and cell.endswith('**') else cell
+
+
+def baseline_metric(cell, task_type):
+    cell = remove_bold(cell)
+    if cell in ('', BASELINE_UNSTARTED, BASELINE_INCOMPLETE):
+        return None
+    parts = cell.split('/')
+    if len(parts) != 3:
+        raise ValueError(f'Invalid baseline metric triplet: {cell}')
+    values = [None if part == '-' else float(part) for part in parts]
+    if any(value is not None and not math.isfinite(value) for value in values):
+        raise ValueError(f'Nonfinite baseline metric triplet: {cell}')
+    return values[0 if task_type == 'regression' else 1]
+
+
+def select_favor_va_routes(scores, task_catalog):
+    """Select each task by its radar metric, breaking ties in route order."""
+    winners = {}
+    best = {}
+    for route in FAVOR_VA_ROUTES:
+        for task, value in scores.get(route, {}).items():
+            score = -value if task_catalog[task]['task_type'] == 'regression' else value
+            if task not in best or score > best[task]:
+                best[task] = score
+                winners[task] = route
+    return winners
+
+
+def baseline_series_label(model, route, modality):
+    name = MODEL_DISPLAY_NAMES.get(model, model)
+    if model == 'FaVoR':
+        return f'{name} ({modality})'
+    suffixes = {
+        'scratch-pretrained': ' (Domain Adaption from Scratch)',
+        'continued-pretrained': ' (Domain Adaption)',
+    }
+    return name + suffixes.get(route, '')
+
+
+def baseline_models():
+    configs = PROJECT_ROOT / 'BASELINES/finetune/configs'
+    modalities = {kind: modality for modality, kinds in BASELINE_KINDS.items() for kind in kinds}
+    models = {}
+    for path in sorted(configs.glob('*.yaml')):
+        if path.stem == 'defaults':
             continue
-        cells = [cell.strip() for cell in line.strip().strip('|').split('|')]
-        if cells[0] == '模型（模态）':
-            tasks = cells[3:]
+        model = yaml.safe_load(path.read_text(encoding='utf-8'))['model']
+        name = model['id']
+        route = 'direct'
+        if model.get('encoder_checkpoint'):
+            pretrain = PROJECT_ROOT / 'BASELINES/pretrain/configs' / f'{name}.yaml'
+            training_route = yaml.safe_load(pretrain.read_text(encoding='utf-8'))['route']
+            route = {'scratch_pretrain': 'scratch-pretrained', 'continue_pretrain': 'continued-pretrained'}[training_route]
+        models[name, route] = modalities[model['kind']]
+    model_index = {model: i for i, model in enumerate(MODEL_DISPLAY_NAMES)}
+    return dict(sorted(models.items(), key=lambda item: (model_index.get(item[0][0], len(model_index)), item[0][1] != 'direct')))
+
+
+def read_favor_csv(path, task_catalog):
+    """Read validation triplets and select FaVoR VA's best clinical route per task."""
+    models = {}
+    cells = {}
+    candidates = {}
+    with path.open(encoding='utf-8-sig', newline='') as handle:
+        reader = csv.reader(handle)
+        header = next(reader, [])
+        tasks = header[2:]
+        if header[:2] != ['模型（模态）', '微调路线 / 实验名'] or len(tasks) != len(task_catalog) or set(tasks) != set(task_catalog):
+            raise ValueError(f'Unexpected task columns in {path}')
+        for row in reader:
+            match = re.fullmatch(r'(.+)（(A|V|VA)）', row[0]) if row else None
+            if not match or len(row) != len(header):
+                raise ValueError(f'Invalid validation row at {path}:{reader.line_num}')
+            model, modality = match.groups()
+            route = row[1].strip()
+            key = (model, modality if model == 'FaVoR' else 'validation')
+            models[key] = modality
+            values = {task: remove_bold(cell.strip()) for task, cell in zip(tasks, row[2:]) if cell.strip()}
+            if key == ('FaVoR', 'VA') and route in FAVOR_VA_ROUTES:
+                if route in candidates:
+                    raise ValueError(f'Duplicate FaVoR route {route} in {path}')
+                candidates[route] = {task: cell for task, cell in values.items() if task_catalog[task]['scope'] == 'mental'}
+                if route != 'total-best':
+                    continue
+                values = {task: cell for task, cell in values.items() if task_catalog[task]['scope'] != 'mental'}
+            cells.setdefault(key, {}).update(values)
+
+    if candidates:
+        scores = {route: {task: score for task, cell in values.items()
+                          if (score := baseline_metric(cell, task_catalog[task]['task_type'])) is not None}
+                  for route, values in candidates.items()}
+        winners = select_favor_va_routes(scores, task_catalog)
+        combined = cells.setdefault(('FaVoR', 'VA'), {})
+        for values in candidates.values():
+            for task, cell in values.items():
+                if cell == BASELINE_INCOMPLETE:
+                    combined.setdefault(task, BASELINE_INCOMPLETE)
+        combined.update({task: candidates[route][task] for task, route in winners.items()})
+
+    ordered = {key: modality for key, modality in models.items() if key[0] != 'FaVoR'}
+    for modality in ('V', 'A', 'VA'):
+        key = ('FaVoR', modality)
+        if key in models:
+            ordered[key] = modality
+    return ordered, cells
+
+
+def baseline_csv_tasks(task_catalog):
+    return [task for task, row in task_catalog.items()
+            if row['scope'] == 'mental' or {'a', 'v', 'va'}.issubset(row['modalities'].split('|'))]
+
+
+def baseline_run_cells(root, task_catalog, models, tasks):
+    """Collect test triplets and incomplete runs from the training outputs."""
+    cells = {}
+    finetune = root / 'finetune'
+    for folder in finetune.glob('*/*/*/*'):
+        model, route, scope, task = folder.relative_to(finetune).parts
+        key = (model, route)
+        if key not in models or task not in tasks:
             continue
-        match = re.fullmatch(r'(.+)（(A|V|VA)）', cells[0])
-        if not match:
+        info = task_catalog[task]
+        expected_scope = 'mental' if info['scope'] == 'mental' else 'ordinary'
+        if scope != expected_scope or models[key].lower() not in info['modalities'].split('|'):
             continue
-        if scope is None or not tasks or len(cells) != len(tasks) + 3:
-            raise ValueError(f'Invalid historical validation table row: {cells[:3]}')
-        model, modality = match.groups()
-        route = cells[1].strip('`')
-        values = {}
-        for task, cell in zip(tasks, cells[3:]):
-            if not cell or cell == '-/-/-':
+        path = folder / 'metrics.json'
+        if not any((folder / name).is_file() for name in ('metrics.json', 'config.yaml', 'train.log')):
+            continue
+        if model == 'vjepa2-1-vit-large-patch16-384':
+            config = yaml.safe_load((folder / 'config.yaml').read_text(encoding='utf-8'))['model']
+            if tuple(config.get(k) for k in ('input_size', 'frames', 'fps')) != (112, 48, 8):
                 continue
-            task_info = task_catalog[task]
-            if task_info['scope'] != scope or modality.lower() not in task_info['modalities'].split('|'):
-                raise ValueError(f'Unexpected validation metric for {model}, {route}: {task}')
-            parts = cell.split('/')
-            if len(parts) != 3:
-                raise ValueError(f'Invalid validation metric for {model}, {route}, {task}: {cell}')
-            value = parts[0 if task_info['task_type'] == 'regression' else 1]
-            if value != '-' and math.isfinite(float(value)):
-                values[task] = float(value)
-        yield model, modality, route, scope, values
+        result = json.loads(path.read_bytes()) if path.is_file() else {}
+        evaluation = result.get('evaluations', {}).get('test', {})
+        metrics = evaluation.get('metrics', {}) if evaluation.get('scope', 'full') == 'full' else {}
+        regression = info['task_type'] == 'regression'
+        fields = ('mae', 'rmse', 'r2') if regression else ('accuracy', 'f1_macro', 'auc_ovr_macro')
+        parts = []
+        for i, field in enumerate(fields):
+            value = metrics.get(field)
+            if type(value) not in (float, int) or not math.isfinite(value):
+                parts.append('-')
+            elif not regression and i < 2:
+                parts.append(f'{100 * value:.2f}')
+            else:
+                parts.append(f'{value:.4f}')
+        cell = '/'.join(parts)
+        cells.setdefault(key, {})[task] = BASELINE_INCOMPLETE if cell == BASELINE_UNSTARTED else cell
+    return cells
 
 
-def draw_baselines(root: Path, output: Path) -> None:
+def write_baseline_csv(path, tasks, values, task_catalog):
+    for column, task in enumerate(tasks, start=1):
+        task_type = task_catalog[task]['task_type']
+        for row in values:
+            row[column] = remove_bold(row[column])
+        scores = [(row, score) for row in values if (score := baseline_metric(row[column], task_type)) is not None]
+        if scores:
+            select = min if task_type == 'regression' else max
+            best = select(score for _, score in scores)
+            for row, score in scores:
+                if score == best:
+                    row[column] = f'**{row[column]}**'
+
+    with NamedTemporaryFile(mode='w', encoding='utf-8', newline='', dir=path.parent, prefix='.result-', delete=False) as handle:
+        temporary = Path(handle.name)
+        try:
+            writer = csv.writer(handle)
+            writer.writerow(['model', *tasks])
+            writer.writerows(values)
+            handle.flush()
+            temporary.chmod(path.stat().st_mode & 0o777 if path.exists() else 0o664)
+            temporary.replace(path)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+
+def export_baseline_csv(root, task_catalog, models, cells):
+    tasks = baseline_csv_tasks(task_catalog)
+    values = [[baseline_series_label(*key, modality),
+               *(cells.get(key, {}).get(task, BASELINE_UNSTARTED) for task in tasks)]
+              for key, modality in models.items()]
+    write_baseline_csv(root / RESULT_CSV_NAME, tasks, values, task_catalog)
+
+
+def read_baseline_csv(path, task_catalog, models, *, favor_cells=None):
+    expected = set(baseline_csv_tasks(task_catalog))
+    labels = {baseline_series_label(*key, modality): key for key, modality in models.items()}
+    if len(labels) != len(models):
+        raise ValueError('Baseline display names must be unique')
+    metrics = {}
+    values = []
+    changed = False
+    with path.open(encoding='utf-8-sig', newline='') as handle:
+        reader = csv.reader(handle)
+        header = next(reader, [])
+        if header[:1] != ['model'] or len(header) != len(expected) + 1 or set(header[1:]) != expected:
+            raise ValueError(f'Unexpected task columns in {path}')
+        for row in reader:
+            if len(row) != len(header) or row[0] not in labels or any(not cell for cell in row[1:]):
+                raise ValueError(f'Invalid model row at {path}:{reader.line_num}')
+            key = labels.pop(row[0])
+            if favor_cells is not None and key in favor_cells:
+                updated = [favor_cells[key].get(task, BASELINE_UNSTARTED) for task in header[1:]]
+                if updated != [remove_bold(cell) for cell in row[1:]]:
+                    row[1:] = updated
+                    changed = True
+            values.append(row)
+            for task, cell in zip(header[1:], row[1:]):
+                info = task_catalog[task]
+                score = baseline_metric(cell, info['task_type'])
+                if score is not None:
+                    metrics[(*key, info['scope'], task)] = score
+    if labels:
+        raise ValueError(f'Missing models in {path}: {", ".join(labels)}')
+    if changed:
+        write_baseline_csv(path, header[1:], values, task_catalog)
+    return metrics
+
+
+def baseline_task_label(row: dict[str, str]) -> str:
+    task = row["task_id"]
+    dataset = row["dataset"].split("_", 1)[-1].rsplit("_", 1)[0]
+    prefix = f"{dataset}-"
+    if task.startswith(prefix):
+        return f"{dataset}\n{task.removeprefix(prefix)}"
+    return task.replace("-", "\n", 1)
+
+
+def baseline_family_shades(family: str) -> list[str]:
+    """Alternate light and dark shades of the comparison chart's base color."""
+    primary = np.array(to_rgb(BASELINE_FAMILY_COLORS[family]))
+    secondary = .78 * primary
+    difference = primary - secondary
+    return [to_hex(shade) for shade in (
+        secondary, .60 * secondary, primary, .77 * secondary,
+        primary + .14 * (1 - primary), .49 * secondary,
+        secondary + .65 * difference, .69 * secondary,
+        secondary + .34 * difference, .85 * secondary, .93 * secondary,
+    )]
+
+
+def draw_baselines(root: Path, output: Path, *, results_root: Path | None = None, audio33_output: Path | None = None,
+                   refresh_results: bool = False) -> None:
     """绘制心理/普通 × V/A/VA 八面板，使用 Macro-F1 和 MAE。
 
-    图例以 [val] 标记历史验证集；每轴使用相同的原始指标刻度，
-    将每个任务的最佳和最差结果线性映射到外圈和近圆心。
+    普通音频面板使用三模态共有任务，可另外导出完整的普通音频雷达图。
+    每轴使用原始指标刻度，将该任务的最佳和最差结果线性映射到外圈和近圆心。
     相邻节点均有结果时以直线相连，不跨越缺失任务。
     """
-    report = root / "对比模型进度表.md"
-    text = report.read_text(encoding="utf-8")
+    if audio33_output is not None and audio33_output.resolve() == output.resolve():
+        raise ValueError("八面板雷达图与完整音频雷达图需要不同的输出路径")
+    results_root = root if results_root is None else results_root
     with (PROJECT_ROOT / 'CONFIGS/tasks/finetune/tasks.csv').open(encoding='utf-8') as stream:
         rows = [row for row in csv.DictReader(stream) if row['enabled'] == '1']
     task_catalog = {row['task_id']: row for row in rows}
-    task_types={r['task_id']:r['task_type'] for r in rows}
-    models={}
-    for model,mod,route in re.findall(r'\| `([^`]+)`（(A|V|VA)） \| ([^|]+) \|',text):
-     models[(model,{'直接微调':'direct','继续预训练后微调':'continued-pretrained','从头预训练后微调':'scratch-pretrained'}[route.strip()])]=mod
-    metrics={}
-    test_selected = set()
-    for p in (root/'finetune').glob('*/*/*/*/metrics.json'):
-     model,route,scope,task,_=p.relative_to(root/'finetune').parts
-     try:
-      evaluation = json.loads(p.read_text()).get('evaluations', {}).get('test', {})
-      m = evaluation.get('metrics', {})
-      v = m.get('mae' if task_types.get(task) == 'regression' else 'f1_macro')
-      if isinstance(v, (int, float)) and math.isfinite(v):
-       panel_scope = 'nonmental' if scope == 'ordinary' else scope
-       metrics[model, route, panel_scope, task] = v if task_types.get(task) == 'regression' else 100*v
-       if evaluation.get('selection_split') == 'test':
-        test_selected.add((model, route, panel_scope))
-     except (ValueError,OSError,AttributeError): continue
-    validation = set()
-    for model, modality, route, scope, values in read_baseline_validation(text, task_catalog):
-        key = (model, route)
-        models[key] = modality
-        validation.add(key)
-        for task, value in values.items():
-            metrics[model, route, scope, task] = value
-    # Qualitative colors within each family retain modality cues while separating models.
-    palettes={
-     'A':['#123B8A','#0077BB','#56B4E9','#6650A4','#242F59','#3280A1','#47316E','#2867D0','#596B8A','#008DC8','#235AAB'],
-     'V':['#B2182B','#E66101','#D4A000','#8C510A','#722530','#F28E2B','#A27700','#C84B54','#D66816'],
-     'VA':['#005A42','#009E73','#18A999','#66A61E','#0A4039','#327848','#087E83','#4E6815'],
-    }
-    model_colors={}
-    for modality, palette in palettes.items():
-     names=list(dict.fromkeys(name for (name, _), model_mod in models.items() if model_mod==modality and name!='FaVoR'))
-     for i,name in enumerate(names): model_colors[name]=palette[i % len(palette)]
-    pink_palette = ('#DA2B82', '#AE206A', '#E755A1', '#8C1457', '#FF84B9')
-    favor_colors = {key: pink_palette[i % len(pink_palette)]
-                    for i, key in enumerate(key for key in models if key[0] == 'FaVoR')}
+    task_types = {task: row['task_type'] for task, row in task_catalog.items()}
+    baselines = baseline_models()
+    validation_models, favor_cells = read_favor_csv(results_root / FAVOR_CSV_NAME, task_catalog)
+    models = baselines | validation_models
+    csv_tasks = set(baseline_csv_tasks(task_catalog))
+    result_csv = results_root / RESULT_CSV_NAME
+    if refresh_results or not result_csv.exists():
+        test_cells = baseline_run_cells(root, task_catalog, baselines, csv_tasks)
+        export_baseline_csv(results_root, task_catalog, models, test_cells | favor_cells)
+    metrics = read_baseline_csv(result_csv, task_catalog, models, favor_cells=favor_cells)
+    if audio33_output is not None:
+        extra_tasks = task_catalog.keys() - csv_tasks
+        audio_baselines = {key: modality for key, modality in baselines.items() if modality == 'A'}
+        audio_cells = baseline_run_cells(root, task_catalog, audio_baselines, extra_tasks)
+        audio_cells.update(favor_cells)
+        for key, modality in models.items():
+            if modality != 'A':
+                continue
+            for task, cell in audio_cells.get(key, {}).items():
+                if task in extra_tasks and (score := baseline_metric(cell, task_types[task])) is not None:
+                    metrics[(*key, 'nonmental', task)] = score
+
+    favor_va_key = ('FaVoR', 'VA')
+    # Rank against the same series that set the combined panel's axis scales.
+    mental_peers = [key for key in models if key != favor_va_key]
+
+    def task_order(row):
+        regression = row['task_type'] == 'regression'
+        if row['scope'] != 'mental':
+            return regression, 0
+        task = row['task_id']
+        score = metrics.get((*favor_va_key, 'mental', task))
+        peers = [value for key in mental_peers if (value := metrics.get((*key, 'mental', task))) is not None]
+        if score is None or not peers:
+            return regression, math.inf
+        rank = 1 + sum(value < score if regression else value > score for value in peers)
+        return regression, rank
+
+    rows.sort(key=task_order)
+    model_colors = {}
+    for modality in ('V', 'A', 'VA'):
+        shades = baseline_family_shades(modality)
+        names = dict.fromkeys(name for (name, _), model_mod in models.items()
+                              if model_mod == modality and name != 'FaVoR')
+        for i, name in enumerate(names):
+            model_colors[name] = shades[i % len(shades)]
     markers={'V':'o', 'A':'s', 'VA':'D'}
     opacities={'V':.85, 'A':.85, 'VA':1.0}
-    line_widths={'V':1.25, 'A':1.25, 'VA':2.0}
-    fig, axes=plt.subplots(2,4,figsize=(48,26),subplot_kw={'projection':'polar'})
-    for row,scope in enumerate(['mental','nonmental']):
-     for col,mod in enumerate(['V','A','VA','ALL']):
-      ax=axes[row,col]; tasks=[r['task_id'] for r in rows if r['scope']==scope and (all(m in r['modalities'].split('|') for m in ('v','a','va')) if mod=='ALL' else mod.lower() in r['modalities'].split('|'))];n=len(tasks)
+    line_width = 1.1
+    legend_marker_size = 2.2
+    fig, axes=plt.subplots(3,4,figsize=(44,36),subplot_kw={'projection':'polar'})
+    fig.subplots_adjust(left=.025, right=.975, top=.96, bottom=.065, wspace=.14, hspace=.42)
+    figures = [(fig, output)]
+    panels = [(ax, scope, mod, mod == 'ALL' or (scope, mod) == ('nonmental', 'A'))
+              for scope, panel_row in zip(('mental', 'mental_core', 'nonmental'), axes)
+              for mod, ax in zip(('V', 'A', 'VA', 'ALL'), panel_row)]
+    if audio33_output is not None:
+        audio_fig, audio_ax = plt.subplots(figsize=(12, 12), subplot_kw={'projection': 'polar'})
+        audio_fig.subplots_adjust(left=.15, right=.85, top=.90, bottom=.14)
+        panels.append((audio_ax, 'nonmental', 'A', False))
+        figures.append((audio_fig, audio33_output))
+
+    for ax, scope, mod, shared_only in panels:
+      required = {'v', 'a', 'va'} if shared_only else {mod.lower()}
+      metric_scope = 'mental' if scope == 'mental_core' else scope
+      tasks = [row['task_id'] for row in rows if row['scope'] == metric_scope
+               and (scope != 'mental_core' or row.get('mental_core') == '1')
+               and required.issubset(row['modalities'].split('|'))]
+      n = len(tasks)
       if not n: continue
       theta=2*np.pi*np.arange(n)/n
-      task_values = [[metrics[m,rt,scope,t] for (m,rt),mo in models.items() if (mo==mod or mod=='ALL') and (m,rt,scope,t) in metrics] for t in tasks]
+      task_values = [[metrics[m,rt,metric_scope,t] for (m,rt),mo in models.items() if (mo==mod or mod=='ALL') and (m,rt,metric_scope,t) in metrics] for t in tasks]
       lower=np.array([min(values,default=np.nan) for values in task_values])
       upper=np.array([max(values,default=np.nan) for values in task_values])
+      span = upper - lower
+      regression = np.array([task_types[task] == 'regression' for task in tasks])
       ax.set_theta_offset(np.pi/2);ax.set_theta_direction(-1);ax.set_ylim(0,110);ax.set_xticks(theta);ax.set_xticklabels([]);ax.set_yticks(np.linspace(18,90,9));ax.set_yticklabels([]);ax.xaxis.grid(color='#AEB8C4',alpha=.25,lw=.55,ls='-');ax.yaxis.grid(color='#AEB8C4',alpha=.23,lw=.7,ls='-');ax.spines['polar'].set_visible(False)
       dense=np.linspace(0,2*np.pi,1000);ax.plot(dense,np.full_like(dense,90),color='#9FA5AD',lw=1,ls='-',alpha=.7)
       # Each spoke has its own original metric scale; the direction respects the task type.
@@ -502,51 +777,70 @@ def draw_baselines(root: Path, output: Path) -> None:
         ax.annotate(label, (theta[i], radius), xytext=(5*tangent_x, 5*tangent_y),
                     textcoords='offset points', color='black', fontsize=5.5, ha=ha, va=va,
                     zorder=10, bbox={'facecolor':'white','edgecolor':'none','alpha':.8,'pad':.1})
-      handles=[]
+      handles_by_modality = {'V': [], 'A': [], 'VA': []}
+      favor_handles = []
       for (model,route),mo in models.items():
        if mo != mod and mod != 'ALL':
         continue
-       vals=np.array([metrics.get((model,route,scope,t),np.nan) for t in tasks]);valid=np.isfinite(vals)
-       if not np.any(valid): continue
-       span=upper-lower
-       fraction=np.divide(vals-lower,span,out=np.ones_like(vals),where=span>0)
-       for i,t in enumerate(tasks):
-        if task_types[t]=='regression' and span[i]>0: fraction[i]=1-fraction[i]
-       rad=18+72*np.clip(fraction,0,1)
-       key = (model, route)
-       is_favor = key in favor_colors
-       is_validation = key in validation
-       color = favor_colors[key] if is_favor else model_colors[model]
-       width = 2.25 if is_favor else line_widths[mo]
+       vals = np.array([metrics.get((model, route, metric_scope, task), np.nan) for task in tasks])
+       valid = np.isfinite(vals)
+       has_results = valid.any()
+       is_favor = model == 'FaVoR'
+       color = FAVOR_MODALITY_COLORS[mo] if is_favor else model_colors[model]
        alpha = 1.0 if is_favor else opacities[mo]
-       if valid.all() and n >= 3:
-        ax.fill(theta,rad,color=color,alpha=.035,edgecolor='none',zorder=1)
-       for i in range(n):
-        j=(i+1)%n
-        if valid[i] and valid[j]:ax.plot([theta[i],theta[i]+2*np.pi/n],[rad[i],rad[j]],color=color,lw=width,alpha=alpha,linestyle='-',zorder=4 if is_favor else 2)
-       ax.scatter(theta[valid],rad[valid],s=35 if is_favor else 28,marker=markers[mo],color=[color],alpha=alpha,edgecolor='white',linewidth=.3,zorder=6 if is_favor else 5)
-       if is_validation:
-        label = f'{model} ({mo}) · {route} [val]'
-       else:
-        label = model if route=='direct' else model+' ('+('continued' if route=='continued-pretrained' else 'scratch')+')'
-        if (model, route, scope) in test_selected:
-         label += ' [test-selected]'
-       handles.append(Line2D([0],[0],color=color,lw=width,alpha=alpha,linestyle='-',marker=markers[mo],markersize=4,label=label))
-      for i,t in enumerate(theta):
-       label=tasks[i].replace('DSMxSCL-','D×S-').replace('RESULT-','RES-').replace('RepetitiveThoughtsBehaviors','Repetitive').replace('InterpersonalSensitivity','Interpersonal').replace('PersonalityInterpersonal','PersonalityInter').replace('PsychosisParanoidExpanded','PsychosisParanoid').replace('ObsessiveCompulsive','Obsessive').replace('PersonalityFunctioning','PersonalityFunc').replace('SomaticSymptoms','Somatic')
-       deg=np.degrees(t);align='center' if deg<8 or deg>352 or 172<deg<188 else ('left' if deg<180 else 'right')
-       ax.text(t,98+(i%2)*2,label,ha=align,va='center',fontsize=7.4 if n==38 else 8,color='#30343A',clip_on=False)
-      ax.set_title(('Mental' if scope=='mental' else 'Ordinary')+' · '+{'V':'Video','A':'Audio','VA':'Audio-video','ALL':'All modalities'}[mod]+f' ({n} tasks)',fontsize=18,pad=32,weight='bold')
-      if not handles: ax.text(0,0,'No completed results',ha='center',va='center',fontsize=16,color='#888888')
-      if mod=='ALL':
-       handles += [Line2D([0],[0], color=palettes[m][0], lw=line_widths[m], alpha=opacities[m], marker=markers[m], markersize=4, label={'V':'Video','A':'Audio','VA':'Audio-video'}[m]) for m in ('V','A','VA')]
-      if handles: ax.legend(handles=handles,loc='upper center',bbox_to_anchor=(.5,-.06),fontsize=8,frameon=False,ncol=2,handlelength=2.6)
-    if validation or test_selected:
-        fig.suptitle('[val]: historical validation  |  [test-selected]: checkpoint selected on test  |  Other curves: test',
-                     y=.988, fontsize=18)
-    fig.subplots_adjust(left=.04,right=.96,top=.95,bottom=.12,wspace=.38,hspace=.55)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output,dpi=190,bbox_inches='tight',pad_inches=.25);plt.close(fig)
+       if has_results:
+        fraction = np.divide(vals - lower, span, out=np.ones_like(vals), where=span > 0)
+        invert = regression & (span > 0)
+        fraction[invert] = 1 - fraction[invert]
+        radii = 18 + 72 * np.clip(fraction, 0, 1)
+        if valid.all() and n >= 3:
+         ax.fill(theta, radii, color=color, alpha=.035, edgecolor='none', zorder=1)
+        for i in range(n):
+         j = (i + 1) % n
+         if valid[i] and valid[j]:
+          ax.plot([theta[i], theta[i] + 2*np.pi/n], [radii[i], radii[j]], color=color,
+                  lw=line_width, alpha=alpha, linestyle='-', zorder=4 if is_favor else 2)
+        ax.scatter(theta[valid], radii[valid], s=10, marker=markers[mo],
+                   color=[color], alpha=alpha, edgecolor='white', linewidth=.25,
+                   zorder=6 if is_favor else 5)
+       handles = favor_handles if is_favor and mod == 'ALL' else handles_by_modality[mo]
+       handles.append(
+           Line2D([0], [0], color=color, lw=line_width, alpha=alpha, linestyle='-',
+                  marker=markers[mo], markersize=legend_marker_size,
+                  label=baseline_series_label(model, route, mo),
+                  markerfacecolor=color if has_results else 'none')
+       )
+      for i, (angle, task) in enumerate(zip(theta, tasks)):
+       label = baseline_task_label(task_catalog[task])
+       degrees = np.degrees(angle)
+       align = 'center' if degrees < 8 or degrees > 352 or 172 < degrees < 188 else ('left' if degrees < 180 else 'right')
+       ax.text(angle, 100, label, ha=align, va='center', multialignment='center',
+               fontsize=7.2 if n == 38 else 8, linespacing=.8 if n == 38 else .95,
+               color='#16723C' if regression[i] else '#A61B29', clip_on=False)
+      scope_title = {'mental': 'Mental', 'mental_core': 'Mental Core', 'nonmental': 'Ordinary'}[scope]
+      ax.set_title(scope_title+' · '+{'V':'Video','A':'Audio','VA':'Audio-video','ALL':'All modalities'}[mod]+f' ({n} tasks)',fontsize=18,pad=16,weight='bold')
+      if not np.isfinite(lower).any():
+       ax.text(0, 0, 'No completed results', ha='center', va='center', fontsize=16, color='#888888')
+      if mod == 'ALL':
+       # Matplotlib fills legends column-first. Pad to keep each modality in one column.
+       column_height = max(map(len, handles_by_modality.values()))
+       blank = Line2D([], [], linestyle='none', label=' ')
+       handles = [handle for group in handles_by_modality.values()
+                  for handle in group + [blank] * (column_height - len(group))]
+      else:
+       handles = handles_by_modality[mod]
+      if favor_handles:
+       favor_legend = ax.legend(handles=favor_handles, loc='upper center', bbox_to_anchor=(.5, -.02),
+                                fontsize=8, frameon=False, ncol=len(favor_handles), handlelength=2)
+       ax.add_artist(favor_legend)
+      if handles:
+       ax.legend(handles=handles, loc='upper center', bbox_to_anchor=(.5, -.057 if favor_handles else -.02), fontsize=8,
+                 frameon=False, ncol=3 if mod == 'ALL' else 2, handlelength=2,
+                 handletextpad=.5, columnspacing=1, labelspacing=.28 if mod == 'ALL' else .35)
+    for figure, path in figures:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        figure.savefig(path, dpi=190, bbox_inches='tight', pad_inches=.06)
+        plt.close(figure)
 
 
 def parse_args() -> argparse.Namespace:
@@ -554,7 +848,9 @@ def parse_args() -> argparse.Namespace:
         description="从任务根目录读取多个配置的最优主指标，绘制平滑归一化雷达图。",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--baselines", action="store_true", help="绘制对比模型八面板雷达图")
+    parser.add_argument("--baselines", action="store_true", help="绘制对比模型十二面板雷达图和完整普通音频雷达图")
+    parser.add_argument("--refresh-results", action="store_true", help=f"绘图前从测试产物和 {FAVOR_CSV_NAME} 重建 {RESULT_CSV_NAME}")
+    parser.add_argument("--audio33-out", type=Path, help="对比模型模式下完整普通音频雷达图的输出路径")
     parser.add_argument("--task", type=Path, help="包含多个任务子目录的根目录")
     parser.add_argument("--configs", nargs="+", help="实验配置目录名，顺序同时决定配色")
     parser.add_argument("--labels", nargs="+", help="图例显示名，数量必须与 --configs 相同")
@@ -569,18 +865,25 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    if args.baselines:
-        sys.path.insert(0, str(PROJECT_ROOT))
-        from BASELINES.common.paths import OUTPUT_ROOT
+    sys.path.insert(0, str(PROJECT_ROOT))
+    from BASELINES.common.paths import OUTPUT_ROOT, RADAR_ROOT, RESULTS_ROOT
 
-        output = args.out or OUTPUT_ROOT / "对比模型雷达图.png"
-        output = output if output.is_absolute() else PROJECT_ROOT / output
-        draw_baselines(OUTPUT_ROOT, output)
-        print(f"wrote {output.resolve()}")
+    if args.baselines:
+        output = PROJECT_ROOT / args.out if args.out is not None else RADAR_ROOT / "对比模型雷达图.png"
+        audio33_output = args.audio33_out
+        if audio33_output is None and args.out is None:
+            audio33_output = RADAR_ROOT / AUDIO33_RADAR_NAME
+        if audio33_output is not None:
+            audio33_output = PROJECT_ROOT / audio33_output
+        draw_baselines(OUTPUT_ROOT, output, results_root=RESULTS_ROOT,
+                       audio33_output=audio33_output, refresh_results=args.refresh_results)
+        for written in (output, audio33_output):
+            if written is not None:
+                print(f"wrote {written.resolve()}")
         return 0
     if args.task is None or not args.configs:
         raise SystemExit("常规模式需要 --task 和 --configs；对比模型图使用 --baselines")
-    args.out = args.out or DEFAULT_OUTPUT
+    args.out = args.out or RADAR_ROOT / "radar.svg"
     if len(args.configs) < 1:
         raise SystemExit("--configs 至少需要一项")
     if len(args.configs) > len(PRIMARY_COLORS):

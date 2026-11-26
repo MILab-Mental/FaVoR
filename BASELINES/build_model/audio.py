@@ -7,7 +7,7 @@ import torch.nn.functional as F
 import torchaudio
 
 from BASELINES.common.official import official
-from BASELINES.common.runtime import load_file, path, strict_load
+from BASELINES.common.runtime import load_file, move, path, strict_load
 
 
 def fbank(waveform, frames=1024, mean=-4.2677393, std=9.1379948):
@@ -203,6 +203,16 @@ class BEATsEncoder(nn.Module):
         waveform=F.pad(waveform,(0,max(0,self.minimum_samples-len(waveform))))
         return dict(source=waveform[None])
 
+    def batch_inputs(self, inputs):
+        from torch.nn.utils.rnn import pad_sequence
+        waveforms = [item['source'][0] for item in inputs]
+        lengths = torch.tensor([len(w) for w in waveforms], device=waveforms[0].device)
+        source = pad_sequence(waveforms, batch_first=True)
+        if len(waveforms) == 1 or (lengths == source.shape[1]).all():
+            return dict(source=source)
+        padding_mask = torch.arange(source.shape[1], device=source.device)[None] >= lengths[:, None]
+        return dict(source=source, padding_mask=padding_mask)
+
     def forward(self, batch):
         values, mask = self.encoder.extract_features(**batch)
         if mask is None:
@@ -365,6 +375,13 @@ class EAT(nn.Module):
         # Validation must not advance this Python counter: otherwise the next
         # training call would skip the native EMA update for that step.
         if self.training:
+            # Fairseq keeps EMA outside the module tree. A resumed step can
+            # update it before the native forward has moved it to the GPU.
+            ema = self.encoder.ema
+            device = batches[0]['features'].device
+            if step > 0 and next(ema.model.parameters()).device != device:
+                ema.model.to(device=device)
+                ema.fp32_params = move(ema.fp32_params, device)
             self.encoder.set_num_updates(step)
         x = torch.cat([b['features'] for b in batches])
         result = self.encoder(x, mask=True, features_only=False)

@@ -113,7 +113,7 @@ python PLOT/增加radar.py \
   --labels FaVoR "V-JEPA 2.1"
 ```
 
-默认输出 `PLOT/output/radar/radar.svg`。可用 `--tasks` 限定任务并指定雷达轴顺序，用
+默认输出 `OUTPUT/figs/雷达图/radar.svg`。可用 `--tasks` 限定任务并指定雷达轴顺序，用
 `--classification-metric`、`--multilabel-metric` 和 `--regression-metric` 替换三类主指标。
 
 ## PCA 视频可视化

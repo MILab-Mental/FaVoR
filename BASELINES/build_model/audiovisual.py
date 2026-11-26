@@ -153,7 +153,8 @@ class LeAVJEPA(nn.Module):
     def __init__(self, cfg, initialize=True, pretrain=False):
         super().__init__()
         self.pretraining = pretrain
-        with official('LeAVJEPA') as source:
+        self.ddp_find_unused_parameters = not pretrain
+        with official('LeAVJEPA', keep_packages=('transformer',)) as source:
             models = source('models')
             # Exact configs.py Large/8s configuration. Its import also imports
             # the unused WebDataset/TorchCodec loader; our raw-media decoder is
@@ -189,21 +190,42 @@ class LeAVJEPA(nn.Module):
             v2.RandomHorizontalFlip(), v2.ToDtype(torch.float32, scale=True),
             v2.Normalize(IMAGENET_MEAN, IMAGENET_STD)])
 
+    def compile_modules(self):
+        if self.pretraining:
+            for block in self.encoder.encoder.blocks:
+                block.compile()
+
+    def _pad_video(self, video):
+        if len(video) < 16:
+            video = torch.cat([video, video.new_zeros(16 - len(video), *video.shape[1:])])
+        return video
+
+    def _prepare_audio(self, waveforms):
+        padded = torch.stack([F.pad(w, (0, max(0, 128000 - len(w))))[:128000] for w in waveforms])
+        # Keep the registered buffers on the model device for DDP broadcasts.
+        device = next(self.spectrogram.buffers()).device
+        with torch.autocast(device.type, enabled=False):
+            return (self.spectrogram(padded.to(device)) + 20.437003) / 24.496246
+
+    def _transform_video(self, video, transform):
+        device = next(self.spectrogram.buffers()).device
+        frames = self._pad_video(video).permute(0, 3, 1, 2).to(device)
+        with torch.autocast(device.type, enabled=False):
+            return transform(frames).permute(1, 0, 2, 3)
+
     def prepare(self, clip):
         # Match official 8-second Hamming log-mel padding and fixed normalization.
-        if len(clip['video']) < 16:
-            clip = dict(clip, video=torch.cat([clip['video'], clip['video'].new_zeros(16-len(clip['video']), *clip['video'].shape[1:])]))
-        waveform = F.pad(clip['audio'], (0, max(0, 128000-len(clip['audio']))))[:128000]
-        spec = (self.spectrogram.cpu()(waveform[None]) + 20.437003) / 24.496246
-        frames = clip['video'].permute(0, 3, 1, 2)
-        video = frames_tensor(clip['video'], training=False).permute(1, 0, 2, 3)[None]
-        result = dict(video=video, audio=spec[None])
+        video = self._pad_video(clip['video'])
+        spec = self._prepare_audio([clip['audio']])
         if self.pretraining:
             # Official Large recipe: two joint global views and two unimodal
             # local views, dropping absent tokens rather than encoding zeros.
-            result['global_video'] = torch.stack([self.global_transform(frames).permute(1, 0, 2, 3) for _ in range(2)])[None]
-            result['local_video'] = self.local_transform(frames).permute(1, 0, 2, 3)[None]
-        return result
+            return dict(
+                audio=spec[None],
+                global_video=torch.stack([self._transform_video(video, self.global_transform) for _ in range(2)])[None],
+                local_video=self._transform_video(video, self.local_transform)[None],
+            )
+        return dict(video=frames_tensor(video, training=False).permute(1, 0, 2, 3)[None], audio=spec[None])
 
     def forward(self, batch):
         features=self.encoder(batch['video'], batch['audio'])
@@ -212,10 +234,18 @@ class LeAVJEPA(nn.Module):
     def prepare_views(self, clips):
         if len(clips) != 4:
             raise ValueError('LeAVJEPA requires G=2/K=2 independently sampled aligned AV crops')
-        prepared = [self.prepare(clip) for clip in clips]
-        return dict(global_video=torch.cat([p['global_video'][:, :1] for p in prepared[:2]], 1),
-                    global_audio=torch.stack([p['audio'] for p in prepared[:2]], 1),
-                    local_audio=prepared[2]['audio'], local_video=prepared[3]['local_video'])
+        specs = self._prepare_audio([clips[0]['audio'], clips[1]['audio'], clips[2]['audio']])
+        global_video = torch.stack([
+            self._transform_video(clips[0]['video'], self.global_transform),
+            self._transform_video(clips[1]['video'], self.global_transform),
+        ])[None]
+        local_video = self._transform_video(clips[3]['video'], self.local_transform)[None]
+        return dict(
+            global_video=global_video,
+            global_audio=specs[:2][None, :, None],
+            local_audio=specs[2:3][None],
+            local_video=local_video,
+        )
 
     def pretrain_loss(self, batches, step=0):
         if self.training and len(batches) < 2:

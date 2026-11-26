@@ -147,11 +147,12 @@ class AudioBackbone(nn.Module):
 
     def encode_transformer(self, tokens, padding_mask=None, alibi_bias_value=None,
                            alibi_scale=None, return_all_layers=False,
-                           remove_extra_tokens=True):
+                           remove_extra_tokens=True, return_block_outputs=False):
         encoded = self.context_encoder(
             tokens, key_padding_mask=padding_mask,
             alibi_bias=alibi_bias_value, alibi_scale=alibi_scale,
             return_all_layers=return_all_layers,
+            return_block_outputs=return_block_outputs,
         )
         if return_all_layers:
             output, layers = encoded
@@ -165,7 +166,8 @@ class AudioBackbone(nn.Module):
                 padding_mask = padding_mask[:, self.num_extra_tokens:]
         return (output, layers, padding_mask) if return_all_layers else output
 
-    def forward(self, waveforms, valid_wave_lens=None, return_all_layers=False):
+    def forward(self, waveforms, valid_wave_lens=None, return_all_layers=False,
+                return_block_outputs=False):
         tokens, padding_mask, bias, scale = self.prepare_transformer_input(
             waveforms, valid_wave_lens
         )
@@ -177,6 +179,7 @@ class AudioBackbone(nn.Module):
         output, layers, padding_mask = self.encode_transformer(
             tokens, padding_mask, bias, scale,
             return_all_layers=True, remove_extra_tokens=True,
+            return_block_outputs=return_block_outputs,
         )
         return output, layers, padding_mask
 

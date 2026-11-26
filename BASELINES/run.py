@@ -92,7 +92,7 @@ def main():
     source.add_argument('--config', help='Custom experiment YAML, including task/data settings')
     parser.add_argument('--list', action='store_true', help='List stage configurations without building models')
     parser.add_argument('--gpus',type=int,default=1,help='Use 2 for the full DDP comparison matrix')
-    parser.add_argument('--tasks',nargs='+',help='all, ordinary, mental, or explicit task names')
+    parser.add_argument('--tasks',nargs='+',help='all, ordinary, mental, mental_core, or explicit task names')
     parser.add_argument('--test',action='store_true',help='Real training checks entirely in RAM; no files, downloads or cache writes')
     parser.add_argument('--device', help='Override device, e.g. cuda:1 or cpu')
     parser.add_argument('--experiment', help='Run directory name; smoke defaults to configured task/route plus timestamp')

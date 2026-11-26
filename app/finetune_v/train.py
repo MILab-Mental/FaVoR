@@ -289,6 +289,9 @@ def main(args):
     which_dtype = cfgs_meta.get("dtype", "float32").lower()
     mixed_precision = device.type == "cuda" and which_dtype in {"bfloat16", "float16"}
     amp_dtype = torch.bfloat16 if which_dtype == "bfloat16" else torch.float16
+    regression_head = "attentive"
+    if task == "regression":
+        regression_head = cfgs_model.get("regression_head", regression_head)
     encoder, task_head = build_model(
         pretrained_ckpt,
         model_name=model_name,
@@ -312,6 +315,7 @@ def main(args):
         backbone_drop_path=backbone_drop_path,
         classifier_dropout=classifier_dropout,
         instance_aggregator=cfgs_model.get('instance_aggregator'),
+        regression_head=regression_head,
     )
     encoder.to(device)
     task_head.to(device)

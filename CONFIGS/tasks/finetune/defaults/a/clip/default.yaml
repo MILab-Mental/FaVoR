@@ -7,6 +7,8 @@ meta:
   seed: 239
   frozen_encoder: false
   min_load_ratio: 0.95
+model:
+  regression_head: layer_weighted
 yamls:
   sampling: CONFIGS/data/finetune/audio/sampling/audio-4s-4clips.yaml
   opt: CONFIGS/optimization/finetune/audio/epochs100-warmup0.yaml

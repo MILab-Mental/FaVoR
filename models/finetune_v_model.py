@@ -8,6 +8,7 @@ import torch.nn as nn
 from models.video_jepa.attentive_pooler import AttentiveClassifier
 from models.video_jepa import vision_transformer as vit
 from models.instance_aggregator import InstancePredictionHead
+from models.regression_head import LayerWeightedRegressor
 
 LOGGER = logging.getLogger(__name__)
 
@@ -21,10 +22,11 @@ class ClipEncoder(nn.Module):
     V-JEPA's ``vit_encoder_multiclip_multilevel`` evaluation wrapper.
     """
 
-    def __init__(self, backbone, instance_enabled=False):
+    def __init__(self, backbone, instance_enabled=False, pool_each_layer=False):
         super().__init__()
         self.backbone = backbone
         self.instance_enabled = bool(instance_enabled)
+        self.pool_each_layer = pool_each_layer
 
     @property
     def embed_dim(self):
@@ -48,6 +50,11 @@ class ClipEncoder(nn.Module):
         layer_outputs = self.backbone(inputs)
         if not isinstance(layer_outputs, (list, tuple)):
             raise RuntimeError("ClipEncoder requires backbone out_layers to return multilevel token tensors")
+        if self.pool_each_layer:
+            # Preserve the layer axis and average clip features within each view.
+            pooled = torch.stack([tokens.mean(dim=1, dtype=torch.float32) for tokens in layer_outputs], dim=1)
+            pooled = pooled.reshape(num_clips, num_views, batch, len(layer_outputs), self.embed_dim)
+            return pooled.mean(dim=0).unbind(0)
         outputs = torch.cat(layer_outputs, dim=1)
         _, token_count, embed_dim = outputs.shape
         temporal_tokens = frames // self.backbone.tubelet_size
@@ -142,6 +149,7 @@ def build_model(
     backbone_drop_path=0.0,
     classifier_dropout=0.0,
     instance_aggregator=None,
+    regression_head="attentive",
 ):
     """Build a fine-tuning encoder and task head from configuration values.
 
@@ -157,6 +165,11 @@ def build_model(
         raise ValueError(f"{task} requires data.num_class to be an integer of at least 2.")
     if not isinstance(out_layers, (list, tuple)) or not out_layers:
         raise ValueError("model.out_layers must be a non-empty list of transformer block indices")
+    if regression_head not in {"attentive", "layer_weighted"}:
+        raise ValueError("model.regression_head must be attentive or layer_weighted")
+    layer_weighted = regression_head == "layer_weighted"
+    if layer_weighted and (task != "regression" or instance_aggregator is not None):
+        raise ValueError("model.regression_head=layer_weighted requires video regression without instance aggregation")
     regularization = {
         "backbone_dropout": float(backbone_dropout),
         "backbone_attention_dropout": float(backbone_attention_dropout),
@@ -189,7 +202,11 @@ def build_model(
         drop_path_rate=regularization["backbone_drop_path"],
     )
     checkpoint = load_backbone(backbone, checkpoint_path)
-    encoder = ClipEncoder(backbone, instance_enabled=instance_aggregator is not None)
+    encoder = ClipEncoder(backbone, instance_enabled=instance_aggregator is not None,
+                          pool_each_layer=layer_weighted)
+    if layer_weighted:
+        head = LayerWeightedRegressor(encoder.embed_dim, len(set(out_layers)), dropout=classifier_dropout)
+        return encoder, head
     if instance_aggregator is not None:
         outputs = num_class if task in {'classification', 'multi_label_classification'} else 1
         return encoder, InstancePredictionHead(encoder.embed_dim, outputs, instance_aggregator)

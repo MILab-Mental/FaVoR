@@ -7,6 +7,8 @@ meta:
   reset_epoch: true
   save_every_freq: 100
   seed: 239
+model:
+  regression_head: layer_weighted
 yamls:
   sampling: CONFIGS/data/finetune/video/sampling/48frames-8fps.yaml
   opt: CONFIGS/optimization/finetune/video/epochs80-warmup5-lr5e-05.yaml

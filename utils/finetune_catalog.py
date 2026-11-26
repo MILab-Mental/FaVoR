@@ -11,6 +11,11 @@ def read_tasks(root=ROOT):
         return [row for row in csv.DictReader(handle) if row['enabled'] == '1']
 
 
+def mental_core_tasks(root=ROOT):
+    return [row['task_id'] for row in read_tasks(root)
+            if row['scope'] == 'mental' and row.get('mental_core') == '1']
+
+
 def task_data(row):
     return {'datasets': [row['csv_path']], 'datasets_weights': [1],
             'task': row['task_type'], 'num_class': int(row['num_class']),

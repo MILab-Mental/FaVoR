@@ -196,6 +196,26 @@ def test_strict_sync_reject(field,value):
         validate_sync(video,audio,{'pair_id':'x'}, {})
 
 
+def test_va_pair_filter_preserves_labels_and_reports_both_splits(tmp_path, monkeypatch):
+    import csv
+    from types import SimpleNamespace
+    import datasets.va_lejepa.pair_filter as pair_filter
+
+    def row(pair_id):
+        return dict(pair_id=pair_id, audio_path=pair_id + '.wav', video_path=pair_id + '.mp4')
+
+    train = SimpleNamespace(rows=[row('train-good'), row('train-bad')], labels=[1, 2])
+    val = SimpleNamespace(rows=[row('val-bad'), row('val-good')], labels=[3, 4])
+    monkeypatch.setattr(pair_filter, 'paired_media_readable', lambda r, **k: r['pair_id'].endswith('good'))
+    report = tmp_path / 'filtered.csv'
+    pair_filter.filter_paired_datasets((('train', train), ('validation', val)), report, workers=2)
+    assert [r['pair_id'] for r in train.rows] == ['train-good'] and train.labels == [1]
+    assert [r['pair_id'] for r in val.rows] == ['val-good'] and val.labels == [4]
+    with report.open(newline='') as handle:
+        assert [(r['split'], r['pair_id']) for r in csv.DictReader(handle)] == [
+            ('train', 'train-bad'), ('validation', 'val-bad')]
+
+
 def test_va_sync_preflight_checks_all_pairs_once_and_reuses_cache(tmp_path, monkeypatch):
     import json
     import datasets.va_lejepa.sync_preflight as preflight
@@ -813,3 +833,22 @@ def test_fusion_averages_probabilities_and_scalar_regression():
     a, v = np.array([[.9, .1]]), np.array([[.2, .8]])
     assert np.allclose(np.exp(combine(a, v, .25, 'classification')), .25*a+.75*v)
     assert np.allclose(combine(np.array([1.]), np.array([3.]), .5, 'regression'), [[2.]])
+
+
+def test_pair_filter_rejects_too_short_pairs(tmp_path):
+    import numpy as np
+    import soundfile
+    import datasets.va_lejepa.pair_filter as pair_filter
+    pytest.importorskip('decord')
+    import subprocess, shutil
+    if shutil.which('ffmpeg') is None:
+        pytest.skip('ffmpeg unavailable')
+    def make(name, seconds):
+        video, audio = tmp_path / f'{name}.mp4', tmp_path / f'{name}.wav'
+        subprocess.run(['ffmpeg', '-v', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=gray:s=32x32:r=30',
+                        '-t', str(seconds), '-pix_fmt', 'yuv420p', str(video)], check=True)
+        soundfile.write(audio, np.zeros(int(16000 * seconds), dtype='float32'), 16000)
+        return dict(pair_id=name, audio_path=str(audio), video_path=str(video))
+    assert pair_filter.paired_media_readable(make('long', 1.0))
+    assert not pair_filter.paired_media_readable(make('short', 0.04))
+    assert pair_filter.paired_media_readable(make('short2', 0.04), minimum_seconds=0.01)

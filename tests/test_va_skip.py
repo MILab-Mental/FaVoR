@@ -2,6 +2,7 @@ import csv
 import json
 from contextlib import nullcontext
 from datetime import timedelta
+from pathlib import Path
 
 import pytest
 import torch
@@ -64,6 +65,35 @@ def test_collate_filters_invalid_pairs_and_handles_empty_batch():
     assert len(batch['skipped_samples']) == 1
     empty = collate_va_lejepa([broken_sample()])
     assert synchronize_training_batch(empty, torch.device('cpu')) == (None, 0)
+
+
+def _pair_filter_ddp_worker(rank, init_file, directory):
+    from types import SimpleNamespace
+    import datasets.va_lejepa.pair_filter as pair_filter
+
+    dist.init_process_group('gloo', init_method=f'file://{init_file}', rank=rank,
+                            world_size=2, timeout=timedelta(seconds=30))
+    try:
+        def check(row, **kwargs):
+            assert rank == 0
+            return not row['pair_id'].endswith('bad')
+        pair_filter.paired_media_readable = check
+        def row(name):
+            return dict(pair_id=name, audio_path=name + '.wav', video_path=name + '.mp4')
+        train = SimpleNamespace(rows=[row('train-good'), row('train-bad')], labels=[1, 2])
+        val = SimpleNamespace(rows=[row('val-bad'), row('val-good')], labels=[3, 4])
+        pair_filter.filter_paired_datasets((('train', train), ('validation', val)),
+                                           Path(directory) / 'filtered.csv', workers=2)
+        assert [r['pair_id'] for r in train.rows] == ['train-good'] and train.labels == [1]
+        assert [r['pair_id'] for r in val.rows] == ['val-good'] and val.labels == [4]
+    finally:
+        dist.destroy_process_group()
+
+
+def test_pair_filter_shares_decisions_across_ranks(tmp_path):
+    mp.spawn(_pair_filter_ddp_worker, args=(str(tmp_path / 'pair-init'), str(tmp_path)),
+             nprocs=2, join=True)
+    assert (tmp_path / 'filtered.csv').is_file()
 
 
 class Sampler:

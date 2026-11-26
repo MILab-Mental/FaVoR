@@ -96,6 +96,8 @@ def setup(cfg):
     torch.manual_seed(seed + distributed.rank())
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed + distributed.rank())
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
     torch.set_num_threads(int(cfg.get('cpu_threads', 4)))
     output = path(cfg.get('output', OUTPUT_ROOT / cfg['stage'] / cfg['model']['id'] / cfg.get('experiment', 'default')))
     if not cfg.get('no_save') and distributed.rank()==0:

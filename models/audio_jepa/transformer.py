@@ -135,7 +135,7 @@ class Emotion2VecTransformerEncoder(nn.Module):
         self.dropout = nn.Dropout(input_dropout)
 
     def forward(self, x, key_padding_mask=None, alibi_bias=None,
-                alibi_scale=None, return_all_layers=False):
+                alibi_scale=None, return_all_layers=False, return_block_outputs=False):
         if self.norm is not None and self.input_norm:
             x = self.norm(x)
         x = self.dropout(x)
@@ -147,9 +147,11 @@ class Emotion2VecTransformerEncoder(nn.Module):
                 bias = bias * scale.to(bias.dtype)
             x, target = layer(x, key_padding_mask=key_padding_mask, alibi_bias=bias)
             if return_all_layers:
-                layer_results.append(target)
+                layer_results.append(x if return_block_outputs else target)
         if self.norm is not None and not self.input_norm:
             x = self.norm(x)
+            if return_block_outputs and layer_results:
+                layer_results[-1] = x
         return (x, layer_results) if return_all_layers else x
 
 

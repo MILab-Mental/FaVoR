@@ -23,12 +23,25 @@ YAML files.
 Precedence: model/sampling/optimization fragments → shared defaults → entry YAML
 → CSV fields and overrides → selected CHECKPOINT → trailing KEY=VALUE arguments.
 
-`clip` uses individual clips. `instance` groups eight sentences, including mental,
-AVEC2014, Androids-Corpus, CMDC, EATD-Corpus and PDCH where applicable. Defaults
-match the canonical old task configurations, including seed, batch size, epochs,
+All nonmental tasks use `clip`, with one sentence or clip per example. Mental
+tasks use `instance` and group eight sentences. Defaults follow the shared
+configurations for seed, batch size, epochs,
 sampling, model and VA regression selection by MAE. Audio defaults to batch 16,
 video to 64, VA to 4, all **per GPU**. VA defaults to 20 epochs; audio to 100 and
 video to 80. These are not imports of the tuned `mental-auto/*-best.yaml` variants.
+
+Ordinary audio and video regression default to `model.regression_head=layer_weighted`.
+Audio uses all global Transformer blocks and video uses `model.out_layers`.
+To reproduce the attention head, pass `model.regression_head=attentive` and
+use a distinct `RUN_NAME` if the existing output is already complete.
+The layered head averages tokens and clips per layer, learns one softmax weight
+per layer, and predicts with a small MLP.
+
+VA fine-tuning filters unreadable audio and pairs whose audio/video durations
+differ by more than `max(0.5 seconds, two video frames)` in both training and
+validation. It uses the same filter as BASELINES; `logs/filtered_pairs.csv`
+records excluded pairs, and `train.log` records the counts for each split.
+The remaining pairs still undergo the VA synchronization preflight.
 
 CHECKPOINT is required for standard runs: `meta.read_checkpoint` for a/v,
 `finetune.pretrained_checkpoint` for va. Mental-auto routes include a default
@@ -49,7 +62,7 @@ output path; use different names for different pretrained weights.
 | label_column | Exact label column, including underscores |
 | modalities | Supported modes separated by `\|`: a or a\|v\|va |
 | profile | clip or instance |
-| output_dir | Output template; supports {modality}, {task_id}, {run} |
+| output_dir | Output template; supports {modality}, {catalog}, {task_id}, {run}. {catalog} is ordinary for nonmental and mental for mental. |
 | best_metric / best_metric_mode | VA checkpoint/early-stop metric and min/max |
 | overrides | Optional `KEY=VALUE;KEY=VALUE` for task-specific differences |
 
@@ -120,25 +133,34 @@ CUDA_VISIBLE_DEVICES=0,1 MENTAL_AUTO=anxiety-best DRY_RUN=1 \
 
 CUDA_VISIBLE_DEVICES=0,1 MENTAL_AUTO=depression-best TASKS=DSM-Depression \
   bash train_finetune.sh va
+
+# The same route can also fine-tune the 15 ordinary VA tasks.
+CUDA_VISIBLE_DEVICES=0,1 VA_ROUTE=total-best SCOPE=nonmental \
+  RUN_NAME=total-best-b1 DRY_RUN=1 bash train_finetune.sh va data.batch_size=1
 ```
 
-The default output is `OUTPUT/finetune_va/mental-transfer/<task>/<route>/`.
+The default output is `OUTPUT/finetune_va/mental/<task>/<route>/`.
 An explicit RUN_NAME replaces `<route>`, and CHECKPOINT overrides the route's
 initialization. The original 108 entries are archived under
 `CONFIGS/archive/finetune-mental-auto/`; their old app.main paths still resolve.
 These routes use the transferred 100-epoch, patience-10 settings, not the
 original 5-epoch autoresearch runs. Existing unmarked outputs are backed up and
 restarted by this launcher; they are not automatically resumed.
+`VA_ROUTE` is the general alias of `MENTAL_AUTO`. Ordinary clip tasks use one
+clip per example with the route's instance head, including AVEC2014-PHQ.
+Ordinary output uses `OUTPUT/finetune_va/ordinary/<task>/<run>/`.
 
 Filters: SCOPE=all/mental/nonmental, TYPE=regression (or another task type),
 TASKS='DSM-*,IEMOCAP-*'. Filters intersect. TASK_CSV selects another catalog.
 Trailing overrides take priority for every selected job. The launcher validates
 the selected queue before starting. After a successful process exit, the launcher
 marks an output complete only if `best.pt`, `logs/history.csv` and `logs/best.csv`
-are nonempty. Subsequent runs skip marked, intact outputs. Any existing output
-without the marker (including legacy outputs whose completion cannot be proven)
-is moved to a sibling `.incomplete-<timestamp>` directory and trained from
-scratch. Failed jobs do not stop the queue; the launcher returns a nonzero status
+are nonempty. Subsequent runs skip marked, intact outputs. If the new default
+directory does not exist, the launcher also checks for a completed run in the
+previous `catalog` location or, for a mental VA route, `mental-transfer`. An
+incomplete directory at the target path is moved to a sibling
+`.incomplete-<timestamp>` directory before a fresh run. Failed jobs do not stop
+the queue; the launcher returns a nonzero status
 afterward if any job failed. A preview makes no filesystem changes and validates
 command/config construction, not GPU memory, media integrity or checkpoint
 compatibility.

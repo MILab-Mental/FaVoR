@@ -8,7 +8,13 @@ import subprocess
 import sys
 
 from BASELINES.common.runtime import ROOT, path
-from utils.finetune_catalog import read_tasks, task_data
+from utils.finetune_catalog import mental_core_tasks, read_tasks, task_data
+
+
+@lru_cache(maxsize=1)
+def mental_core_task_names():
+    core = {'mental/' + task_id for task_id in mental_core_tasks(ROOT)}
+    return tuple(name for name in task_catalog() if name in core)
 
 
 @lru_cache(maxsize=1)
